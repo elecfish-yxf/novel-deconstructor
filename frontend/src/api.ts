@@ -191,4 +191,5 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   downloadUrl: (jobId: string, path: string) => `${API_BASE}/api/jobs/${jobId}/download?path=${encodeURIComponent(path)}`,
+  downloadZipUrl: (jobId: string) => `${API_BASE}/api/jobs/${jobId}/download-zip`,
 };

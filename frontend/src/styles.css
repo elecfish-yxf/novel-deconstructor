@@ -29,6 +29,17 @@ button {
   cursor: pointer;
 }
 
+.button-link {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1f2933;
+  border-radius: 8px;
+  padding: 9px 13px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

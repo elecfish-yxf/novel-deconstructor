@@ -56,7 +56,11 @@ export default function ProjectList({
       const result = await api.pickDirectory({ initial_dir: rootOutputDir || undefined });
       if (result.path) setRootOutputDir(result.path);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法打开文件夹选择器");
+      setError(
+        err instanceof Error
+          ? `${err.message} 任务完成后可在结果页保存全部文件到本地目录。`
+          : "无法打开文件夹选择器；任务完成后可在结果页保存全部文件到本地目录。",
+      );
     }
   }
 

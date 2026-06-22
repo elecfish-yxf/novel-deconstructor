@@ -11,11 +11,34 @@ const markdownKinds = new Set([
   "graph_outputs",
 ]);
 
+type WritableFileStream = {
+  write: (data: Blob) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type FileSystemFileHandle = {
+  createWritable: () => Promise<WritableFileStream>;
+};
+
+type FileSystemDirectoryHandle = {
+  getDirectoryHandle: (name: string, options?: { create?: boolean }) => Promise<FileSystemDirectoryHandle>;
+  getFileHandle: (name: string, options?: { create?: boolean }) => Promise<FileSystemFileHandle>;
+};
+
+type WindowWithDirectoryPicker = Window & {
+  showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+};
+
+function safePathParts(path: string) {
+  return path.split(/[\\/]+/).filter((part) => part && part !== "." && part !== "..");
+}
+
 export default function ResultViewer({ jobId }: { jobId: string }) {
   const [files, setFiles] = useState<ResultFile[]>([]);
   const [active, setActive] = useState<ResultFile | null>(null);
   const [preview, setPreview] = useState("");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function load() {
     const next = await api.listResultFiles(jobId);
@@ -32,6 +55,42 @@ export default function ResultViewer({ jobId }: { jobId: string }) {
     if (!file.name.endsWith(".md")) return;
     const response = await fetch(api.downloadUrl(jobId, file.path));
     setPreview(await response.text());
+  }
+
+  async function saveAllToLocalFolder() {
+    setError("");
+    const picker = (window as WindowWithDirectoryPicker).showDirectoryPicker;
+    if (!picker) {
+      setError("当前浏览器不支持直接保存到本地文件夹，请使用“下载全部 ZIP”。");
+      return;
+    }
+    if (!files.length) {
+      setError("还没有可保存的结果文件。");
+      return;
+    }
+    setSaving(true);
+    try {
+      const root = await picker();
+      const jobFolder = await root.getDirectoryHandle(`novel-deconstructor-${jobId}`, { create: true });
+      for (const file of files) {
+        const parts = safePathParts(file.path);
+        if (!parts.length) continue;
+        let directory = jobFolder;
+        for (const part of parts.slice(0, -1)) {
+          directory = await directory.getDirectoryHandle(part, { create: true });
+        }
+        const handle = await directory.getFileHandle(parts[parts.length - 1], { create: true });
+        const writable = await handle.createWritable();
+        const response = await fetch(api.downloadUrl(jobId, file.path));
+        if (!response.ok) throw new Error(`保存失败：${file.path}`);
+        await writable.write(await response.blob());
+        await writable.close();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存到本地文件夹失败");
+    } finally {
+      setSaving(false);
+    }
   }
 
   useEffect(() => {
@@ -51,7 +110,15 @@ export default function ResultViewer({ jobId }: { jobId: string }) {
           <p className="eyebrow">{jobId}</p>
           <h1>结果预览与下载</h1>
         </div>
-        <button onClick={() => load()}>刷新</button>
+        <div className="button-row">
+          <button onClick={() => load()}>刷新</button>
+          <button onClick={saveAllToLocalFolder} disabled={saving || !files.length}>
+            {saving ? "保存中..." : "保存全部到本地文件夹"}
+          </button>
+          <a className="button-link" href={api.downloadZipUrl(jobId)}>
+            下载全部 ZIP
+          </a>
+        </div>
       </div>
       {error && <div className="alert">{error}</div>}
 
