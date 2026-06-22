@@ -12,6 +12,14 @@ from ..models import AnalysisJob, AnalysisResult, ChapterChunk, Project, SourceF
 SECTION_HEAD_RE = re.compile(r"^##\s+\d*\.?\s*(.+?)\s*$", re.MULTILINE)
 RULE_HINTS = ("可学习规律", "可加入知识库", "可复现", "写作规则", "复现提示")
 ANTI_HINTS = ("不建议模仿", "AI 味", "硬讲设定", "风险", "问题")
+MODE_LABELS = {
+    "chapter_structure": "章节结构",
+    "conflict_analysis": "冲突推进",
+    "character_growth": "人物成长",
+    "information_delivery": "信息投放",
+    "language_style": "语言风格",
+    "ai_bad_patterns": "AI 味检查",
+}
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -31,6 +39,7 @@ def generate_phase3_outputs(
 ) -> list[Path]:
     completed = [result for result in results if result.status == "completed" and result.markdown_path]
     written: list[Path] = []
+    written.extend(write_overall_summary(output_dir / "final_reports", project, source_file, chunks, job, completed))
     if job.generate_kb:
         written.extend(write_knowledge_base(output_dir / "knowledge_base", project, source_file, chunks, job, completed))
     if job.generate_obsidian:
@@ -38,6 +47,87 @@ def generate_phase3_outputs(
     if job.generate_graph:
         written.extend(write_graph_outputs(output_dir / "graph_outputs", project, source_file, chunks, job, completed))
     return written
+
+
+def write_overall_summary(
+    target_dir: Path,
+    project: Project,
+    source_file: SourceFile,
+    chunks: list[ChapterChunk],
+    job: AnalysisJob,
+    results: list[AnalysisResult],
+) -> list[Path]:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = target_dir.parent
+    chunks_by_id = {chunk.id: chunk for chunk in chunks}
+    mode_groups = _group_results_by_mode(results)
+    results_by_chunk = _group_results_by_chunk(results)
+    rule_blocks = _collect_rule_blocks(results)[:30]
+    anti_blocks = _collect_anti_blocks(results)[:30]
+    mode_summaries = _collect_mode_summaries(results, chunks_by_id)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+
+    mode_rows = "\n".join(
+        f"| {MODE_LABELS.get(mode, mode)} | `{mode}` | {len(items)} |"
+        for mode, items in mode_groups.items()
+    )
+    chapter_rows = "\n".join(
+        _chapter_summary_row(chunk, results_by_chunk.get(chunk.id, []))
+        for chunk in chunks
+    )
+    mode_sections = "\n\n".join(
+        f"### {MODE_LABELS.get(mode, mode)}\n\n{summary}"
+        for mode, summary in mode_summaries.items()
+    )
+    doc_index = _analysis_document_index(results, chunks_by_id, base_dir)
+
+    content = f"""# 总汇总报告：{project.name}
+
+> Phase 3 自动汇总。来源：{source_file.original_filename}；任务：{job.id}；生成时间：{generated_at}。
+> 本报告汇总所有已完成的逐章分析 Markdown，用于快速查看全书拆解结论、可复用规律、风险点和全部产物索引。
+
+## 1. 处理概况
+
+| 项目 | 内容 |
+|---|---|
+| 项目名 | {project.name} |
+| 源文件 | {source_file.original_filename} |
+| 任务 ID | {job.id} |
+| 任务状态 | {job.status} |
+| dry-run | {job.dry_run} |
+| 章节/分块数 | {len(chunks)} |
+| 已完成分析文档 | {len(results)} |
+| 分析模式数 | {len(mode_groups)} |
+
+## 2. 分析维度覆盖
+
+| 维度 | 模式 Key | 完成文档数 |
+|---|---|---:|
+{mode_rows or "| - | - | 0 |"}
+
+## 3. 章节覆盖总览
+
+| 章号 | 标题 | 字数 | 已完成维度 | 产物数 |
+|---:|---|---:|---|---:|
+{chapter_rows or "| - | - | 0 | - | 0 |"}
+
+## 4. 全书综合观察
+
+{mode_sections or "- 暂无可提取的综合观察；请先完成非 dry-run 分析。"}
+
+## 5. 可复用写作规律汇总
+
+{_format_blocks(rule_blocks, "暂无可提取规律；请检查逐章分析是否已完成。")}
+
+## 6. 风险与不建议模仿
+
+{_format_blocks(anti_blocks, "暂无风险清单；请检查逐章分析是否已完成。")}
+
+## 7. 全部分析文档索引
+
+{doc_index or "- 暂无完成的分析文档。"}
+"""
+    return [_write(target_dir / "overall_summary.md", content)]
 
 
 def write_knowledge_base(
@@ -182,11 +272,69 @@ def write_graph_outputs(
     return written
 
 
+def _group_results_by_chunk(results: list[AnalysisResult]) -> dict[str, list[AnalysisResult]]:
+    grouped: dict[str, list[AnalysisResult]] = defaultdict(list)
+    for result in results:
+        grouped[result.chunk_id].append(result)
+    return {
+        chunk_id: sorted(items, key=lambda item: item.mode)
+        for chunk_id, items in grouped.items()
+    }
+
+
 def _group_results_by_mode(results: list[AnalysisResult]) -> dict[str, list[AnalysisResult]]:
     grouped: dict[str, list[AnalysisResult]] = defaultdict(list)
     for result in results:
         grouped[result.mode].append(result)
     return dict(sorted(grouped.items()))
+
+
+def _chapter_summary_row(chunk: ChapterChunk, results: list[AnalysisResult]) -> str:
+    modes = ", ".join(MODE_LABELS.get(result.mode, result.mode) for result in results) or "-"
+    return f"| {chunk.chapter_index} | {chunk.title} | {chunk.char_count} | {modes} | {len(results)} |"
+
+
+def _collect_mode_summaries(results: list[AnalysisResult], chunks_by_id: dict[str, ChapterChunk]) -> dict[str, str]:
+    summaries: dict[str, list[str]] = defaultdict(list)
+    for result in sorted(results, key=lambda item: (chunks_by_id.get(item.chunk_id).chapter_index if chunks_by_id.get(item.chunk_id) else 999999, item.mode)):
+        path = Path(result.markdown_path or "")
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        highlights = _extract_document_highlights(text)
+        if not highlights:
+            continue
+        chunk = chunks_by_id.get(result.chunk_id)
+        chapter_name = f"第{chunk.chapter_index}章 {chunk.title}" if chunk else result.chunk_id
+        for highlight in highlights[:3]:
+            summaries[result.mode].append(f"- **{chapter_name}**：{highlight}")
+    return {mode: "\n".join(items[:24]) for mode, items in sorted(summaries.items())}
+
+
+def _analysis_document_index(results: list[AnalysisResult], chunks_by_id: dict[str, ChapterChunk], base_dir: Path) -> str:
+    lines: list[str] = []
+    sorted_results = sorted(
+        results,
+        key=lambda item: (chunks_by_id.get(item.chunk_id).chapter_index if chunks_by_id.get(item.chunk_id) else 999999, item.mode),
+    )
+    for result in sorted_results:
+        path = Path(result.markdown_path or "")
+        chunk = chunks_by_id.get(result.chunk_id)
+        chapter_name = f"第{chunk.chapter_index}章 {chunk.title}" if chunk else result.chunk_id
+        display_path = _display_path(path, base_dir)
+        lines.append(f"- {chapter_name} / {MODE_LABELS.get(result.mode, result.mode)}：`{display_path}`")
+    return "\n".join(lines)
+
+
+def _display_path(path: Path, base_dir: Path) -> str:
+    try:
+        return path.relative_to(base_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _format_blocks(blocks: list[str], fallback: str) -> str:
+    return "\n\n".join(block.strip() for block in blocks if block.strip()) if blocks else f"- {fallback}"
 
 
 def _collect_rule_blocks(results: list[AnalysisResult]) -> list[str]:
@@ -224,6 +372,32 @@ def _extract_matching_sections(text: str, hints: tuple[str, ...]) -> list[str]:
         return sections
     bullets = [line for line in text.splitlines() if line.strip().startswith(("-", "*", "1.", "2.", "3."))]
     return ["\n".join(bullets[:12])] if bullets else []
+
+
+def _extract_document_highlights(text: str) -> list[str]:
+    highlights: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("# ", "---", "```", "|")):
+            continue
+        if stripped.startswith("## "):
+            stripped = stripped.lstrip("#").strip()
+        elif stripped.startswith(("- ", "* ")):
+            stripped = stripped[2:].strip()
+        elif re.match(r"^\d+[.)]\s+", stripped):
+            stripped = re.sub(r"^\d+[.)]\s+", "", stripped).strip()
+        else:
+            continue
+        stripped = re.sub(r"\s+", " ", stripped)
+        if len(stripped) > 180:
+            stripped = stripped[:177].rstrip() + "..."
+        if stripped and stripped not in highlights:
+            highlights.append(stripped)
+        if len(highlights) >= 8:
+            break
+    return highlights
 
 
 def _frontmatter(project: Project, source_file: SourceFile, job: AnalysisJob, tags: list[str]) -> str:

@@ -49,7 +49,12 @@ def test_phase3_exports_kb_obsidian_and_graph(tmp_path: Path):
     written = generate_phase3_outputs(tmp_path, project, source_file, [chunk], job, [result])
 
     assert written
+    assert (tmp_path / "final_reports" / "overall_summary.md").exists()
     assert (tmp_path / "knowledge_base" / "writing_rules.md").exists()
     assert (tmp_path / "knowledge_base_obsidian" / "index.md").exists()
     assert (tmp_path / "graph_outputs" / "entities.json").exists()
+    summary = (tmp_path / "final_reports" / "overall_summary.md").read_text(encoding="utf-8")
+    assert "总汇总报告" in summary
+    assert "第一章" in summary
+    assert "期待缺口" in summary
     assert "期待缺口" in (tmp_path / "knowledge_base" / "writing_rules.md").read_text(encoding="utf-8")
