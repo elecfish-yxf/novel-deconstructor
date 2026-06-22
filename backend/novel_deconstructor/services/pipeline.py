@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import AnalysisJob, AnalysisResult, ChapterChunk, DeconstructionSkill, JobLog, Project, PromptTemplate, SourceFile
-from .llm_provider import LLMRequest, OpenAICompatibleProvider, is_deepseek_base_url
+from .llm_provider import DoubaoResponsesProvider, LLMProvider, LLMRequest, OpenAICompatibleProvider, is_deepseek_base_url, is_doubao_base_url
 from .oh_story_adapter import (
     initialize_oh_story_workspace,
     write_chapter_analysis,
@@ -70,22 +70,32 @@ def _job_results(db: Session, job_id: str) -> list[AnalysisResult]:
 
 
 def resolve_api_key(base_url: str | None, runtime_api_key: str | None = None) -> str:
-    settings = get_settings()
     cleaned_runtime_key = (runtime_api_key or "").strip()
     if cleaned_runtime_key:
         return cleaned_runtime_key
+    if is_doubao_base_url(base_url):
+        raise ValueError("缺少豆包 API Key。请在拆书任务配置页填写你自己的豆包 Ark API Key，或开启 dry-run。")
     if is_deepseek_base_url(base_url):
-        return settings.deepseek_api_key or settings.openai_api_key
-    return settings.openai_api_key
+        raise ValueError("缺少 DeepSeek API Key。请在拆书任务配置页填写你自己的 DeepSeek API Key，或开启 dry-run。")
+    raise ValueError("缺少 API Key。请在拆书任务配置页填写你自己的 API Key，或开启 dry-run。")
 
 
 def resolve_model(base_url: str | None, configured_model: str | None = None) -> str:
     settings = get_settings()
     if configured_model:
         return configured_model
+    if is_doubao_base_url(base_url):
+        return settings.doubao_model
     if is_deepseek_base_url(base_url):
         return settings.deepseek_model
     return settings.openai_model
+
+
+def resolve_provider(base_url: str | None, runtime_api_key: str | None = None) -> LLMProvider:
+    api_key = resolve_api_key(base_url, runtime_api_key)
+    if is_doubao_base_url(base_url):
+        return DoubaoResponsesProvider(base_url or get_settings().doubao_base_url, api_key)
+    return OpenAICompatibleProvider(base_url or get_settings().openai_base_url, api_key)
 
 
 async def run_analysis_job(job_id: str, runtime_api_key: str | None = None) -> None:
@@ -129,8 +139,7 @@ async def run_analysis_job(job_id: str, runtime_api_key: str | None = None) -> N
         renderer = PromptRenderer()
         system_prompt = skill.system_prompt if skill and skill.system_prompt else renderer.load_builtin("system_base")
         base_url = job.base_url or settings.openai_base_url
-        api_key = resolve_api_key(base_url, runtime_api_key)
-        provider = OpenAICompatibleProvider(base_url, api_key)
+        provider = resolve_provider(base_url, runtime_api_key) if not job.dry_run else OpenAICompatibleProvider(base_url, "")
 
         total_units = len(chunks) * len(modes)
         job.total_chunks = total_units

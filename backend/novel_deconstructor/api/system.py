@@ -12,43 +12,42 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 @router.get("/config/public")
 def public_config():
     settings = get_settings()
-    has_doubao_key = bool(settings.doubao_api_key or settings.ark_api_key)
     return {
         "deepseek_base_url": settings.deepseek_base_url,
         "deepseek_model": settings.deepseek_model,
-        "has_deepseek_api_key": bool(settings.deepseek_api_key),
+        "has_deepseek_api_key": False,
         "doubao_base_url": settings.doubao_base_url,
         "doubao_model": settings.doubao_model,
-        "has_doubao_api_key": has_doubao_key,
-        "default_writing_model": settings.doubao_model if has_doubao_key else settings.deepseek_model,
+        "has_doubao_api_key": False,
+        "default_writing_model": settings.doubao_model,
         "writing_models": [
             {
                 "id": "deepseek-v4-flash",
                 "label": "DeepSeek V4 Flash",
                 "provider": "deepseek",
                 "model": "deepseek-v4-flash",
-                "available": bool(settings.deepseek_api_key),
+                "available": True,
             },
             {
                 "id": "deepseek-v4-pro",
                 "label": "DeepSeek V4 Pro",
                 "provider": "deepseek",
                 "model": "deepseek-v4-pro",
-                "available": bool(settings.deepseek_api_key),
+                "available": True,
             },
             {
                 "id": settings.doubao_model,
                 "label": "豆包 Seed 2.0 Pro",
                 "provider": "doubao",
                 "model": settings.doubao_model,
-                "available": has_doubao_key,
+                "available": True,
             },
         ],
         "knowledge_chunk_size": settings.knowledge_chunk_size,
         "knowledge_chunk_overlap": settings.knowledge_chunk_overlap,
         "retrieval_top_k": settings.retrieval_top_k,
         "max_upload_size_mb": settings.max_upload_size_mb,
-        "privacy_note": "应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给你选择的模型服务处理。",
+        "privacy_note": "应用和知识库存储在服务器。使用模型调用时，必须由当前使用者在页面填写自己的 API Key；服务器不会默认使用站长的 Key。",
     }
 
 

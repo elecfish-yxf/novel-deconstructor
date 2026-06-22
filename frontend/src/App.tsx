@@ -10,8 +10,9 @@ import ResultViewer from "./pages/ResultViewer";
 import SkillImport from "./pages/SkillImport";
 import SkillManager from "./pages/SkillManager";
 import WritingAgent from "./pages/WritingAgent";
+import HelpPage from "./pages/HelpPage";
 
-type View = "projects" | "upload" | "chapters" | "config" | "progress" | "results" | "agent" | "skills" | "imports";
+type View = "projects" | "upload" | "chapters" | "config" | "progress" | "results" | "agent" | "skills" | "imports" | "help";
 type SavedContext = {
   view?: View;
   projectId?: number;
@@ -31,6 +32,7 @@ const nav: Array<{ key: View; label: string }> = [
   { key: "agent", label: "写作 Agent" },
   { key: "skills", label: "Skill 管理" },
   { key: "imports", label: "Prompt 导入" },
+  { key: "help", label: "Help" },
 ];
 
 function isView(value: unknown): value is View {
@@ -54,7 +56,7 @@ function loadSavedContext(): SavedContext {
 }
 
 function chooseRestoredView(preferred: View | undefined, sourceFile: SourceFile | null, chapters: Chapter[], job: Job | null): View {
-  if (preferred && ["projects", "skills", "imports", "agent"].includes(preferred)) return preferred;
+  if (preferred && ["projects", "skills", "imports", "agent", "help"].includes(preferred)) return preferred;
   if (preferred) {
     if (["progress", "results"].includes(preferred) && job) return preferred;
     if (["chapters", "config"].includes(preferred) && sourceFile) return preferred;
@@ -155,7 +157,7 @@ export default function App() {
   }
 
   function navDisabled(key: View) {
-    if (["projects", "imports", "skills", "agent"].includes(key)) return false;
+    if (["projects", "imports", "skills", "agent", "help"].includes(key)) return false;
     if (!project) return true;
     if (["chapters", "config"].includes(key)) return !sourceFile;
     if (["progress", "results"].includes(key)) return !job;
@@ -242,6 +244,7 @@ export default function App() {
         {view === "agent" && <WritingAgent job={job} />}
         {view === "skills" && <SkillManager />}
         {view === "imports" && <SkillImport />}
+        {view === "help" && <HelpPage />}
       </main>
     </div>
   );

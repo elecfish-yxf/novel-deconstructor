@@ -178,35 +178,31 @@ async def worldbuilding_draft(payload: WorldbuildingDraftRequest, workspace_id: 
 def _resolve_writing_model(payload: WritingGenerateRequest | WorldbuildingDraftRequest, settings) -> tuple[LLMProvider, str]:
     requested_provider = (payload.model_provider or "").strip().lower()
     requested_model = (payload.model or "").strip()
+    runtime_api_key = (payload.api_key or "").strip()
     if not requested_provider:
         if requested_model.startswith("doubao-"):
             requested_provider = "doubao"
         elif requested_model.startswith("deepseek-"):
             requested_provider = "deepseek"
         else:
-            requested_provider = "doubao" if _doubao_api_key(settings) else "deepseek"
+            requested_provider = "doubao"
 
     if requested_provider == "doubao":
-        api_key = _doubao_api_key(settings)
-        if not api_key:
-            raise HTTPException(status_code=400, detail="缺少豆包 API Key。请在后端 .env 或 Render 环境变量中配置 DOUBAO_API_KEY 或 ARK_API_KEY。")
-        return DoubaoResponsesProvider(settings.doubao_base_url, api_key), requested_model or settings.doubao_model
+        if not runtime_api_key:
+            raise HTTPException(status_code=400, detail="缺少豆包 API Key。请在 Agent 写作页填写你自己的豆包 Ark API Key，或开启 dry-run。")
+        return DoubaoResponsesProvider(settings.doubao_base_url, runtime_api_key), requested_model or settings.doubao_model
 
     if requested_provider == "deepseek":
-        if not settings.deepseek_api_key:
-            raise HTTPException(status_code=400, detail="缺少 DEEPSEEK_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
-        return OpenAICompatibleProvider(settings.deepseek_base_url, settings.deepseek_api_key), requested_model or settings.deepseek_model
+        if not runtime_api_key:
+            raise HTTPException(status_code=400, detail="缺少 DeepSeek API Key。请在 Agent 写作页填写你自己的 DeepSeek API Key，或开启 dry-run。")
+        return OpenAICompatibleProvider(settings.deepseek_base_url, runtime_api_key), requested_model or settings.deepseek_model
 
     if requested_provider == "openai":
-        if not settings.openai_api_key:
-            raise HTTPException(status_code=400, detail="缺少 OPENAI_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
-        return OpenAICompatibleProvider(settings.openai_base_url, settings.openai_api_key), requested_model or settings.openai_model
+        if not runtime_api_key:
+            raise HTTPException(status_code=400, detail="缺少 OpenAI-compatible API Key。请在 Agent 写作页填写你自己的 API Key，或开启 dry-run。")
+        return OpenAICompatibleProvider(settings.openai_base_url, runtime_api_key), requested_model or settings.openai_model
 
     raise HTTPException(status_code=400, detail=f"不支持的写作模型供应商：{requested_provider}")
-
-
-def _doubao_api_key(settings) -> str:
-    return (settings.doubao_api_key or settings.ark_api_key or "").strip()
 
 
 def _ensure_workspace_kb(db: Session, workspace_id: str, knowledge_base_id: int) -> KnowledgeBase:

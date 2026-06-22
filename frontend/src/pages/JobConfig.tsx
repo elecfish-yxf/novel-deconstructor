@@ -31,6 +31,12 @@ const PROVIDER_PRESETS = {
     model: "deepseek-v4-pro",
     note: "质量优先，适合重点章节和深度分析。",
   },
+  doubaoSeedPro: {
+    label: "豆包 Seed 2.0 Pro",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    model: "doubao-seed-2-0-pro-260215",
+    note: "使用火山方舟豆包模型，适合中文长文本分析与写作。",
+  },
   openai: {
     label: "OpenAI-compatible",
     baseUrl: "https://api.openai.com/v1",
@@ -206,6 +212,10 @@ export default function JobConfig({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!dryRun && !apiKey.trim()) {
+      setError("关闭 dry-run 后必须填写你自己的 API Key。服务器不会使用站长的 Key 替你调用模型。");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -316,13 +326,13 @@ export default function JobConfig({
               setModel(event.target.value);
               setProviderPreset("custom");
             }}
-            placeholder="例如 deepseek-v4-flash 或 deepseek-v4-pro"
+            placeholder="例如 deepseek-v4-flash、deepseek-v4-pro 或 doubao-seed-2-0-pro-260215"
           />
         </label>
         <label>
           API Key
           <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder="仅用于本次任务请求" />
-          <small className="muted">DeepSeek 请填写 DeepSeek API Key；也可以写入后端 DEEPSEEK_API_KEY。</small>
+          <small className="muted">请填写你自己的模型 API Key。它只随本次任务请求发送给后端，不保存到浏览器偏好或数据库。</small>
         </label>
         <label>
           temperature

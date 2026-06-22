@@ -109,12 +109,35 @@ def test_resolve_writing_model_supports_doubao():
         openai_model = ""
 
     provider, model = _resolve_writing_model(
-        WritingOutlineRequest(task="生成提纲", model_provider="doubao", model="doubao-seed-2-0-pro-260215"),
+        WritingOutlineRequest(
+            task="生成提纲",
+            model_provider="doubao",
+            model="doubao-seed-2-0-pro-260215",
+            api_key="user-ark-key",
+        ),
         Settings(),
     )
 
     assert isinstance(provider, DoubaoResponsesProvider)
     assert model == "doubao-seed-2-0-pro-260215"
+
+
+def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
+    class Settings:
+        doubao_api_key = "server-key"
+        ark_api_key = ""
+        doubao_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        doubao_model = "doubao-seed-2-0-pro-260215"
+        deepseek_api_key = "server-deepseek"
+        deepseek_base_url = "https://api.deepseek.com"
+        deepseek_model = "deepseek-v4-pro"
+        openai_api_key = ""
+        openai_base_url = "https://api.openai.com/v1"
+        openai_model = ""
+
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_writing_model(WritingOutlineRequest(task="生成提纲", model_provider="doubao"), Settings())
+    assert "Agent 写作页填写你自己的" in exc_info.value.detail
 
 
 def test_writing_memory_is_scoped_to_workspace():

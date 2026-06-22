@@ -13,6 +13,7 @@ export default function JobProgress({
 }) {
   const [job, setJob] = useState<Job | null>(null);
   const [logs, setLogs] = useState<JobLog[]>([]);
+  const [runtimeApiKey, setRuntimeApiKey] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
@@ -39,6 +40,22 @@ export default function JobProgress({
     setError("");
     try {
       const next = await fn(jobId);
+      setJob(next);
+      onJobChange(next);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    }
+  }
+
+  async function runtimeAction(fn: (id: string, payload: { api_key?: string }) => Promise<Job>) {
+    setError("");
+    if (job && !job.dry_run && !runtimeApiKey.trim()) {
+      setError("继续或重试非 dry-run 任务前，请重新填写你自己的 API Key。");
+      return;
+    }
+    try {
+      const next = await fn(jobId, { api_key: runtimeApiKey.trim() || undefined });
       setJob(next);
       onJobChange(next);
       await load();
@@ -97,19 +114,32 @@ export default function JobProgress({
           <button onClick={() => action(api.pauseJob)} disabled={job.status !== "running"}>
             暂停
           </button>
-          <button onClick={() => action(api.resumeJob)} disabled={!["paused", "failed"].includes(job.status)}>
+          <button onClick={() => runtimeAction(api.resumeJob)} disabled={!["paused", "failed"].includes(job.status)}>
             继续
           </button>
           <button onClick={() => action(api.cancelJob)} disabled={["completed", "cancelled"].includes(job.status)}>
             取消
           </button>
-          <button onClick={() => action(api.retryFailed)} disabled={job.failed_chunks === 0}>
+          <button onClick={() => runtimeAction(api.retryFailed)} disabled={job.failed_chunks === 0}>
             重试失败
           </button>
           <button className="primary" onClick={onViewResults}>
             查看结果
           </button>
         </div>
+        {!job.dry_run && ["paused", "failed"].includes(job.status) && (
+          <div className="runtime-key-row">
+            <label>
+              继续/重试用 API Key
+              <input
+                type="password"
+                value={runtimeApiKey}
+                onChange={(event) => setRuntimeApiKey(event.target.value)}
+                placeholder="后台不会保存 API Key，继续任务时请重新填写"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       <div className="log-panel">

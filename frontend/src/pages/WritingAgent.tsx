@@ -59,6 +59,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [knowledgeMode, setKnowledgeMode] = useState("reference");
   const [dryRun, setDryRun] = useState(true);
   const [writingModelId, setWritingModelId] = useState("");
+  const [writingApiKey, setWritingApiKey] = useState("");
   const [citations, setCitations] = useState<RetrievalHit[]>([]);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -96,8 +97,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     return writingModels.find((item) => item.id === writingModelId) || writingModels[0] || null;
   }, [writingModelId, writingModels]);
   const selectedWritingModelPayload = selectedWritingModel
-    ? { model_provider: selectedWritingModel.provider, model: selectedWritingModel.model }
+    ? { model_provider: selectedWritingModel.provider, model: selectedWritingModel.model, api_key: writingApiKey.trim() || undefined }
     : {};
+  const modelCallBlocked = !dryRun && !writingApiKey.trim();
 
   function clearTransientWritingState() {
     setHits([]);
@@ -477,8 +479,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
       {config && (
         <div className="notice panel">
-          {config.privacy_note} 当前写作模型：{selectedWritingModel?.label || config.deepseek_model}；DeepSeek Key：
-          {config.has_deepseek_api_key ? "已配置" : "未配置"}；豆包 Key：{config.has_doubao_api_key ? "已配置" : "未配置"}。
+          {config.privacy_note} 当前写作模型：{selectedWritingModel?.label || config.deepseek_model}。API Key 只用于本次请求，不会保存。
         </div>
       )}
       <div className="notice panel">
@@ -756,10 +757,18 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     {writingModels.map((option) => (
                       <option key={option.id} value={option.id}>
                         {option.label}
-                        {option.available ? "" : "（未配置 Key）"}
                       </option>
                     ))}
                   </select>
+                </label>
+                <label>
+                  API Key
+                  <input
+                    type="password"
+                    value={writingApiKey}
+                    onChange={(event) => setWritingApiKey(event.target.value)}
+                    placeholder={selectedWritingModel?.provider === "doubao" ? "填写你的豆包 Ark API Key" : "填写你的模型 API Key"}
+                  />
                 </label>
                 <label>
                   生成模式
@@ -781,7 +790,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} />
                 dry-run：不调用模型，只验证检索和引用
               </label>
-              <button className="primary" disabled={!selected || busy === "outline"}>
+              {modelCallBlocked && <small className="warn-cell">关闭 dry-run 后，请先填写你自己的 API Key。</small>}
+              <button className="primary" disabled={!selected || busy === "outline" || modelCallBlocked}>
                 发送请求，生成提纲
               </button>
             </form>
@@ -809,7 +819,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <div className="step-badge">3</div>
               <h2>生成正文</h2>
               <p className="muted">用户确认提纲后，点击这里生成小说正文。这里不会再输出提纲、表格、结构核对或写作说明。</p>
-              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft"}>
+              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft" || modelCallBlocked}>
                 根据确认提纲生成正文
               </button>
               <div className="preview-panel inline-output">
@@ -837,7 +847,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <textarea rows={3} value={storySeed} onChange={(event) => setStorySeed(event.target.value)} />
             </label>
             <div className="button-row">
-              <button type="button" onClick={generateWorldbuildingDraft} disabled={!selected || busy === "worldbuilding"}>
+              <button type="button" onClick={generateWorldbuildingDraft} disabled={!selected || busy === "worldbuilding" || modelCallBlocked}>
                 生成世界观草案
               </button>
               <button type="button" className="primary" onClick={confirmWorldbuildingImport} disabled={!selected || !worldbuildingDraft || busy === "confirm-worldbuilding"}>

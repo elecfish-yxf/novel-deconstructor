@@ -265,9 +265,11 @@ export const api = {
   getJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}`),
   getLogs: (jobId: string) => request<JobLog[]>(`/api/jobs/${jobId}/logs`),
   pauseJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}/pause`, { method: "POST" }),
-  resumeJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}/resume`, { method: "POST" }),
+  resumeJob: (jobId: string, payload: { api_key?: string } = {}) =>
+    request<Job>(`/api/jobs/${jobId}/resume`, { method: "POST", body: JSON.stringify(payload) }),
   cancelJob: (jobId: string) => request<Job>(`/api/jobs/${jobId}/cancel`, { method: "POST" }),
-  retryFailed: (jobId: string) => request<Job>(`/api/jobs/${jobId}/retry-failed`, { method: "POST" }),
+  retryFailed: (jobId: string, payload: { api_key?: string } = {}) =>
+    request<Job>(`/api/jobs/${jobId}/retry-failed`, { method: "POST", body: JSON.stringify(payload) }),
   listResultFiles: (jobId: string) => request<ResultFile[]>(`/api/jobs/${jobId}/files`),
   listPrompts: () => request<PromptTemplate[]>("/api/prompts"),
   listSkills: () => request<DeconstructionSkill[]>("/api/skills"),
@@ -334,6 +336,7 @@ export const api = {
     knowledge_mode?: string;
     model_provider?: string;
     model?: string;
+    api_key?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/outline", { method: "POST", body: JSON.stringify(payload) }),
   generateDraft: (payload: {
@@ -345,6 +348,7 @@ export const api = {
     knowledge_mode?: string;
     model_provider?: string;
     model?: string;
+    api_key?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/draft", { method: "POST", body: JSON.stringify(payload) }),
   generateWriting: (payload: {
@@ -355,6 +359,7 @@ export const api = {
     knowledge_mode?: string;
     model_provider?: string;
     model?: string;
+    api_key?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/generate", { method: "POST", body: JSON.stringify(payload) }),
   generateWorldbuildingDraft: (payload: {
@@ -363,6 +368,7 @@ export const api = {
     requirements?: string;
     model_provider?: string;
     model?: string;
+    api_key?: string;
     dry_run?: boolean;
   }) =>
     request<{ content: string; citations: RetrievalHit[] }>("/api/writing/worldbuilding-draft", {

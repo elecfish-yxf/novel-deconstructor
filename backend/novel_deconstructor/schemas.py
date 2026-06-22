@@ -113,6 +113,10 @@ class JobRead(ORMModel):
     error_message: str | None
 
 
+class JobRuntimeKeyRequest(BaseModel):
+    api_key: str | None = None
+
+
 class AnalysisResultRead(ORMModel):
     id: int
     job_id: str
@@ -335,6 +339,7 @@ class WritingGenerateRequest(BaseModel):
     knowledge_mode: str = "reference"
     model_provider: str | None = None
     model: str | None = None
+    api_key: str | None = None
     dry_run: bool = False
 
 
@@ -378,6 +383,7 @@ class WorldbuildingDraftRequest(BaseModel):
     requirements: str = ""
     model_provider: str | None = None
     model: str | None = None
+    api_key: str | None = None
     dry_run: bool = True
 
 

@@ -15,7 +15,7 @@ from ..modes import (
     sanitize_chapter_modes,
 )
 from ..models import AnalysisJob, AnalysisResult, ChapterChunk, DeconstructionSkill, JobLog, Project, PromptTemplate, SourceFile
-from ..schemas import JobCreate, JobLogRead, JobRead
+from ..schemas import JobCreate, JobLogRead, JobRead, JobRuntimeKeyRequest
 from ..services.path_safety import job_output_dir
 from ..services.pipeline import job_id_now, resolve_model, run_analysis_job
 from .workspace import get_workspace_id
@@ -68,10 +68,12 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, work
         raise HTTPException(status_code=400, detail=f"分析模式不存在: {', '.join(missing_modes)}")
 
     job_id = job_id_now()
+    base_url = payload.base_url or settings.openai_base_url
+    if not payload.dry_run and not (payload.api_key or "").strip():
+        raise HTTPException(status_code=400, detail="关闭 dry-run 后必须填写你自己的 API Key。服务器不会使用站长的 Key 替你调用模型。")
     output_dir = job_output_dir(project.name, job_id, payload.output_dir or project.root_output_dir)
     for name in ["chapter_analysis", "logs", "metadata/llm_calls"]:
         (Path(output_dir) / name).mkdir(parents=True, exist_ok=True)
-    base_url = payload.base_url or settings.openai_base_url
 
     job = AnalysisJob(
         id=job_id,
@@ -132,13 +134,22 @@ def pause_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Se
 
 
 @router.post("/{job_id}/resume", response_model=JobRead)
-async def resume_job(job_id: str, background_tasks: BackgroundTasks, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+async def resume_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    payload: JobRuntimeKeyRequest | None = None,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
     job = _get_job(db, job_id, workspace_id)
     if job.status in {"paused", "failed"}:
+        runtime_key = (payload.api_key if payload else None) or ""
+        if not job.dry_run and not runtime_key.strip():
+            raise HTTPException(status_code=400, detail="当前任务不会保存 API Key。继续任务前请重新填写你自己的 API Key。")
         job.status = "pending"
         db.add(JobLog(job_id=job.id, level="info", message="已请求继续任务"))
         db.commit()
-        background_tasks.add_task(run_analysis_job, job_id, None)
+        background_tasks.add_task(run_analysis_job, job_id, runtime_key)
         db.refresh(job)
     return job
 
@@ -155,8 +166,17 @@ def cancel_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: S
 
 
 @router.post("/{job_id}/retry-failed", response_model=JobRead)
-async def retry_failed(job_id: str, background_tasks: BackgroundTasks, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+async def retry_failed(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    payload: JobRuntimeKeyRequest | None = None,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
     job = _get_job(db, job_id, workspace_id)
+    runtime_key = (payload.api_key if payload else None) or ""
+    if not job.dry_run and not runtime_key.strip():
+        raise HTTPException(status_code=400, detail="当前任务不会保存 API Key。重试失败项前请重新填写你自己的 API Key。")
     db.query(AnalysisResult).filter(AnalysisResult.job_id == job_id, AnalysisResult.status == "failed").update(
         {"status": "pending", "error_message": None}
     )
@@ -164,6 +184,6 @@ async def retry_failed(job_id: str, background_tasks: BackgroundTasks, workspace
     job.failed_chunks = 0
     db.add(JobLog(job_id=job.id, level="info", message="已重置失败项并重新开始"))
     db.commit()
-    background_tasks.add_task(run_analysis_job, job_id, None)
+    background_tasks.add_task(run_analysis_job, job_id, runtime_key)
     db.refresh(job)
     return job

@@ -10,7 +10,7 @@
 - 章节标题识别：第1章、第一章、卷一、序章、楔子、终章、Chapter 1 等
 - 默认严格按章节标题切分，能跳过轻小说开头目录/版权信息中的重复章节标题
 - 无章节时按最大字符数分块；关闭“严格按章切分”后，超长章节会二次分块并支持 overlap
-- OpenAI-compatible Chat Completions 调用，内置 DeepSeek Flash / Pro 预设
+- 模型调用支持 DeepSeek Flash / Pro、豆包 Seed 2.0 Pro 和 OpenAI-compatible 服务
 - Skill 管理：可选择内置 oh-story Phase 2 Skill，也可自定义主拆书 Prompt、System Prompt 和默认分析模式
 - Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
 - Phase 3 导出：GPT Builder 知识库、Obsidian Markdown、轻量 GraphRAG JSON/Markdown
@@ -58,7 +58,7 @@ docker compose up --build
 1. 把本项目推送到 GitHub。
 2. 打开 Render Dashboard，选择 New -> Blueprint。
 3. 选择该 GitHub 仓库，Render 会读取 `render.yaml`。
-4. 在环境变量里填写 `DEEPSEEK_API_KEY` 或 `DOUBAO_API_KEY`。不要把真实 Key 提交到仓库。
+4. 创建服务即可。公开部署不需要配置站长自己的模型 API Key；使用者会在页面里填写自己的 Key。
 5. 创建服务并等待构建完成。
 6. 打开 Render 分配的服务地址，访问 `/health` 应返回 `{"ok":true,...}`。
 
@@ -86,7 +86,7 @@ npm run dev
 
 ## .env 配置
 
-`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 均不写死。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`；Key 可在任务页临时填写，或写入 `DEEPSEEK_API_KEY`。AI 写作 Agent 还支持豆包方舟 Responses API：`DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，`DOUBAO_MODEL=doubao-seed-2-0-pro-260215`，Key 写入 `DOUBAO_API_KEY` 或文档兼容的 `ARK_API_KEY`。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
+模型配置不写死用户密钥。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`。豆包方舟使用 `DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，`DOUBAO_MODEL=doubao-seed-2-0-pro-260215`。公开部署时，拆书任务和写作 Agent 都要求当前使用者在页面填写自己的 API Key；后端不会自动使用服务器环境变量中的站长 Key。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
 
 知识库相关配置：
 
@@ -104,7 +104,7 @@ npm run dev
 5. 默认开启“识别到章节标题时严格按章切分”；如果单章太长需要控制模型输入，可关闭它来启用二次分块。
 6. 在章节预览页检查标题、字符数和 token 估算。
 7. 配置任务，选择 Skill、分析模式和 Phase 3 导出项。
-8. 使用 dry-run，或选择 DeepSeek / OpenAI-compatible 并填写 API Key。
+8. 使用 dry-run，或选择 DeepSeek / 豆包 / OpenAI-compatible 并填写你自己的 API Key。
 9. 启动任务，在进度页查看日志。
 10. 到结果页预览或下载 Markdown。
 
@@ -122,7 +122,7 @@ npm run dev
 8. 在第一个对话框“发送请求”中选择写作模型，并输入写作请求和补充上下文。Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引写进提纲。
 9. 在第二个对话框“生成并确认提纲”中查看和编辑提纲，点击“确认提纲”后，提纲会写入长期 Memory，并解锁正文生成。
 10. 在第三个对话框“生成正文”中点击按钮生成正文。正文阶段会把提纲内化为连续叙事，并明确禁止输出提纲、表格、结构核对或写作说明。
-11. dry-run 可先验证检索与引用；关闭 dry-run 后，按模型选择调用 DeepSeek 或豆包 Seed 2.0 Pro。
+11. dry-run 可先验证检索与引用；关闭 dry-run 后，按模型选择调用 DeepSeek 或豆包 Seed 2.0 Pro，并使用页面里填写的当前用户 Key。
 
 写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 和 oh-story 内核只作为技巧指南。长期 Memory 用于承接已确认提纲、正文片段、人物状态和伏笔，但不能覆盖世界观硬设定。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
 
@@ -139,7 +139,7 @@ npm run dev
 
 这不是账号登录系统，但能解决“别人访问同一个网页看到我的项目和进程”的问题。清空浏览器 LocalStorage 会生成新工作区，旧工作区数据仍保存在服务器数据库中。
 
-隐私说明：应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给你选择的模型服务处理。API Key 只由后端读取，不会写入浏览器 LocalStorage。
+隐私说明：应用和知识库存储在服务器。使用模型调用时，检索到的相关知识片段及写作内容会发送给你选择的模型服务处理。API Key 只随本次请求发送给后端，不会写入浏览器 LocalStorage 或数据库。
 
 ## CLI 使用
 
@@ -249,6 +249,7 @@ pytest
 
 - 没有 API Key 能用吗？可以，任务配置中开启 dry-run。
 - DeepSeek 怎么填？模型服务选 `DeepSeek Flash` 或 `DeepSeek Pro`，API Key 填 DeepSeek 控制台生成的 Key，然后关闭 dry-run。
+- 豆包怎么填？模型服务选 `豆包 Seed 2.0 Pro`，API Key 填火山方舟控制台生成的 Ark API Key，然后关闭 dry-run。
 - 能上传很大的小说吗？后端按块保存上传文件，切章前不会把整本书送入模型；单次模型调用只处理一个章节/分块。
 - 为什么 PDF 解析为空？多半是扫描版 PDF，请先 OCR 成可选中文本后再上传。
 - 写作 Agent 的知识库是向量库吗？当前版本先使用 SQLite 分块 + 本地轻量关键词召回，已保留检索服务层接口；后续可替换为 Chroma / sentence-transformers 而不改前端使用方式。

@@ -379,6 +379,12 @@ th {
   padding: 16px;
 }
 
+.runtime-key-row {
+  border-top: 1px solid #e5e7eb;
+  margin: 10px 16px 16px;
+  padding-top: 12px;
+}
+
 .progress-bar {
   height: 14px;
   border-radius: 999px;
@@ -815,6 +821,24 @@ th {
 
 .hit-list article small {
   color: #64748b;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.help-grid article {
+  align-content: start;
+}
+
+.help-grid ul,
+.help-grid ol {
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+  line-height: 1.65;
 }
 
 .kb-list button span {

@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from novel_deconstructor.services.pipeline import resolve_api_key, resolve_model
 from novel_deconstructor.services.llm_provider import DoubaoResponsesProvider, LLMRequest, OpenAICompatibleProvider, is_doubao_base_url
 
 
@@ -106,3 +107,11 @@ def test_doubao_missing_key_message():
                 )
             )
         )
+
+
+def test_pipeline_requires_runtime_key_and_resolves_doubao_model():
+    with pytest.raises(ValueError, match="填写你自己的豆包 Ark API Key"):
+        resolve_api_key("https://ark.cn-beijing.volces.com/api/v3", "")
+
+    assert resolve_api_key("https://ark.cn-beijing.volces.com/api/v3", "user-key") == "user-key"
+    assert resolve_model("https://ark.cn-beijing.volces.com/api/v3", None) == "doubao-seed-2-0-pro-260215"
