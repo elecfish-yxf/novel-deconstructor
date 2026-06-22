@@ -9,6 +9,21 @@ from ..schemas import DirectoryPickRequest, DirectoryPickResponse
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
+@router.get("/config/public")
+def public_config():
+    settings = get_settings()
+    return {
+        "deepseek_base_url": settings.deepseek_base_url,
+        "deepseek_model": settings.deepseek_model,
+        "has_deepseek_api_key": bool(settings.deepseek_api_key),
+        "knowledge_chunk_size": settings.knowledge_chunk_size,
+        "knowledge_chunk_overlap": settings.knowledge_chunk_overlap,
+        "retrieval_top_k": settings.retrieval_top_k,
+        "max_upload_size_mb": settings.max_upload_size_mb,
+        "privacy_note": "应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给 DeepSeek API 处理。",
+    }
+
+
 @router.post("/pick-directory", response_model=DirectoryPickResponse)
 def pick_directory(payload: DirectoryPickRequest):
     settings = get_settings()

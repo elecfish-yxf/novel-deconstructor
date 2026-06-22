@@ -1,6 +1,6 @@
 # Novel Deconstructor
 
-长篇小说拆书工作台。Phase 3 已实现：项目管理、TXT/MD/DOCX/PDF 上传、大文件保存、文本解析、章节识别/分块、本机文件夹选择器、Skill 管理、OpenAI-compatible 多维逐章分析、oh-story 风格拆文库输出、知识库/Obsidian/轻量图谱导出、任务进度页面和 Docker 启动。
+长篇小说拆书与 AI 写作工作台。Phase 3 已实现：项目管理、TXT/MD/DOCX/PDF 上传、大文件保存、文本解析、章节识别/分块、本机文件夹选择器、Skill 管理、OpenAI-compatible 多维逐章分析、oh-story 风格拆文库输出、知识库/Obsidian/轻量图谱导出、AI 写作 Agent、任务进度页面和 Docker 启动。
 
 ## 功能列表
 
@@ -14,6 +14,9 @@
 - Skill 管理：可选择内置 oh-story Phase 2 Skill，也可自定义主拆书 Prompt、System Prompt 和默认分析模式
 - Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
 - Phase 3 导出：GPT Builder 知识库、Obsidian Markdown、轻量 GraphRAG JSON/Markdown
+- AI 写作 Agent：创建本地知识库、上传 TXT/MD/DOCX/PDF、检索测试、dry-run 写作生成
+- 支持把已完成拆书任务一键导入知识库，保留 `final_reports/`、`knowledge_base/`、`knowledge_base_obsidian/`、`graph_outputs/`、`chapter_analysis/`、`拆文库/` 结构路径
+- 写作生成会给召回片段编号为 `[资料1]`、`[资料2]`，并在前端显示来源、标题、结构路径和原始片段
 - 默认输出路径和任务输出路径支持点击按钮打开本机文件夹选择器
 - 内嵌 oh-story-codex 长篇拆文输出协议：`概要.md`、`_progress.md`、`快速预览.md`、`拆文报告.md`、`章节/*.md`
 - dry-run 模式，用于不配置 API Key 时验证完整流程
@@ -22,8 +25,8 @@
 
 ## 技术栈
 
-后端：Python 3.11、FastAPI、SQLite、SQLAlchemy、Pydantic、aiofiles、httpx。  
-前端：React、Vite、TypeScript、普通 CSS。  
+后端：Python 3.11、FastAPI、SQLite、SQLAlchemy、Pydantic、aiofiles、httpx、python-docx、pypdf。
+前端：React、Vite、TypeScript、普通 CSS。
 部署：Dockerfile、docker-compose。
 
 ## 快速开始
@@ -80,7 +83,14 @@ npm run dev
 
 ## .env 配置
 
-`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 均不写死。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`；Key 可在任务页临时填写，或写入 `DEEPSEEK_API_KEY`。若只想验证流程，前端任务配置中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
+`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 均不写死。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`；Key 可在任务页临时填写，或写入 `DEEPSEEK_API_KEY`。AI 写作 Agent 默认使用 `DEEPSEEK_MODEL=deepseek-v4-pro`。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
+
+知识库相关配置：
+
+- `APP_KNOWLEDGE_DIR`：知识库文件与解析文本保存目录，默认 `./storage/knowledge`
+- `KNOWLEDGE_CHUNK_SIZE`：知识库分块目标大小，默认 900 字符
+- `KNOWLEDGE_CHUNK_OVERLAP`：知识库分块重叠，默认 120 字符
+- `RETRIEVAL_TOP_K`：检索默认返回数量，默认 6
 
 ## Web 使用流程
 
@@ -94,6 +104,23 @@ npm run dev
 8. 使用 dry-run，或选择 DeepSeek / OpenAI-compatible 并填写 API Key。
 9. 启动任务，在进度页查看日志。
 10. 到结果页预览或下载 Markdown。
+
+## AI 写作 Agent 使用流程
+
+1. 打开左侧 `写作 Agent`。
+2. 新建一个知识库，例如“小说拆书知识库”。
+3. 上传 TXT、MD、DOCX 或 PDF 文件；系统会保存原文件、解析文本并建立本地分块索引。
+4. 如果当前已选择一个完成的拆书任务，可以点击“导入当前拆书结果”，系统会导入：
+   - `final_reports/overall_summary.md`
+   - `knowledge_base/*.md`
+   - `knowledge_base_obsidian/*.md`
+   - `graph_outputs/*.md`
+   - `chapter_analysis/*.md`
+   - `拆文库/**/*.md`
+5. 在“检索测试”中输入问题，查看召回片段和来源路径。
+6. 在“写作生成”中输入任务，dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek 生成正文。
+
+隐私说明：应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给 DeepSeek API 处理。API Key 只由后端读取，不会写入浏览器 LocalStorage。
 
 ## CLI 使用
 
@@ -144,6 +171,12 @@ outputs/
       logs/
       metadata/
         llm_calls/
+storage/
+  knowledge/
+    {knowledge_base_id}/
+      {document_id}/
+        原始文件
+        normalized.txt
 ```
 
 每次 LLM 调用都会保存 prompt 与 response。`chapter_analysis/` 保留兼容旧版的逐章 Markdown，`拆文库/` 使用 oh-story-codex 风格目录；Phase 3 导出会额外生成 `knowledge_base/`、`knowledge_base_obsidian/` 和 `graph_outputs/`。
@@ -199,3 +232,4 @@ pytest
 - DeepSeek 怎么填？模型服务选 `DeepSeek Flash` 或 `DeepSeek Pro`，API Key 填 DeepSeek 控制台生成的 Key，然后关闭 dry-run。
 - 能上传很大的小说吗？后端按块保存上传文件，切章前不会把整本书送入模型；单次模型调用只处理一个章节/分块。
 - 为什么 PDF 解析为空？多半是扫描版 PDF，请先 OCR 成可选中文本后再上传。
+- 写作 Agent 的知识库是向量库吗？当前版本先使用 SQLite 分块 + 本地轻量关键词召回，已保留检索服务层接口；后续可替换为 Chroma / sentence-transformers 而不改前端使用方式。

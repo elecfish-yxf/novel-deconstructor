@@ -9,8 +9,9 @@ import JobProgress from "./pages/JobProgress";
 import ResultViewer from "./pages/ResultViewer";
 import SkillImport from "./pages/SkillImport";
 import SkillManager from "./pages/SkillManager";
+import WritingAgent from "./pages/WritingAgent";
 
-type View = "projects" | "upload" | "chapters" | "config" | "progress" | "results" | "skills" | "imports";
+type View = "projects" | "upload" | "chapters" | "config" | "progress" | "results" | "agent" | "skills" | "imports";
 type SavedContext = {
   view?: View;
   projectId?: number;
@@ -27,6 +28,7 @@ const nav: Array<{ key: View; label: string }> = [
   { key: "config", label: "任务" },
   { key: "progress", label: "进度" },
   { key: "results", label: "结果" },
+  { key: "agent", label: "写作 Agent" },
   { key: "skills", label: "Skill 管理" },
   { key: "imports", label: "Prompt 导入" },
 ];
@@ -52,7 +54,8 @@ function loadSavedContext(): SavedContext {
 }
 
 function chooseRestoredView(preferred: View | undefined, sourceFile: SourceFile | null, chapters: Chapter[], job: Job | null): View {
-  if (preferred && !["projects", "skills", "imports"].includes(preferred)) {
+  if (preferred && ["projects", "skills", "imports", "agent"].includes(preferred)) return preferred;
+  if (preferred) {
     if (["progress", "results"].includes(preferred) && job) return preferred;
     if (["chapters", "config"].includes(preferred) && sourceFile) return preferred;
     if (preferred === "upload") return preferred;
@@ -152,7 +155,7 @@ export default function App() {
   }
 
   function navDisabled(key: View) {
-    if (["projects", "imports", "skills"].includes(key)) return false;
+    if (["projects", "imports", "skills", "agent"].includes(key)) return false;
     if (!project) return true;
     if (["chapters", "config"].includes(key)) return !sourceFile;
     if (["progress", "results"].includes(key)) return !job;
@@ -236,6 +239,7 @@ export default function App() {
           />
         )}
         {view === "results" && job && <ResultViewer jobId={job.id} />}
+        {view === "agent" && <WritingAgent job={job} />}
         {view === "skills" && <SkillManager />}
         {view === "imports" && <SkillImport />}
       </main>

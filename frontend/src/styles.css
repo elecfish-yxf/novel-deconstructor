@@ -524,6 +524,81 @@ th {
   font-weight: 500;
 }
 
+.hidden-input {
+  display: none;
+}
+
+.agent-layout {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.agent-sidebar {
+  align-self: start;
+  display: grid;
+  gap: 14px;
+}
+
+.agent-sidebar h2,
+.agent-main h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agent-main {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.hit-list {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.hit-list article {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 6px;
+}
+
+.hit-list article p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.hit-list article small {
+  color: #64748b;
+}
+
+.kb-list button span {
+  display: grid;
+  gap: 4px;
+}
+
+.kb-list small {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.agent-output {
+  min-height: 360px;
+}
+
 .alert {
   border: 1px solid #fecaca;
   background: #fff1f2;
@@ -580,6 +655,8 @@ th {
   .skill-editor,
   .split-layout,
   .results-layout,
+  .agent-layout,
+  .agent-two-col,
   .path-picker-row {
     grid-template-columns: 1fr;
   }

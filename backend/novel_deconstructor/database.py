@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
-from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, PromptTemplate
+from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, KnowledgeDocument, PromptTemplate
 
 
 settings = get_settings()
@@ -30,7 +30,7 @@ def get_db():
 
 
 def ensure_runtime_dirs() -> None:
-    for path in [settings.storage_dir, settings.upload_dir, settings.output_dir]:
+    for path in [settings.storage_dir, settings.upload_dir, settings.output_dir, settings.knowledge_dir]:
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -129,6 +129,19 @@ def mark_interrupted_jobs(db: Session) -> None:
         db.commit()
 
 
+def mark_interrupted_knowledge_documents(db: Session) -> None:
+    indexing_docs = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.status.in_(["pending", "parsing", "indexing"]))
+        .all()
+    )
+    for document in indexing_docs:
+        document.status = "failed"
+        document.error_message = "服务重启导致索引中断，请重新索引。"
+    if indexing_docs:
+        db.commit()
+
+
 def init_db() -> None:
     ensure_runtime_dirs()
     Base.metadata.create_all(bind=engine)
@@ -138,5 +151,6 @@ def init_db() -> None:
         seed_prompt_templates(db)
         seed_deconstruction_skills(db)
         mark_interrupted_jobs(db)
+        mark_interrupted_knowledge_documents(db)
     finally:
         db.close()

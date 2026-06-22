@@ -17,16 +17,20 @@ class Settings(BaseSettings):
     openai_max_tokens: int = 8192
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = "deepseek-v4-pro"
 
     app_storage_dir: str = "./storage"
     app_upload_dir: str = "./uploads"
     app_output_dir: str = "./outputs"
+    app_knowledge_dir: str = "./storage/knowledge"
     app_database_url: str = "sqlite:///./storage/novel_deconstructor.db"
 
     max_upload_size_mb: int = 500
     max_chapter_chars: int = 12000
     chunk_overlap_chars: int = 800
+    knowledge_chunk_size: int = 900
+    knowledge_chunk_overlap: int = 120
+    retrieval_top_k: int = 6
     default_concurrency: int = 1
     allow_absolute_output_path: bool = False
     enable_directory_picker: bool = True
@@ -47,6 +51,10 @@ class Settings(BaseSettings):
     @property
     def output_dir(self) -> Path:
         return Path(self.app_output_dir)
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return Path(self.app_knowledge_dir)
 
     @property
     def cors_origin_list(self) -> list[str]:

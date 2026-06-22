@@ -230,3 +230,100 @@ class DirectoryPickResponse(BaseModel):
     path: str | None
     message: str
 
+
+class KnowledgeBaseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = ""
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+
+
+class KnowledgeBaseRead(ORMModel):
+    id: int
+    name: str
+    description: str
+    source_job_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    document_count: int = 0
+    chunk_count: int = 0
+
+
+class KnowledgeDocumentRead(ORMModel):
+    id: int
+    knowledge_base_id: int
+    original_filename: str
+    file_type: str
+    size_bytes: int
+    file_hash: str
+    document_title: str
+    source_kind: str
+    source_path: str
+    structure_path: str
+    status: str
+    error_message: str | None
+    page_count: int
+    paragraph_count: int
+    chunk_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeImportJobRequest(BaseModel):
+    job_id: str
+    include_chapter_analysis: bool = True
+    include_final_reports: bool = True
+    include_knowledge_base: bool = True
+    include_obsidian: bool = True
+    include_graph: bool = True
+    include_oh_story: bool = True
+
+
+class KnowledgeImportResponse(BaseModel):
+    imported: list[KnowledgeDocumentRead]
+    skipped_duplicates: int = 0
+    message: str
+
+
+class RetrievalSearchRequest(BaseModel):
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+    query: str = Field(min_length=1)
+    top_k: int | None = None
+
+
+class RetrievalHit(BaseModel):
+    citation_id: str
+    knowledge_base_id: int
+    document_id: int
+    chunk_id: str
+    score: float
+    original_filename: str
+    document_title: str
+    heading: str
+    page_number: int | None
+    structure_path: str
+    source_kind: str
+    source_path: str
+    text: str
+
+
+class RetrievalSearchResponse(BaseModel):
+    hits: list[RetrievalHit]
+
+
+class WritingGenerateRequest(BaseModel):
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+    task: str = Field(min_length=1)
+    current_content: str = ""
+    mode: str = "fast"
+    knowledge_mode: str = "reference"
+    dry_run: bool = False
+
+
+class WritingGenerateResponse(BaseModel):
+    content: str
+    citations: list[RetrievalHit]
+

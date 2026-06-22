@@ -160,3 +160,60 @@ class DeconstructionSkill(Base):
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
+
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_bases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, default="", nullable=False)
+    source_job_id = Column(String(64), ForeignKey("analysis_jobs.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    documents = relationship("KnowledgeDocument", back_populates="knowledge_base", cascade="all, delete-orphan")
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    original_filename = Column(String(512), nullable=False)
+    stored_path = Column(Text, nullable=False)
+    normalized_path = Column(Text, nullable=True)
+    file_type = Column(String(32), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    file_hash = Column(String(64), nullable=False, index=True)
+    document_title = Column(String(512), default="", nullable=False)
+    source_kind = Column(String(64), default="upload", nullable=False)
+    source_path = Column(Text, default="", nullable=False)
+    structure_path = Column(Text, default="", nullable=False)
+    status = Column(String(32), default="pending", nullable=False)
+    error_message = Column(Text, nullable=True)
+    page_count = Column(Integer, default=0, nullable=False)
+    paragraph_count = Column(Integer, default=0, nullable=False)
+    chunk_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="documents")
+    chunks = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(String(96), primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("knowledge_documents.id"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    heading = Column(String(512), default="", nullable=False)
+    page_number = Column(Integer, nullable=True)
+    text = Column(Text, nullable=False)
+    token_estimate = Column(Integer, default=0, nullable=False)
+    metadata_json = Column(Text, default="{}", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    document = relationship("KnowledgeDocument", back_populates="chunks")
+

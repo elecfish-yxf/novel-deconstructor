@@ -128,6 +128,64 @@ export type DeconstructionSkill = {
   updated_at: string;
 };
 
+export type KnowledgeBase = {
+  id: number;
+  name: string;
+  description: string;
+  source_job_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  document_count: number;
+  chunk_count: number;
+};
+
+export type KnowledgeDocument = {
+  id: number;
+  knowledge_base_id: number;
+  original_filename: string;
+  file_type: string;
+  size_bytes: number;
+  file_hash: string;
+  document_title: string;
+  source_kind: string;
+  source_path: string;
+  structure_path: string;
+  status: string;
+  error_message?: string | null;
+  page_count: number;
+  paragraph_count: number;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RetrievalHit = {
+  citation_id: string;
+  knowledge_base_id: number;
+  document_id: number;
+  chunk_id: string;
+  score: number;
+  original_filename: string;
+  document_title: string;
+  heading: string;
+  page_number?: number | null;
+  structure_path: string;
+  source_kind: string;
+  source_path: string;
+  text: string;
+};
+
+export type PublicConfig = {
+  deepseek_base_url: string;
+  deepseek_model: string;
+  has_deepseek_api_key: boolean;
+  knowledge_chunk_size: number;
+  knowledge_chunk_overlap: number;
+  retrieval_top_k: number;
+  max_upload_size_mb: number;
+  privacy_note: string;
+};
+
 export type SkillPayload = {
   key: string;
   name: string;
@@ -142,6 +200,7 @@ export type SkillPayload = {
 };
 
 export const api = {
+  getPublicConfig: () => request<PublicConfig>("/api/config/public"),
   listProjects: () => request<Project[]>("/api/projects"),
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
   createProject: (payload: { name: string; description: string; root_output_dir?: string }) =>
@@ -175,6 +234,38 @@ export const api = {
   updateSkill: (id: number, payload: Partial<SkillPayload>) =>
     request<DeconstructionSkill>(`/api/skills/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteSkill: (id: number) => request<{ ok: boolean; disabled?: boolean }>(`/api/skills/${id}`, { method: "DELETE" }),
+  listKnowledgeBases: () => request<KnowledgeBase[]>("/api/knowledge-bases"),
+  createKnowledgeBase: (payload: { name: string; description?: string }) =>
+    request<KnowledgeBase>("/api/knowledge-bases", { method: "POST", body: JSON.stringify(payload) }),
+  updateKnowledgeBase: (id: number, payload: { name?: string; description?: string }) =>
+    request<KnowledgeBase>(`/api/knowledge-bases/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteKnowledgeBase: (id: number) => request<{ ok: boolean }>(`/api/knowledge-bases/${id}`, { method: "DELETE" }),
+  listKnowledgeDocuments: (id: number) => request<KnowledgeDocument[]>(`/api/knowledge-bases/${id}/documents`),
+  uploadKnowledgeDocuments: (id: number, files: FileList | File[]) => {
+    const data = new FormData();
+    Array.from(files).forEach((file) => data.append("files", file));
+    return request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/documents`, {
+      method: "POST",
+      body: data,
+    });
+  },
+  importJobToKnowledgeBase: (id: number, jobId: string) =>
+    request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/import-job`, {
+      method: "POST",
+      body: JSON.stringify({ job_id: jobId }),
+    }),
+  reindexKnowledgeDocument: (id: number) => request<KnowledgeDocument>(`/api/documents/${id}/reindex`, { method: "POST" }),
+  deleteKnowledgeDocument: (id: number) => request<{ ok: boolean }>(`/api/documents/${id}`, { method: "DELETE" }),
+  searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
+    request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
+  generateWriting: (payload: {
+    knowledge_base_ids: number[];
+    task: string;
+    current_content?: string;
+    mode?: string;
+    knowledge_mode?: string;
+    dry_run?: boolean;
+  }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/generate", { method: "POST", body: JSON.stringify(payload) }),
   pickDirectory: (payload: { initial_dir?: string }) =>
     request<{ path?: string | null; message: string }>("/api/system/pick-directory", {
       method: "POST",

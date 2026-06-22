@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import files, imports, jobs, projects, prompts, results, skills, system
+from .api import files, imports, jobs, knowledge, projects, prompts, results, skills, system, writing
 from .config import get_settings
 from .database import init_db
 
@@ -29,6 +29,8 @@ app.include_router(results.router)
 app.include_router(prompts.router)
 app.include_router(skills.router)
 app.include_router(imports.router)
+app.include_router(knowledge.router)
+app.include_router(writing.router)
 app.include_router(system.router)
 
 
@@ -40,6 +42,16 @@ def on_startup() -> None:
 @app.get("/health")
 def health():
     return {"ok": True, "service": "novel-deconstructor"}
+
+
+@app.get("/api/health")
+def api_health():
+    return health()
+
+
+@app.get("/api/config/public")
+def api_public_config():
+    return system.public_config()
 
 
 if FRONTEND_DIST.exists():
