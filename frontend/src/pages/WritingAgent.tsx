@@ -366,6 +366,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
             <form className="panel compact-form" onSubmit={generate}>
               <h2>写作生成</h2>
+              <p className="muted">
+                生成文章时会自动启用 oh-story 写作内核：黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引。
+              </p>
               <label>
                 写作任务
                 <textarea rows={4} value={task} onChange={(event) => setTask(event.target.value)} />
