@@ -530,7 +530,7 @@ th {
 
 .agent-layout {
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr);
+  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -553,9 +553,55 @@ th {
 
 .agent-two-col {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 16px;
   align-items: start;
+}
+
+.writing-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.writing-step {
+  position: relative;
+  border-color: #cbd5e1;
+}
+
+.step-badge {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: white;
+  font-weight: 900;
+}
+
+.inline-output {
+  min-height: 360px;
+  margin-top: 12px;
+  border-color: #dbeafe;
+  background: #fbfdff;
+}
+
+.inline-output pre {
+  max-height: 560px;
+}
+
+.memory-panel {
+  min-height: 100%;
+}
+
+.memory-list article p {
+  max-height: 160px;
+  overflow: auto;
 }
 
 .hit-list {
@@ -657,6 +703,7 @@ th {
   .results-layout,
   .agent-layout,
   .agent-two-col,
+  .writing-flow,
   .path-picker-row {
     grid-template-columns: 1fr;
   }

@@ -9,6 +9,7 @@ import re
 import shutil
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -338,7 +339,8 @@ def search_knowledge(db: Session, knowledge_base_ids: list[int], query: str, top
     chunks_query = db.query(KnowledgeChunk, KnowledgeDocument).join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
     if knowledge_base_ids:
         chunks_query = chunks_query.filter(KnowledgeChunk.knowledge_base_id.in_(knowledge_base_ids))
-    rows = chunks_query.filter(KnowledgeDocument.status == "completed").all()
+    chunks_query = chunks_query.filter(KnowledgeDocument.status == "completed")
+    rows = _candidate_rows(chunks_query, q, limit)
     scored: list[tuple[float, KnowledgeChunk, KnowledgeDocument]] = []
     for chunk, document in rows:
         score = _score_text(q, "\n".join([chunk.heading or "", document.original_filename, document.structure_path, chunk.text]))
@@ -364,6 +366,45 @@ def search_knowledge(db: Session, knowledge_base_ids: list[int], query: str, top
                 continue
             hits.append(_hit_dict(len(hits) + 1, score, chunk, document))
     return hits
+
+
+def _candidate_rows(chunks_query, query: str, limit: int) -> list[tuple[KnowledgeChunk, KnowledgeDocument]]:
+    terms = _candidate_terms(query)
+    if not terms:
+        return chunks_query.all()
+    conditions = []
+    for term in terms:
+        pattern = f"%{_escape_like(term)}%"
+        conditions.extend(
+            [
+                KnowledgeChunk.text.ilike(pattern, escape="\\"),
+                KnowledgeChunk.heading.ilike(pattern, escape="\\"),
+                KnowledgeDocument.original_filename.ilike(pattern, escape="\\"),
+                KnowledgeDocument.document_title.ilike(pattern, escape="\\"),
+                KnowledgeDocument.structure_path.ilike(pattern, escape="\\"),
+            ]
+        )
+    candidate_limit = max(limit * 120, 240)
+    rows = chunks_query.filter(or_(*conditions)).limit(candidate_limit).all()
+    return rows if rows else chunks_query.all()
+
+
+def _candidate_terms(query: str) -> list[str]:
+    seen: set[str] = set()
+    terms: list[str] = []
+    for token in sorted(_tokens(query), key=len, reverse=True):
+        token = token.strip().lower()
+        if len(token) < 2 or token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+        if len(terms) >= 8:
+            break
+    return terms
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _hit_dict(index: int, score: float, chunk: KnowledgeChunk, document: KnowledgeDocument) -> dict:

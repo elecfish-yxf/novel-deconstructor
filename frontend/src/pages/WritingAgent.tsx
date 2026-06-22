@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { api, getWorkspaceId, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit } from "../api";
+import { api, getWorkspaceId, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit, WritingMemory } from "../api";
 
 function formatSize(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -12,6 +12,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [memories, setMemories] = useState<WritingMemory[]>([]);
   const [name, setName] = useState("小说拆书知识库");
   const [description, setDescription] = useState("用于 AI 写作 Agent 的本地知识库");
   const [query, setQuery] = useState("");
@@ -19,12 +20,19 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [uploadType, setUploadType] = useState("worldbuilding");
   const [storySeed, setStorySeed] = useState("一个普通人在高压规则世界中寻找自我选择权。");
   const [worldbuildingDraft, setWorldbuildingDraft] = useState("");
-  const [task, setTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说章节提纲。");
-  const [currentContent, setCurrentContent] = useState("");
+  const [outlineTask, setOutlineTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说第一章章节提纲。");
+  const [outlineContext, setOutlineContext] = useState("");
+  const [outline, setOutline] = useState("");
+  const [confirmedOutline, setConfirmedOutline] = useState("");
+  const [draftTask, setDraftTask] = useState("请基于已确认提纲生成第一章小说正文。");
+  const [draftContext, setDraftContext] = useState("");
+  const [draft, setDraft] = useState("");
+  const [memoryType, setMemoryType] = useState("note");
+  const [memoryTitle, setMemoryTitle] = useState("");
+  const [memoryContent, setMemoryContent] = useState("");
   const [mode, setMode] = useState("fast");
   const [knowledgeMode, setKnowledgeMode] = useState("reference");
   const [dryRun, setDryRun] = useState(true);
-  const [generated, setGenerated] = useState("");
   const [citations, setCitations] = useState<RetrievalHit[]>([]);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -39,9 +47,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     const preferred = nextSelectedId || selectedId || nextBases[0]?.id || null;
     setSelectedId(preferred);
     if (preferred) {
-      setDocuments(await api.listKnowledgeDocuments(preferred));
+      const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(preferred), api.listWritingMemories(preferred)]);
+      setDocuments(nextDocuments);
+      setMemories(nextMemories);
     } else {
       setDocuments([]);
+      setMemories([]);
     }
   }
 
@@ -68,7 +79,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function chooseKnowledgeBase(id: number) {
     setSelectedId(id);
     setError("");
-    setDocuments(await api.listKnowledgeDocuments(id));
+    const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(id), api.listWritingMemories(id)]);
+    setDocuments(nextDocuments);
+    setMemories(nextMemories);
   }
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -188,26 +201,115 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     }
   }
 
-  async function generate(event: FormEvent) {
+  async function generateOutline(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !task.trim()) return;
-    setBusy("generate");
+    if (!selected || !outlineTask.trim()) return;
+    setBusy("outline");
     setError("");
-    setGenerated("");
+    setOutline("");
     setCitations([]);
     try {
-      const result = await api.generateWriting({
+      const result = await api.generateOutline({
         knowledge_base_ids: [selected.id],
-        task,
-        current_content: currentContent,
+        task: outlineTask,
+        current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
         dry_run: dryRun,
       });
-      setGenerated(result.content);
+      setOutline(result.content);
       setCitations(result.citations);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "生成失败");
+      setError(err instanceof Error ? err.message : "生成提纲失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function confirmOutline() {
+    if (!selected || !outline.trim()) return;
+    setBusy("confirm-outline");
+    setError("");
+    setMessage("");
+    try {
+      setConfirmedOutline(outline);
+      const saved = await api.createWritingMemory({
+        knowledge_base_id: selected.id,
+        memory_type: "outline",
+        title: `已确认提纲 ${new Date().toLocaleString()}`,
+        content: outline,
+        source: "confirmed_outline",
+      });
+      setMemories((items) => [saved, ...items]);
+      setMemoryTitle("");
+      setMemoryContent("");
+      setMessage("提纲已确认，并写入长期 Memory。现在可以生成正文。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "确认提纲失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function generateDraft(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || !draftTask.trim() || !confirmedOutline.trim()) return;
+    setBusy("draft");
+    setError("");
+    setDraft("");
+    setCitations([]);
+    try {
+      const result = await api.generateDraft({
+        knowledge_base_ids: [selected.id],
+        task: draftTask,
+        confirmed_outline: confirmedOutline,
+        current_content: draftContext,
+        mode,
+        knowledge_mode: knowledgeMode,
+        dry_run: dryRun,
+      });
+      setDraft(result.content);
+      setCitations(result.citations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "生成正文失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveMemory(title: string, content: string, type = memoryType, source = "manual") {
+    if (!selected || !title.trim() || !content.trim()) return;
+    setBusy("memory");
+    setError("");
+    setMessage("");
+    try {
+      const saved = await api.createWritingMemory({
+        knowledge_base_id: selected.id,
+        memory_type: type,
+        title,
+        content,
+        source,
+      });
+      setMemories((items) => [saved, ...items]);
+      setMemoryTitle("");
+      setMemoryContent("");
+      setMessage("Memory 已保存，后续提纲和正文生成都会自动参考。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存 Memory 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteMemory(id: number) {
+    if (!window.confirm("确定删除这条 Memory 吗？")) return;
+    setBusy(`memory-${id}`);
+    setError("");
+    try {
+      await api.deleteWritingMemory(id);
+      setMemories((items) => items.filter((item) => item.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除 Memory 失败");
     } finally {
       setBusy("");
     }
@@ -364,18 +466,59 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               </div>
             </form>
 
-            <form className="panel compact-form" onSubmit={generate}>
-              <h2>写作生成</h2>
-              <p className="muted">
-                生成文章时会自动启用 oh-story 写作内核：黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引。
-              </p>
+            <div className="panel compact-form memory-panel">
+              <div className="preview-toolbar">
+                <h2>长期 Memory</h2>
+                <span className="muted">{memories.length} 条</span>
+              </div>
+              <p className="muted">Memory 用来记住已确认提纲、已写正文、人物状态、伏笔和你的备注。后续生成会自动参考。</p>
+              <div className="mode-grid">
+                <label>
+                  类型
+                  <select value={memoryType} onChange={(event) => setMemoryType(event.target.value)}>
+                    <option value="note">备注</option>
+                    <option value="outline">提纲</option>
+                    <option value="draft">正文片段</option>
+                    <option value="continuity">连续性</option>
+                  </select>
+                </label>
+                <label>
+                  标题
+                  <input value={memoryTitle} onChange={(event) => setMemoryTitle(event.target.value)} placeholder="例如：第一章结尾状态" />
+                </label>
+              </div>
+              <textarea rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写下需要长期承接的上下文。" />
+              <button type="button" className="primary" disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim()} onClick={() => saveMemory(memoryTitle, memoryContent)}>
+                保存 Memory
+              </button>
+              <div className="hit-list memory-list">
+                {memories.slice(0, 6).map((memory) => (
+                  <article key={memory.id}>
+                    <strong>{memory.title}</strong>
+                    <small>{memory.memory_type} · {memory.source}</small>
+                    <p>{memory.content}</p>
+                    <button type="button" className="danger" onClick={() => deleteMemory(memory.id)} disabled={busy === `memory-${memory.id}`}>
+                      删除
+                    </button>
+                  </article>
+                ))}
+                {!memories.length && <p className="muted">还没有 Memory。确认提纲或手动保存后会显示在这里。</p>}
+              </div>
+            </div>
+          </div>
+
+          <div className="writing-flow">
+            <form className="panel compact-form writing-step" onSubmit={generateOutline}>
+              <div className="step-badge">1</div>
+              <h2>先生成章节提纲</h2>
+              <p className="muted">这一部分会输出类似“章节信息、开头状态、冲突推进、信息投放、结构核对”的详细提纲。确认后才进入正文。</p>
               <label>
-                写作任务
-                <textarea rows={4} value={task} onChange={(event) => setTask(event.target.value)} />
+                提纲任务
+                <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
               </label>
               <label>
-                当前正文，可选
-                <textarea rows={5} value={currentContent} onChange={(event) => setCurrentContent(event.target.value)} />
+                补充上下文，可选
+                <textarea rows={5} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
               </label>
               <div className="mode-grid">
                 <label>
@@ -398,9 +541,58 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} />
                 dry-run：不调用模型，只验证检索和引用
               </label>
-              <button className="primary" disabled={!selected || busy === "generate"}>
-                生成内容
+              <button className="primary" disabled={!selected || busy === "outline"}>
+                生成提纲
               </button>
+              <div className="preview-panel inline-output">
+                <div className="preview-toolbar">
+                  <strong>章节提纲</strong>
+                  <div className="button-row">
+                    <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
+                      复制
+                    </button>
+                    <button type="button" className="primary" disabled={!selected || !outline || busy === "confirm-outline"} onClick={confirmOutline}>
+                      确认提纲
+                    </button>
+                  </div>
+                </div>
+                <pre>{outline || "提纲会显示在这里。确认后会写入 Memory，并交给右侧生成正文。"}</pre>
+              </div>
+            </form>
+
+            <form className="panel compact-form writing-step" onSubmit={generateDraft}>
+              <div className="step-badge">2</div>
+              <h2>再生成小说正文</h2>
+              <p className="muted">这一部分只输出正文，不输出提纲、表格、结构核对或写作说明。</p>
+              <label>
+                正文任务
+                <textarea rows={4} value={draftTask} onChange={(event) => setDraftTask(event.target.value)} />
+              </label>
+              <label>
+                已确认提纲
+                <textarea rows={8} value={confirmedOutline} onChange={(event) => setConfirmedOutline(event.target.value)} placeholder="请先在左侧生成并确认提纲，或手动粘贴已确认提纲。" />
+              </label>
+              <label>
+                已有正文/上一章上下文，可选
+                <textarea rows={5} value={draftContext} onChange={(event) => setDraftContext(event.target.value)} />
+              </label>
+              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft"}>
+                生成正文
+              </button>
+              <div className="preview-panel inline-output">
+                <div className="preview-toolbar">
+                  <strong>小说正文</strong>
+                  <div className="button-row">
+                    <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
+                      复制
+                    </button>
+                    <button type="button" disabled={!selected || !draft || busy === "memory"} onClick={() => saveMemory(`正文片段 ${new Date().toLocaleString()}`, draft, "draft", "generated_draft")}>
+                      存入 Memory
+                    </button>
+                  </div>
+                </div>
+                <pre>{draft || "正文会显示在这里。这里应当是连续叙事，而不是提纲。"}</pre>
+              </div>
             </form>
           </div>
 
@@ -420,16 +612,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               </button>
             </div>
             <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入知识库。" />
-          </div>
-
-          <div className="preview-panel agent-output">
-            <div className="preview-toolbar">
-              <strong>生成结果</strong>
-              <button type="button" disabled={!generated} onClick={() => navigator.clipboard.writeText(generated)}>
-                复制
-              </button>
-            </div>
-            <pre>{generated || "生成后会显示在这里。"}</pre>
           </div>
 
           {!!citations.length && (

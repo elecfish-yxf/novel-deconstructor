@@ -174,6 +174,7 @@ class KnowledgeBase(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     documents = relationship("KnowledgeDocument", back_populates="knowledge_base", cascade="all, delete-orphan")
+    memories = relationship("WritingMemory", back_populates="knowledge_base", cascade="all, delete-orphan")
 
 
 class KnowledgeDocument(Base):
@@ -219,4 +220,20 @@ class KnowledgeChunk(Base):
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     document = relationship("KnowledgeDocument", back_populates="chunks")
+
+
+class WritingMemory(Base):
+    __tablename__ = "writing_memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    workspace_id = Column(String(80), default="anonymous", nullable=False, index=True)
+    memory_type = Column(String(32), default="note", nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    content = Column(Text, nullable=False)
+    source = Column(String(64), default="manual", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="memories")
 

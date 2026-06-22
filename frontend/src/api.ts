@@ -191,6 +191,18 @@ export type RetrievalHit = {
   text: string;
 };
 
+export type WritingMemory = {
+  id: number;
+  knowledge_base_id: number;
+  workspace_id: string;
+  memory_type: string;
+  title: string;
+  content: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type PublicConfig = {
   deepseek_base_url: string;
   deepseek_model: string;
@@ -289,6 +301,27 @@ export const api = {
   deleteKnowledgeDocument: (id: number) => request<{ ok: boolean }>(`/api/documents/${id}`, { method: "DELETE" }),
   searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
     request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
+  listWritingMemories: (knowledgeBaseId: number) => request<WritingMemory[]>(`/api/writing/memories?knowledge_base_id=${knowledgeBaseId}`),
+  createWritingMemory: (payload: { knowledge_base_id: number; memory_type: string; title: string; content: string; source?: string }) =>
+    request<WritingMemory>("/api/writing/memories", { method: "POST", body: JSON.stringify(payload) }),
+  deleteWritingMemory: (id: number) => request<{ ok: boolean }>(`/api/writing/memories/${id}`, { method: "DELETE" }),
+  generateOutline: (payload: {
+    knowledge_base_ids: number[];
+    task: string;
+    current_content?: string;
+    mode?: string;
+    knowledge_mode?: string;
+    dry_run?: boolean;
+  }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/outline", { method: "POST", body: JSON.stringify(payload) }),
+  generateDraft: (payload: {
+    knowledge_base_ids: number[];
+    task: string;
+    confirmed_outline: string;
+    current_content?: string;
+    mode?: string;
+    knowledge_mode?: string;
+    dry_run?: boolean;
+  }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/draft", { method: "POST", body: JSON.stringify(payload) }),
   generateWriting: (payload: {
     knowledge_base_ids: number[];
     task: string;

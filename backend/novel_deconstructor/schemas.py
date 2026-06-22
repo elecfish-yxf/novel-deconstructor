@@ -325,6 +325,34 @@ class WritingGenerateRequest(BaseModel):
     dry_run: bool = False
 
 
+class WritingOutlineRequest(WritingGenerateRequest):
+    pass
+
+
+class WritingDraftRequest(WritingGenerateRequest):
+    confirmed_outline: str = Field(min_length=1)
+
+
+class WritingMemoryCreate(BaseModel):
+    knowledge_base_id: int
+    memory_type: str = "note"
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+    source: str = "manual"
+
+
+class WritingMemoryRead(ORMModel):
+    id: int
+    knowledge_base_id: int
+    workspace_id: str
+    memory_type: str
+    title: str
+    content: str
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class KnowledgeTextCreate(BaseModel):
     filename: str = "worldbuilding.md"
     content: str = Field(min_length=1)

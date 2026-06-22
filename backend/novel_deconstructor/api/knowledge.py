@@ -4,8 +4,10 @@ from pathlib import Path
 import shutil
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import AnalysisJob, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from ..schemas import (
@@ -74,7 +76,36 @@ def _workspace_kb_ids(db: Session, workspace_id: str, requested_ids: list[int]) 
 @router.get("/api/knowledge-bases", response_model=list[KnowledgeBaseRead])
 def list_knowledge_bases(workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     items = db.query(KnowledgeBase).filter(KnowledgeBase.workspace_id == workspace_id).order_by(KnowledgeBase.updated_at.desc()).all()
-    return [_kb_read(db, item) for item in items]
+    if not items:
+        return []
+    ids = [item.id for item in items]
+    doc_counts = dict(
+        db.query(KnowledgeDocument.knowledge_base_id, func.count(KnowledgeDocument.id))
+        .filter(KnowledgeDocument.knowledge_base_id.in_(ids))
+        .group_by(KnowledgeDocument.knowledge_base_id)
+        .all()
+    )
+    chunk_counts = dict(
+        db.query(KnowledgeChunk.knowledge_base_id, func.count(KnowledgeChunk.id))
+        .filter(KnowledgeChunk.knowledge_base_id.in_(ids))
+        .group_by(KnowledgeChunk.knowledge_base_id)
+        .all()
+    )
+    return [
+        KnowledgeBaseRead.model_validate(
+            {
+                "id": item.id,
+                "name": item.name,
+                "description": item.description,
+                "source_job_id": item.source_job_id,
+                "created_at": item.created_at,
+                "updated_at": item.updated_at,
+                "document_count": doc_counts.get(item.id, 0),
+                "chunk_count": chunk_counts.get(item.id, 0),
+            }
+        )
+        for item in items
+    ]
 
 
 @router.post("/api/knowledge-bases", response_model=KnowledgeBaseRead)
@@ -105,13 +136,10 @@ def update_knowledge_base(
 @router.delete("/api/knowledge-bases/{knowledge_base_id}")
 def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _get_kb(db, knowledge_base_id, workspace_id)
-    base_dir = None
-    first_doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).first()
-    if first_doc and first_doc.stored_path:
-        base_dir = Path(first_doc.stored_path).parents[1]
+    base_dir = get_settings().knowledge_dir / str(kb.id)
     db.delete(kb)
     db.commit()
-    if base_dir and base_dir.exists():
+    if base_dir.exists():
         shutil.rmtree(base_dir, ignore_errors=True)
     return {"ok": True}
 

@@ -14,12 +14,12 @@
 - Skill 管理：可选择内置 oh-story Phase 2 Skill，也可自定义主拆书 Prompt、System Prompt 和默认分析模式
 - Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
 - Phase 3 导出：GPT Builder 知识库、Obsidian Markdown、轻量 GraphRAG JSON/Markdown
-- AI 写作 Agent：创建本地知识库、上传 TXT/MD/DOCX/PDF、检索测试、dry-run 写作生成
+- AI 写作 Agent：创建本地知识库、上传 TXT/MD/DOCX/PDF、检索测试、两段式写作生成、长期 Memory 承接
 - 写作知识库分为两类：`writing_guide` 写作技巧指南、`worldbuilding` 世界观设定
 - 支持把已完成拆书任务一键导入知识库；默认只导入 `final_reports/` 与 `knowledge_base/` 中的写作技巧指南，不默认沿用原书世界观
 - 支持生成世界观草案，用户确认后才会导入为 `worldbuilding`
 - 浏览器会自动生成工作区 ID；项目、任务进度和知识库按工作区隔离，其他访客默认不会看到你的进程
-- 写作生成会自动启用内置 oh-story Skill 作为写作内核，并给召回片段编号为 `[资料1]`、`[资料2]`，在前端显示来源、标题、结构路径和原始片段
+- 写作生成会自动启用内置 oh-story Skill 作为写作内核：先生成章节提纲，用户确认后再生成小说正文，并给召回片段编号为 `[资料1]`、`[资料2]`
 - 默认输出路径和任务输出路径支持点击按钮打开本机文件夹选择器
 - 内嵌 oh-story-codex 长篇拆文输出协议：`概要.md`、`_progress.md`、`快速预览.md`、`拆文报告.md`、`章节/*.md`
 - dry-run 模式，用于不配置 API Key 时验证完整流程
@@ -119,10 +119,12 @@ npm run dev
 5. 拆书导入的内容会标记为 `writing_guide`，只用于指导节奏、冲突、人物弧线、信息投放等写法。
 6. 世界观设定请由用户上传，或在“世界观设定草案”中生成候选稿，确认后导入为 `worldbuilding`。
 7. 在“检索测试”中输入问题，查看召回片段和来源路径。
-8. 在“写作生成”中输入任务，Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引应用到正文生成。
-9. dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek 生成正文。
+8. 在“先生成章节提纲”中输入任务，Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引写进提纲。
+9. 点击“确认提纲”后，提纲会写入长期 Memory，并填入右侧正文生成框。
+10. 在“再生成小说正文”中生成正文。正文阶段会把提纲内化为连续叙事，并明确禁止输出提纲、表格、结构核对或写作说明。
+11. dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek。
 
-写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 和 oh-story 内核只作为技巧指南。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
+写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 和 oh-story 内核只作为技巧指南。长期 Memory 用于承接已确认提纲、正文片段、人物状态和伏笔，但不能覆盖世界观硬设定。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
 
 ## 工作区隔离
 
