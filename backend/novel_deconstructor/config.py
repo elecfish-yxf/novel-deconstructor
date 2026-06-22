@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-pro"
+    doubao_api_key: str = ""
+    ark_api_key: str = ""
+    doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    doubao_model: str = "doubao-seed-2-0-pro-260215"
 
     app_storage_dir: str = "./storage"
     app_upload_dir: str = "./uploads"

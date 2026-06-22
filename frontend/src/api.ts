@@ -207,11 +207,24 @@ export type PublicConfig = {
   deepseek_base_url: string;
   deepseek_model: string;
   has_deepseek_api_key: boolean;
+  doubao_base_url?: string;
+  doubao_model?: string;
+  has_doubao_api_key?: boolean;
+  default_writing_model?: string;
+  writing_models?: WritingModelOption[];
   knowledge_chunk_size: number;
   knowledge_chunk_overlap: number;
   retrieval_top_k: number;
   max_upload_size_mb: number;
   privacy_note: string;
+};
+
+export type WritingModelOption = {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  available: boolean;
 };
 
 export type SkillPayload = {
@@ -319,6 +332,8 @@ export const api = {
     current_content?: string;
     mode?: string;
     knowledge_mode?: string;
+    model_provider?: string;
+    model?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/outline", { method: "POST", body: JSON.stringify(payload) }),
   generateDraft: (payload: {
@@ -328,6 +343,8 @@ export const api = {
     current_content?: string;
     mode?: string;
     knowledge_mode?: string;
+    model_provider?: string;
+    model?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/draft", { method: "POST", body: JSON.stringify(payload) }),
   generateWriting: (payload: {
@@ -336,9 +353,18 @@ export const api = {
     current_content?: string;
     mode?: string;
     knowledge_mode?: string;
+    model_provider?: string;
+    model?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/generate", { method: "POST", body: JSON.stringify(payload) }),
-  generateWorldbuildingDraft: (payload: { knowledge_base_ids: number[]; story_seed: string; requirements?: string; dry_run?: boolean }) =>
+  generateWorldbuildingDraft: (payload: {
+    knowledge_base_ids: number[];
+    story_seed: string;
+    requirements?: string;
+    model_provider?: string;
+    model?: string;
+    dry_run?: boolean;
+  }) =>
     request<{ content: string; citations: RetrievalHit[] }>("/api/writing/worldbuilding-draft", {
       method: "POST",
       body: JSON.stringify(payload),

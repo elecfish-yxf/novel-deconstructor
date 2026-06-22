@@ -8,6 +8,7 @@ from novel_deconstructor.api.writing import (
     _draft_prompt,
     _oh_story_writing_kernel,
     _outline_prompt,
+    _resolve_writing_model,
     _system_prompt,
     _user_prompt,
     _worldbuilding_prompt,
@@ -15,6 +16,7 @@ from novel_deconstructor.api.writing import (
 )
 from novel_deconstructor.models import Base, DeconstructionSkill, KnowledgeBase
 from novel_deconstructor.schemas import WritingDraftRequest, WritingGenerateRequest, WritingMemoryCreate, WritingOutlineRequest, WorldbuildingDraftRequest
+from novel_deconstructor.services.llm_provider import DoubaoResponsesProvider
 
 
 def test_oh_story_kernel_reads_builtin_skill():
@@ -91,6 +93,28 @@ def test_worldbuilding_draft_prompt_uses_oh_story_as_structure_kernel():
     assert "原创世界观设定草案" in prompt
     assert "支撑黄金三章、冲突推进、信息投放和情绪触动" in prompt
     assert "禁止沿用拆书原作专名和独特设定" in prompt
+
+
+def test_resolve_writing_model_supports_doubao():
+    class Settings:
+        doubao_api_key = "ark-key"
+        ark_api_key = ""
+        doubao_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        doubao_model = "doubao-seed-2-0-pro-260215"
+        deepseek_api_key = ""
+        deepseek_base_url = "https://api.deepseek.com"
+        deepseek_model = "deepseek-v4-pro"
+        openai_api_key = ""
+        openai_base_url = "https://api.openai.com/v1"
+        openai_model = ""
+
+    provider, model = _resolve_writing_model(
+        WritingOutlineRequest(task="生成提纲", model_provider="doubao", model="doubao-seed-2-0-pro-260215"),
+        Settings(),
+    )
+
+    assert isinstance(provider, DoubaoResponsesProvider)
+    assert model == "doubao-seed-2-0-pro-260215"
 
 
 def test_writing_memory_is_scoped_to_workspace():

@@ -43,3 +43,9 @@ services:
         value: deepseek-v4-flash
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: DOUBAO_BASE_URL
+        value: https://ark.cn-beijing.volces.com/api/v3
+      - key: DOUBAO_MODEL
+        value: doubao-seed-2-0-pro-260215
+      - key: DOUBAO_API_KEY
+        sync: false

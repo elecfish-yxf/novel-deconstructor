@@ -34,6 +34,16 @@ def is_deepseek_base_url(base_url: str | None) -> bool:
     return parsed.netloc.lower() == "api.deepseek.com"
 
 
+def is_doubao_base_url(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    candidate = base_url.strip()
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parsed = urlparse(candidate)
+    return parsed.netloc.lower().endswith("volces.com") and "/api/v3" in parsed.path
+
+
 class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, base_url: str, api_key: str):
         self.base_url = self._normalize_base_url(base_url)
@@ -189,4 +199,113 @@ class OpenAICompatibleProvider(LLMProvider):
 
 - 长篇文本必须先切分章节，再逐章分析，避免一次性把整本书送入模型。
 - 拆书输出应抽象结构、情绪链和功能位，不搬运原文素材。
+"""
+
+
+class DoubaoResponsesProvider(LLMProvider):
+    def __init__(self, base_url: str, api_key: str, disable_thinking: bool = True):
+        self.base_url = self._normalize_base_url(base_url)
+        self.api_key = (api_key or "").strip()
+        self.disable_thinking = disable_thinking
+
+    async def complete(self, request: LLMRequest) -> str:
+        if request.dry_run:
+            return self._dry_run_response(request)
+        if not self.api_key:
+            raise ValueError("缺少豆包 Ark API Key。请设置 DOUBAO_API_KEY 或 ARK_API_KEY，或开启 dry-run。")
+        if not request.model:
+            raise ValueError("缺少豆包模型名称。请设置 DOUBAO_MODEL，或在 Agent 写作页选择模型。")
+
+        payload: dict = {
+            "model": request.model,
+            "input": [
+                {"role": "system", "content": request.system_prompt},
+                {"role": "user", "content": request.user_prompt},
+            ],
+            "temperature": request.temperature,
+            "max_output_tokens": request.max_tokens,
+        }
+        if self.disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        last_error: Exception | None = None
+        for attempt in range(request.retry_count + 1):
+            try:
+                async with httpx.AsyncClient(timeout=request.timeout_seconds) as client:
+                    response = await client.post(self.responses_url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    content = self._extract_response_text(response.json())
+                    if not content:
+                        raise ValueError("豆包返回为空")
+                    return content
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text[:800]
+                last_error = RuntimeError(f"{exc.response.status_code} {exc.response.reason_phrase}: {detail}")
+                if attempt < request.retry_count:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+            except Exception as exc:  # noqa: BLE001 - persisted into UI/API error for diagnosis.
+                last_error = exc
+                if attempt < request.retry_count:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"豆包调用失败: {last_error}") from last_error
+
+    @property
+    def responses_url(self) -> str:
+        if self.base_url.endswith("/responses"):
+            return self.base_url
+        return f"{self.base_url}/responses"
+
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        cleaned = (base_url or "https://ark.cn-beijing.volces.com/api/v3").strip().rstrip("/")
+        if cleaned and "://" not in cleaned:
+            cleaned = f"https://{cleaned}"
+        if cleaned.endswith("/responses"):
+            return cleaned.removesuffix("/responses").rstrip("/")
+        return cleaned
+
+    @staticmethod
+    def _extract_response_text(data: dict) -> str:
+        for key in ("output_text", "text", "content"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        output = data.get("output")
+        if isinstance(output, list):
+            texts: list[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if isinstance(content, str) and content.strip():
+                    texts.append(content.strip())
+                elif isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        text = part.get("text") or part.get("content")
+                        if isinstance(text, str) and text.strip():
+                            texts.append(text.strip())
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+            if texts:
+                return "\n".join(texts)
+
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+        return ""
+
+    def _dry_run_response(self, request: LLMRequest) -> str:
+        return f"""# Dry-run 豆包调用
+
+未调用豆包 Ark API。真实生成会使用模型：{request.model or "未选择"}。
+
+这条结果只用于验证 Agent 写作页的模型选择、知识检索和 Prompt 组装流程。
 """

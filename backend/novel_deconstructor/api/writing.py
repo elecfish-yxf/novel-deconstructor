@@ -17,7 +17,7 @@ from ..schemas import (
     WritingOutlineRequest,
 )
 from ..services.knowledge_base import search_knowledge
-from ..services.llm_provider import LLMRequest, OpenAICompatibleProvider
+from ..services.llm_provider import DoubaoResponsesProvider, LLMProvider, LLMRequest, OpenAICompatibleProvider
 from .workspace import get_workspace_id
 
 
@@ -88,15 +88,13 @@ async def generate_outline(
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WritingGenerateResponse(content=_dry_run_outline(payload, hits, memories), citations=hits)
-    if not settings.deepseek_api_key:
-        raise HTTPException(status_code=400, detail="缺少 DEEPSEEK_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
 
-    provider = OpenAICompatibleProvider(settings.deepseek_base_url, settings.deepseek_api_key)
+    provider, model = _resolve_writing_model(payload, settings)
     oh_story_kernel = _oh_story_writing_kernel(db)
     request = LLMRequest(
         system_prompt=_system_prompt(payload.knowledge_mode, oh_story_kernel, stage="outline"),
         user_prompt=_outline_prompt(payload, hits, memories, oh_story_kernel),
-        model=settings.deepseek_model,
+        model=model,
         temperature=0.3 if payload.mode == "fast" else 0.2,
         max_tokens=settings.openai_max_tokens,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -124,15 +122,13 @@ async def generate_draft(
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WritingGenerateResponse(content=_dry_run_draft(payload, hits, memories), citations=hits)
-    if not settings.deepseek_api_key:
-        raise HTTPException(status_code=400, detail="缺少 DEEPSEEK_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
 
-    provider = OpenAICompatibleProvider(settings.deepseek_base_url, settings.deepseek_api_key)
+    provider, model = _resolve_writing_model(payload, settings)
     oh_story_kernel = _oh_story_writing_kernel(db)
     request = LLMRequest(
         system_prompt=_system_prompt(payload.knowledge_mode, oh_story_kernel, stage="draft"),
         user_prompt=_draft_prompt(payload, hits, memories, oh_story_kernel),
-        model=settings.deepseek_model,
+        model=model,
         temperature=0.35 if payload.mode == "fast" else 0.25,
         max_tokens=settings.openai_max_tokens,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -161,14 +157,12 @@ async def worldbuilding_draft(payload: WorldbuildingDraftRequest, workspace_id: 
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WorldbuildingDraftResponse(content=_dry_run_worldbuilding(payload, hits), citations=hits)
-    if not settings.deepseek_api_key:
-        raise HTTPException(status_code=400, detail="缺少 DEEPSEEK_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
-    provider = OpenAICompatibleProvider(settings.deepseek_base_url, settings.deepseek_api_key)
+    provider, model = _resolve_writing_model(payload, settings)
     oh_story_kernel = _oh_story_writing_kernel(db)
     request = LLMRequest(
         system_prompt=f"你是原创小说世界观设定助手，使用 oh-story 作为写作内核。你可以参考写作技巧指南和长期 Memory，但不能沿用被拆解作品的专名、势力、地理、人物或独特设定。输出一份可由用户确认后导入知识库的原创世界观设定。\n\n{oh_story_kernel}",
         user_prompt=_worldbuilding_prompt(payload, hits, memories, oh_story_kernel),
-        model=settings.deepseek_model,
+        model=model,
         temperature=0.3,
         max_tokens=settings.openai_max_tokens,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -179,6 +173,40 @@ async def worldbuilding_draft(payload: WorldbuildingDraftRequest, workspace_id: 
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"世界观草案生成失败：{exc}") from exc
     return WorldbuildingDraftResponse(content=content, citations=hits)
+
+
+def _resolve_writing_model(payload: WritingGenerateRequest | WorldbuildingDraftRequest, settings) -> tuple[LLMProvider, str]:
+    requested_provider = (payload.model_provider or "").strip().lower()
+    requested_model = (payload.model or "").strip()
+    if not requested_provider:
+        if requested_model.startswith("doubao-"):
+            requested_provider = "doubao"
+        elif requested_model.startswith("deepseek-"):
+            requested_provider = "deepseek"
+        else:
+            requested_provider = "doubao" if _doubao_api_key(settings) else "deepseek"
+
+    if requested_provider == "doubao":
+        api_key = _doubao_api_key(settings)
+        if not api_key:
+            raise HTTPException(status_code=400, detail="缺少豆包 API Key。请在后端 .env 或 Render 环境变量中配置 DOUBAO_API_KEY 或 ARK_API_KEY。")
+        return DoubaoResponsesProvider(settings.doubao_base_url, api_key), requested_model or settings.doubao_model
+
+    if requested_provider == "deepseek":
+        if not settings.deepseek_api_key:
+            raise HTTPException(status_code=400, detail="缺少 DEEPSEEK_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
+        return OpenAICompatibleProvider(settings.deepseek_base_url, settings.deepseek_api_key), requested_model or settings.deepseek_model
+
+    if requested_provider == "openai":
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="缺少 OPENAI_API_KEY。请在后端 .env 或 Render 环境变量中配置。")
+        return OpenAICompatibleProvider(settings.openai_base_url, settings.openai_api_key), requested_model or settings.openai_model
+
+    raise HTTPException(status_code=400, detail=f"不支持的写作模型供应商：{requested_provider}")
+
+
+def _doubao_api_key(settings) -> str:
+    return (settings.doubao_api_key or settings.ark_api_key or "").strip()
 
 
 def _ensure_workspace_kb(db: Session, workspace_id: str, knowledge_base_id: int) -> KnowledgeBase:

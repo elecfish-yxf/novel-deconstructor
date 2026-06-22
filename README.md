@@ -58,7 +58,7 @@ docker compose up --build
 1. 把本项目推送到 GitHub。
 2. 打开 Render Dashboard，选择 New -> Blueprint。
 3. 选择该 GitHub 仓库，Render 会读取 `render.yaml`。
-4. 在环境变量里填写 `DEEPSEEK_API_KEY`。不要把真实 Key 提交到仓库。
+4. 在环境变量里填写 `DEEPSEEK_API_KEY` 或 `DOUBAO_API_KEY`。不要把真实 Key 提交到仓库。
 5. 创建服务并等待构建完成。
 6. 打开 Render 分配的服务地址，访问 `/health` 应返回 `{"ok":true,...}`。
 
@@ -86,7 +86,7 @@ npm run dev
 
 ## .env 配置
 
-`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 均不写死。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`；Key 可在任务页临时填写，或写入 `DEEPSEEK_API_KEY`。AI 写作 Agent 默认使用 `DEEPSEEK_MODEL=deepseek-v4-pro`。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
+`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 均不写死。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`；Key 可在任务页临时填写，或写入 `DEEPSEEK_API_KEY`。AI 写作 Agent 还支持豆包方舟 Responses API：`DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，`DOUBAO_MODEL=doubao-seed-2-0-pro-260215`，Key 写入 `DOUBAO_API_KEY` 或文档兼容的 `ARK_API_KEY`。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
 
 知识库相关配置：
 
@@ -111,18 +111,18 @@ npm run dev
 ## AI 写作 Agent 使用流程
 
 1. 打开左侧 `写作 Agent`。
-2. 新建一个知识库，例如“小说拆书知识库”。
-3. 上传 TXT、MD、DOCX 或 PDF 文件；系统会保存原文件、解析文本并建立本地分块索引。
+2. 新建一个作品，例如“作品 1”。每个作品拥有独立文件树、Memory 和生成上下文。
+3. 在作品下上传 TXT、MD、DOCX 或 PDF 文件；文件会按 `writing_guide` 写作技巧指南、`worldbuilding` 世界观设定两类管理。
 4. 如果当前已选择一个完成的拆书任务，可以点击“导入当前拆书结果”，系统会导入：
    - `final_reports/overall_summary.md`
    - `knowledge_base/*.md`
 5. 拆书导入的内容会标记为 `writing_guide`，只用于指导节奏、冲突、人物弧线、信息投放等写法。
 6. 世界观设定请由用户上传，或在“世界观设定草案”中生成候选稿，确认后导入为 `worldbuilding`。
 7. 在“检索测试”中输入问题，查看召回片段和来源路径。
-8. 在第一个对话框“发送请求”中输入写作请求和补充上下文。Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引写进提纲。
+8. 在第一个对话框“发送请求”中选择写作模型，并输入写作请求和补充上下文。Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引写进提纲。
 9. 在第二个对话框“生成并确认提纲”中查看和编辑提纲，点击“确认提纲”后，提纲会写入长期 Memory，并解锁正文生成。
 10. 在第三个对话框“生成正文”中点击按钮生成正文。正文阶段会把提纲内化为连续叙事，并明确禁止输出提纲、表格、结构核对或写作说明。
-11. dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek。
+11. dry-run 可先验证检索与引用；关闭 dry-run 后，按模型选择调用 DeepSeek 或豆包 Seed 2.0 Pro。
 
 写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 和 oh-story 内核只作为技巧指南。长期 Memory 用于承接已确认提纲、正文片段、人物状态和伏笔，但不能覆盖世界观硬设定。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
 
@@ -139,7 +139,7 @@ npm run dev
 
 这不是账号登录系统，但能解决“别人访问同一个网页看到我的项目和进程”的问题。清空浏览器 LocalStorage 会生成新工作区，旧工作区数据仍保存在服务器数据库中。
 
-隐私说明：应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给 DeepSeek API 处理。API Key 只由后端读取，不会写入浏览器 LocalStorage。
+隐私说明：应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给你选择的模型服务处理。API Key 只由后端读取，不会写入浏览器 LocalStorage。
 
 ## CLI 使用
 

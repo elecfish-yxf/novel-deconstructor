@@ -58,6 +58,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [mode, setMode] = useState("fast");
   const [knowledgeMode, setKnowledgeMode] = useState("reference");
   const [dryRun, setDryRun] = useState(true);
+  const [writingModelId, setWritingModelId] = useState("");
   const [citations, setCitations] = useState<RetrievalHit[]>([]);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
@@ -79,6 +80,24 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     () => documents.filter((document) => selectedDocumentSet.has(document.id)),
     [documents, selectedDocumentSet],
   );
+  const writingModels = useMemo(() => {
+    if (config?.writing_models?.length) return config.writing_models;
+    return [
+      {
+        id: config?.deepseek_model || "deepseek-v4-pro",
+        label: config?.deepseek_model || "DeepSeek",
+        provider: "deepseek",
+        model: config?.deepseek_model || "deepseek-v4-pro",
+        available: Boolean(config?.has_deepseek_api_key),
+      },
+    ];
+  }, [config]);
+  const selectedWritingModel = useMemo(() => {
+    return writingModels.find((item) => item.id === writingModelId) || writingModels[0] || null;
+  }, [writingModelId, writingModels]);
+  const selectedWritingModelPayload = selectedWritingModel
+    ? { model_provider: selectedWritingModel.provider, model: selectedWritingModel.model }
+    : {};
 
   function clearTransientWritingState() {
     setHits([]);
@@ -92,6 +111,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function load(nextSelectedId?: number | null) {
     const [nextConfig, nextBases] = await Promise.all([api.getPublicConfig(), api.listKnowledgeBases()]);
     setConfig(nextConfig);
+    setWritingModelId((current) => {
+      const options = nextConfig.writing_models || [];
+      if (current && options.some((item) => item.id === current)) return current;
+      return nextConfig.default_writing_model || options[0]?.id || nextConfig.deepseek_model;
+    });
     setKnowledgeBases(nextBases);
     let preferred = nextSelectedId ?? selectedId ?? nextBases[0]?.id ?? null;
     if (preferred && !nextBases.some((item) => item.id === preferred)) {
@@ -249,6 +273,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         knowledge_base_ids: [selected.id],
         story_seed: storySeed,
         requirements: "生成原创世界观。可以参考写作技巧指南，但不要沿用拆书原作的世界观、角色、势力、地名和独特设定。",
+        ...selectedWritingModelPayload,
         dry_run: dryRun,
       });
       setWorldbuildingDraft(result.content);
@@ -338,6 +363,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
+        ...selectedWritingModelPayload,
         dry_run: dryRun,
       });
       setOutline(result.content);
@@ -389,6 +415,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
+        ...selectedWritingModelPayload,
         dry_run: dryRun,
       });
       setDraft(result.content);
@@ -450,7 +477,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
       {config && (
         <div className="notice panel">
-          {config.privacy_note} 当前模型：{config.deepseek_model}，API Key：{config.has_deepseek_api_key ? "已配置" : "未配置"}。
+          {config.privacy_note} 当前写作模型：{selectedWritingModel?.label || config.deepseek_model}；DeepSeek Key：
+          {config.has_deepseek_api_key ? "已配置" : "未配置"}；豆包 Key：{config.has_doubao_api_key ? "已配置" : "未配置"}。
         </div>
       )}
       <div className="notice panel">
@@ -722,6 +750,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <textarea rows={5} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
               </label>
               <div className="mode-grid">
+                <label>
+                  模型选择
+                  <select value={writingModelId} onChange={(event) => setWritingModelId(event.target.value)}>
+                    {writingModels.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                        {option.available ? "" : "（未配置 Key）"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label>
                   生成模式
                   <select value={mode} onChange={(event) => setMode(event.target.value)}>

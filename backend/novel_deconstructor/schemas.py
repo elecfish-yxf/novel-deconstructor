@@ -333,6 +333,8 @@ class WritingGenerateRequest(BaseModel):
     current_content: str = ""
     mode: str = "fast"
     knowledge_mode: str = "reference"
+    model_provider: str | None = None
+    model: str | None = None
     dry_run: bool = False
 
 
@@ -374,6 +376,8 @@ class WorldbuildingDraftRequest(BaseModel):
     knowledge_base_ids: list[int] = Field(default_factory=list)
     story_seed: str = Field(min_length=1)
     requirements: str = ""
+    model_provider: str | None = None
+    model: str | None = None
     dry_run: bool = True
 
 
