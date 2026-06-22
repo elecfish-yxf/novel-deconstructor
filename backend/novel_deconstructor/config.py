@@ -1,0 +1,59 @@
+﻿from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=(PROJECT_ROOT / ".env", ".env"), env_file_encoding="utf-8", extra="ignore")
+
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = ""
+    openai_temperature: float = 0.3
+    openai_max_tokens: int = 8192
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    app_storage_dir: str = "./storage"
+    app_upload_dir: str = "./uploads"
+    app_output_dir: str = "./outputs"
+    app_database_url: str = "sqlite:///./storage/novel_deconstructor.db"
+
+    max_upload_size_mb: int = 500
+    max_chapter_chars: int = 12000
+    chunk_overlap_chars: int = 800
+    default_concurrency: int = 1
+    allow_absolute_output_path: bool = False
+    enable_directory_picker: bool = True
+
+    llm_timeout_seconds: int = 120
+    llm_retry_count: int = 2
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    oh_story_repo_url: str = "https://github.com/HeRiki/oh-story-codex.git"
+
+    @property
+    def storage_dir(self) -> Path:
+        return Path(self.app_storage_dir)
+
+    @property
+    def upload_dir(self) -> Path:
+        return Path(self.app_upload_dir)
+
+    @property
+    def output_dir(self) -> Path:
+        return Path(self.app_output_dir)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+

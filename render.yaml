@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: novel-deconstructor
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: novel-deconstructor-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: APP_STORAGE_DIR
+        value: /data/storage
+      - key: APP_UPLOAD_DIR
+        value: /data/uploads
+      - key: APP_OUTPUT_DIR
+        value: /data/outputs
+      - key: APP_DATABASE_URL
+        value: sqlite:////data/storage/novel_deconstructor.db
+      - key: ALLOW_ABSOLUTE_OUTPUT_PATH
+        value: "false"
+      - key: ENABLE_DIRECTORY_PICKER
+        value: "false"
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "500"
+      - key: MAX_CHAPTER_CHARS
+        value: "12000"
+      - key: CHUNK_OVERLAP_CHARS
+        value: "800"
+      - key: DEFAULT_CONCURRENCY
+        value: "1"
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: OPENAI_MODEL
+        value: ""
+      - key: OPENAI_MAX_TOKENS
+        value: "8192"
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-v4-flash
+      - key: DEEPSEEK_API_KEY
+        sync: false

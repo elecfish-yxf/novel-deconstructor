@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/statuspill.tsx","./src/pages/chapterpreview.tsx","./src/pages/fileupload.tsx","./src/pages/jobconfig.tsx","./src/pages/jobprogress.tsx","./src/pages/projectlist.tsx","./src/pages/resultviewer.tsx","./src/pages/skillimport.tsx","./src/pages/skillmanager.tsx"],"version":"5.9.3"}
