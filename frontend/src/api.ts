@@ -1,9 +1,23 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
+const WORKSPACE_KEY = "novel-deconstructor.workspace-id";
+
+export function getWorkspaceId() {
+  let existing = window.localStorage.getItem(WORKSPACE_KEY);
+  if (existing) return existing;
+  existing = `ws_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+  window.localStorage.setItem(WORKSPACE_KEY, existing);
+  return existing;
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const workspaceHeaders = { "X-Workspace-Id": getWorkspaceId() };
+  const headers =
+    options.body instanceof FormData
+      ? { ...workspaceHeaders, ...(options.headers || {}) }
+      : { "Content-Type": "application/json", ...workspaceHeaders, ...(options.headers || {}) };
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: options.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers,
   });
   if (!response.ok) {
     let message = response.statusText;
@@ -148,6 +162,7 @@ export type KnowledgeDocument = {
   file_hash: string;
   document_title: string;
   source_kind: string;
+  knowledge_type: string;
   source_path: string;
   structure_path: string;
   status: string;
@@ -167,6 +182,7 @@ export type RetrievalHit = {
   score: number;
   original_filename: string;
   document_title: string;
+  knowledge_type: string;
   heading: string;
   page_number?: number | null;
   structure_path: string;
@@ -244,11 +260,26 @@ export const api = {
   uploadKnowledgeDocuments: (id: number, files: FileList | File[]) => {
     const data = new FormData();
     Array.from(files).forEach((file) => data.append("files", file));
+    data.append("knowledge_type", "worldbuilding");
     return request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/documents`, {
       method: "POST",
       body: data,
     });
   },
+  uploadKnowledgeDocumentsAs: (id: number, files: FileList | File[], knowledgeType: string) => {
+    const data = new FormData();
+    Array.from(files).forEach((file) => data.append("files", file));
+    data.append("knowledge_type", knowledgeType);
+    return request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/documents`, {
+      method: "POST",
+      body: data,
+    });
+  },
+  createKnowledgeTextDocument: (id: number, payload: { filename: string; content: string; knowledge_type: string }) =>
+    request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/documents/text`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   importJobToKnowledgeBase: (id: number, jobId: string) =>
     request<{ imported: KnowledgeDocument[]; skipped_duplicates: number; message: string }>(`/api/knowledge-bases/${id}/import-job`, {
       method: "POST",
@@ -266,6 +297,11 @@ export const api = {
     knowledge_mode?: string;
     dry_run?: boolean;
   }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/generate", { method: "POST", body: JSON.stringify(payload) }),
+  generateWorldbuildingDraft: (payload: { knowledge_base_ids: number[]; story_seed: string; requirements?: string; dry_run?: boolean }) =>
+    request<{ content: string; citations: RetrievalHit[] }>("/api/writing/worldbuilding-draft", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   pickDirectory: (payload: { initial_dir?: string }) =>
     request<{ path?: string | null; message: string }>("/api/system/pick-directory", {
       method: "POST",
@@ -281,6 +317,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  downloadUrl: (jobId: string, path: string) => `${API_BASE}/api/jobs/${jobId}/download?path=${encodeURIComponent(path)}`,
-  downloadZipUrl: (jobId: string) => `${API_BASE}/api/jobs/${jobId}/download-zip`,
+  downloadUrl: (jobId: string, path: string) =>
+    `${API_BASE}/api/jobs/${jobId}/download?path=${encodeURIComponent(path)}&workspace_id=${encodeURIComponent(getWorkspaceId())}`,
+  downloadZipUrl: (jobId: string) => `${API_BASE}/api/jobs/${jobId}/download-zip?workspace_id=${encodeURIComponent(getWorkspaceId())}`,
 };

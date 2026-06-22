@@ -69,6 +69,18 @@ def ensure_schema_upgrades() -> None:
             connection.execute(text("ALTER TABLE analysis_jobs ADD COLUMN skill_id INTEGER"))
         if "generate_graph" not in columns:
             connection.execute(text("ALTER TABLE analysis_jobs ADD COLUMN generate_graph BOOLEAN NOT NULL DEFAULT 0"))
+        rows = connection.execute(text("PRAGMA table_info(projects)")).mappings().all()
+        columns = {row["name"] for row in rows}
+        if "workspace_id" not in columns:
+            connection.execute(text("ALTER TABLE projects ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'"))
+        rows = connection.execute(text("PRAGMA table_info(knowledge_bases)")).mappings().all()
+        columns = {row["name"] for row in rows}
+        if rows and "workspace_id" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_bases ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'"))
+        rows = connection.execute(text("PRAGMA table_info(knowledge_documents)")).mappings().all()
+        columns = {row["name"] for row in rows}
+        if rows and "knowledge_type" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_documents ADD COLUMN knowledge_type VARCHAR(32) NOT NULL DEFAULT 'worldbuilding'"))
 
 
 def seed_deconstruction_skills(db: Session) -> None:

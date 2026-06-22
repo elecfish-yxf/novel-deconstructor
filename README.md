@@ -15,7 +15,10 @@
 - Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
 - Phase 3 导出：GPT Builder 知识库、Obsidian Markdown、轻量 GraphRAG JSON/Markdown
 - AI 写作 Agent：创建本地知识库、上传 TXT/MD/DOCX/PDF、检索测试、dry-run 写作生成
-- 支持把已完成拆书任务一键导入知识库，保留 `final_reports/`、`knowledge_base/`、`knowledge_base_obsidian/`、`graph_outputs/`、`chapter_analysis/`、`拆文库/` 结构路径
+- 写作知识库分为两类：`writing_guide` 写作技巧指南、`worldbuilding` 世界观设定
+- 支持把已完成拆书任务一键导入知识库；默认只导入 `final_reports/` 与 `knowledge_base/` 中的写作技巧指南，不默认沿用原书世界观
+- 支持生成世界观草案，用户确认后才会导入为 `worldbuilding`
+- 浏览器会自动生成工作区 ID；项目、任务进度和知识库按工作区隔离，其他访客默认不会看到你的进程
 - 写作生成会给召回片段编号为 `[资料1]`、`[资料2]`，并在前端显示来源、标题、结构路径和原始片段
 - 默认输出路径和任务输出路径支持点击按钮打开本机文件夹选择器
 - 内嵌 oh-story-codex 长篇拆文输出协议：`概要.md`、`_progress.md`、`快速预览.md`、`拆文报告.md`、`章节/*.md`
@@ -113,12 +116,25 @@ npm run dev
 4. 如果当前已选择一个完成的拆书任务，可以点击“导入当前拆书结果”，系统会导入：
    - `final_reports/overall_summary.md`
    - `knowledge_base/*.md`
-   - `knowledge_base_obsidian/*.md`
-   - `graph_outputs/*.md`
-   - `chapter_analysis/*.md`
-   - `拆文库/**/*.md`
-5. 在“检索测试”中输入问题，查看召回片段和来源路径。
-6. 在“写作生成”中输入任务，dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek 生成正文。
+5. 拆书导入的内容会标记为 `writing_guide`，只用于指导节奏、冲突、人物弧线、信息投放等写法。
+6. 世界观设定请由用户上传，或在“世界观设定草案”中生成候选稿，确认后导入为 `worldbuilding`。
+7. 在“检索测试”中输入问题，查看召回片段和来源路径。
+8. 在“写作生成”中输入任务，dry-run 可先验证检索与引用；关闭 dry-run 并配置 `DEEPSEEK_API_KEY` 后会调用 DeepSeek 生成正文。
+
+写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 只作为技巧指南。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
+
+## 工作区隔离
+
+公开部署时，不同访客打开同一个网页会各自生成一个浏览器工作区 ID，并通过 `X-Workspace-Id` 发送给后端。后端会按工作区过滤：
+
+- 项目列表
+- 上传文件
+- 拆书任务和进度
+- 结果预览与下载
+- 知识库、文档和检索
+- 写作 Agent 生成
+
+这不是账号登录系统，但能解决“别人访问同一个网页看到我的项目和进程”的问题。清空浏览器 LocalStorage 会生成新工作区，旧工作区数据仍保存在服务器数据库中。
 
 隐私说明：应用和知识库存储在本机。使用 AI 写作时，检索到的相关知识片段及写作内容会发送给 DeepSeek API 处理。API Key 只由后端读取，不会写入浏览器 LocalStorage。
 

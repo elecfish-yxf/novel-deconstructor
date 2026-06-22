@@ -15,6 +15,7 @@ def test_split_knowledge_text_preserves_heading():
         file_hash="abc",
         document_title="总汇总报告",
         source_kind="deconstruction_job",
+        knowledge_type="writing_guide",
         source_path="final_reports/overall_summary.md",
         structure_path="final_reports/overall_summary.md",
     )
@@ -25,6 +26,7 @@ def test_split_knowledge_text_preserves_heading():
     assert chunks[0].heading == "可复用写作规律"
     assert "期待缺口" in chunks[0].text
     assert "final_reports/overall_summary.md" in chunks[0].metadata_json
+    assert "writing_guide" in chunks[0].metadata_json
 
 
 def test_search_knowledge_returns_source_metadata():
@@ -44,6 +46,7 @@ def test_search_knowledge_returns_source_metadata():
         file_hash="abc",
         document_title="写作规则",
         source_kind="deconstruction_job",
+        knowledge_type="writing_guide",
         source_path="knowledge_base/writing_rules.md",
         structure_path="knowledge_base/writing_rules.md",
         status="completed",
@@ -65,5 +68,6 @@ def test_search_knowledge_returns_source_metadata():
 
     assert len(hits) == 1
     assert hits[0]["citation_id"] == "资料1"
+    assert hits[0]["knowledge_type"] == "writing_guide"
     assert hits[0]["structure_path"] == "knowledge_base/writing_rules.md"
     assert "期待缺口" in hits[0]["text"]

@@ -18,17 +18,25 @@ from ..models import AnalysisJob, AnalysisResult, ChapterChunk, DeconstructionSk
 from ..schemas import JobCreate, JobLogRead, JobRead
 from ..services.path_safety import job_output_dir
 from ..services.pipeline import job_id_now, resolve_model, run_analysis_job
+from .workspace import get_workspace_id
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+def _get_job(db: Session, job_id: str, workspace_id: str) -> AnalysisJob:
+    job = db.get(AnalysisJob, job_id)
+    if not job or not job.project or job.project.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
 @router.post("", response_model=JobRead)
-async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     settings = get_settings()
     project = db.get(Project, payload.project_id)
     source_file = db.get(SourceFile, payload.source_file_id)
-    if not project:
+    if not project or project.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="项目不存在")
     if not source_file or source_file.project_id != project.id:
         raise HTTPException(status_code=404, detail="源文件不存在")
@@ -102,25 +110,19 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, db: 
 
 
 @router.get("/{job_id}", response_model=JobRead)
-def get_job(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(AnalysisJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return job
+def get_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    return _get_job(db, job_id, workspace_id)
 
 
 @router.get("/{job_id}/logs", response_model=list[JobLogRead])
-def get_logs(job_id: str, db: Session = Depends(get_db)):
-    if not db.get(AnalysisJob, job_id):
-        raise HTTPException(status_code=404, detail="任务不存在")
+def get_logs(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    _get_job(db, job_id, workspace_id)
     return db.query(JobLog).filter(JobLog.job_id == job_id).order_by(JobLog.created_at.asc()).all()
 
 
 @router.post("/{job_id}/pause", response_model=JobRead)
-def pause_job(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(AnalysisJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
+def pause_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    job = _get_job(db, job_id, workspace_id)
     if job.status == "running":
         job.status = "paused"
         db.add(JobLog(job_id=job.id, level="info", message="已请求暂停，当前章节完成后停止"))
@@ -130,10 +132,8 @@ def pause_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/resume", response_model=JobRead)
-async def resume_job(job_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    job = db.get(AnalysisJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
+async def resume_job(job_id: str, background_tasks: BackgroundTasks, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    job = _get_job(db, job_id, workspace_id)
     if job.status in {"paused", "failed"}:
         job.status = "pending"
         db.add(JobLog(job_id=job.id, level="info", message="已请求继续任务"))
@@ -144,10 +144,8 @@ async def resume_job(job_id: str, background_tasks: BackgroundTasks, db: Session
 
 
 @router.post("/{job_id}/cancel", response_model=JobRead)
-def cancel_job(job_id: str, db: Session = Depends(get_db)):
-    job = db.get(AnalysisJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
+def cancel_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    job = _get_job(db, job_id, workspace_id)
     if job.status not in {"completed", "cancelled"}:
         job.status = "cancelled"
         db.add(JobLog(job_id=job.id, level="info", message="已请求取消任务"))
@@ -157,10 +155,8 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/retry-failed", response_model=JobRead)
-async def retry_failed(job_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    job = db.get(AnalysisJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
+async def retry_failed(job_id: str, background_tasks: BackgroundTasks, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    job = _get_job(db, job_id, workspace_id)
     db.query(AnalysisResult).filter(AnalysisResult.job_id == job_id, AnalysisResult.status == "failed").update(
         {"status": "pending", "error_message": None}
     )

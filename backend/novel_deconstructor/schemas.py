@@ -261,6 +261,7 @@ class KnowledgeDocumentRead(ORMModel):
     file_hash: str
     document_title: str
     source_kind: str
+    knowledge_type: str
     source_path: str
     structure_path: str
     status: str
@@ -274,12 +275,12 @@ class KnowledgeDocumentRead(ORMModel):
 
 class KnowledgeImportJobRequest(BaseModel):
     job_id: str
-    include_chapter_analysis: bool = True
+    include_chapter_analysis: bool = False
     include_final_reports: bool = True
     include_knowledge_base: bool = True
-    include_obsidian: bool = True
-    include_graph: bool = True
-    include_oh_story: bool = True
+    include_obsidian: bool = False
+    include_graph: bool = False
+    include_oh_story: bool = False
 
 
 class KnowledgeImportResponse(BaseModel):
@@ -302,6 +303,7 @@ class RetrievalHit(BaseModel):
     score: float
     original_filename: str
     document_title: str
+    knowledge_type: str
     heading: str
     page_number: int | None
     structure_path: str
@@ -321,6 +323,24 @@ class WritingGenerateRequest(BaseModel):
     mode: str = "fast"
     knowledge_mode: str = "reference"
     dry_run: bool = False
+
+
+class KnowledgeTextCreate(BaseModel):
+    filename: str = "worldbuilding.md"
+    content: str = Field(min_length=1)
+    knowledge_type: str = "worldbuilding"
+
+
+class WorldbuildingDraftRequest(BaseModel):
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+    story_seed: str = Field(min_length=1)
+    requirements: str = ""
+    dry_run: bool = True
+
+
+class WorldbuildingDraftResponse(BaseModel):
+    content: str
+    citations: list[RetrievalHit]
 
 
 class WritingGenerateResponse(BaseModel):

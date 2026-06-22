@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { api, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit } from "../api";
+import { api, getWorkspaceId, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit } from "../api";
 
 function formatSize(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -16,7 +16,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [description, setDescription] = useState("用于 AI 写作 Agent 的本地知识库");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<RetrievalHit[]>([]);
-  const [task, setTask] = useState("请基于知识库，为我生成一份可复用的小说章节写作提纲。");
+  const [uploadType, setUploadType] = useState("worldbuilding");
+  const [storySeed, setStorySeed] = useState("一个普通人在高压规则世界中寻找自我选择权。");
+  const [worldbuildingDraft, setWorldbuildingDraft] = useState("");
+  const [task, setTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说章节提纲。");
   const [currentContent, setCurrentContent] = useState("");
   const [mode, setMode] = useState("fast");
   const [knowledgeMode, setKnowledgeMode] = useState("reference");
@@ -75,7 +78,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setError("");
     setMessage("");
     try {
-      const result = await api.uploadKnowledgeDocuments(selected.id, files);
+      const result = await api.uploadKnowledgeDocumentsAs(selected.id, files, uploadType);
       setMessage(result.message);
       await load(selected.id);
     } catch (err) {
@@ -97,6 +100,47 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       await load(selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入拆书结果失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function generateWorldbuildingDraft() {
+    if (!selected || !storySeed.trim()) return;
+    setBusy("worldbuilding");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.generateWorldbuildingDraft({
+        knowledge_base_ids: [selected.id],
+        story_seed: storySeed,
+        requirements: "生成原创世界观。可以参考写作技巧指南，但不要沿用拆书原作的世界观、角色、势力、地名和独特设定。",
+        dry_run: dryRun,
+      });
+      setWorldbuildingDraft(result.content);
+      setCitations(result.citations);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "生成世界观草案失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function confirmWorldbuildingImport() {
+    if (!selected || !worldbuildingDraft.trim()) return;
+    setBusy("confirm-worldbuilding");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.createKnowledgeTextDocument(selected.id, {
+        filename: "worldbuilding_confirmed.md",
+        content: worldbuildingDraft,
+        knowledge_type: "worldbuilding",
+      });
+      setMessage(result.message);
+      await load(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入世界观设定失败");
     } finally {
       setBusy("");
     }
@@ -176,10 +220,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
           <p className="eyebrow">Writing Agent</p>
           <h1>AI 写作 Agent</h1>
         </div>
-        <p>上传资料或导入拆书结果，建立本地知识库；写作时只把召回片段发送给模型，并保留引用来源。</p>
+        <p>知识库分为写作技巧指南与世界观设定。故事围绕世界观写，拆书结果只沉淀为技巧指南。</p>
       </div>
 
       {config && <div className="notice panel">{config.privacy_note} 当前模型：{config.deepseek_model}；API Key：{config.has_deepseek_api_key ? "已配置" : "未配置"}。</div>}
+      <div className="notice panel">当前浏览器工作区：{getWorkspaceId()}。项目、进度和知识库会按这个工作区隔离，其他访客默认看不到你的进程。</div>
       {error && <div className="alert">{error}</div>}
       {message && <div className="panel notice">{message}</div>}
 
@@ -219,6 +264,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
           <div className="panel compact-form">
             <div className="button-row">
               <strong>{selected?.name || "请选择知识库"}</strong>
+              <label>
+                知识类型
+                <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
+                  <option value="worldbuilding">世界观设定</option>
+                  <option value="writing_guide">写作技巧指南</option>
+                </select>
+              </label>
               <label className="button-link">
                 上传知识文件
                 <input
@@ -231,10 +283,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 />
               </label>
               <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
-                导入当前拆书结果
+                导入当前拆书技巧
               </button>
             </div>
-            <small className="muted">适配结构：final_reports、knowledge_base、knowledge_base_obsidian、graph_outputs、chapter_analysis、拆文库。</small>
+            <small className="muted">拆书任务默认只导入写作技巧指南：final_reports 与 knowledge_base。世界观设定请由用户上传，或生成草案后确认导入。</small>
           </div>
 
           <div className="table-wrap">
@@ -243,6 +295,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <tr>
                   <th>文档</th>
                   <th>结构路径</th>
+                  <th>类型</th>
                   <th>状态</th>
                   <th>分块</th>
                   <th>大小</th>
@@ -259,6 +312,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                       {document.error_message && <div className="warn-cell">{document.error_message}</div>}
                     </td>
                     <td>{document.structure_path}</td>
+                    <td>{document.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"}</td>
                     <td>
                       <span className={`status-pill status-${document.status}`}>{document.status}</span>
                     </td>
@@ -278,7 +332,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 ))}
                 {!documents.length && (
                   <tr>
-                    <td colSpan={6} className="muted">
+                    <td colSpan={7} className="muted">
                       当前知识库还没有文档。可以上传文件，或导入已完成的拆书任务结果。
                     </td>
                   </tr>
@@ -302,7 +356,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   <article key={hit.chunk_id}>
                     <strong>[{hit.citation_id}] {hit.document_title || hit.original_filename}</strong>
                     <small>
-                      {hit.structure_path} · score {hit.score}
+                      {hit.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"} · {hit.structure_path} · score {hit.score}
                     </small>
                     <p>{hit.text}</p>
                   </article>
@@ -347,6 +401,24 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
             </form>
           </div>
 
+          <div className="panel compact-form">
+            <h2>世界观设定草案</h2>
+            <p className="muted">这里生成的是原创世界观候选稿。它不会自动进入知识库，只有你确认后才会作为 worldbuilding 导入。</p>
+            <label>
+              故事种子
+              <textarea rows={3} value={storySeed} onChange={(event) => setStorySeed(event.target.value)} />
+            </label>
+            <div className="button-row">
+              <button type="button" onClick={generateWorldbuildingDraft} disabled={!selected || busy === "worldbuilding"}>
+                生成世界观草案
+              </button>
+              <button type="button" className="primary" onClick={confirmWorldbuildingImport} disabled={!selected || !worldbuildingDraft || busy === "confirm-worldbuilding"}>
+                确认导入为世界观设定
+              </button>
+            </div>
+            <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入知识库。" />
+          </div>
+
           <div className="preview-panel agent-output">
             <div className="preview-toolbar">
               <strong>生成结果</strong>
@@ -364,7 +436,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 {citations.map((hit) => (
                   <article key={hit.chunk_id}>
                     <strong>[{hit.citation_id}] {hit.original_filename}</strong>
-                    <small>{hit.structure_path}</small>
+                    <small>{hit.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"} · {hit.structure_path}</small>
                     <p>{hit.text}</p>
                   </article>
                 ))}

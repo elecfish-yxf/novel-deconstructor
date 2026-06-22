@@ -30,6 +30,7 @@ DECONSTRUCTION_DIR_FLAGS = {
     "graph_outputs": "include_graph",
     "拆文库": "include_oh_story",
 }
+KNOWLEDGE_TYPES = {"writing_guide", "worldbuilding"}
 
 
 @dataclass
@@ -53,7 +54,16 @@ def safe_upload_name(filename: str) -> str:
     return f"{stem}{suffix}"
 
 
-async def add_uploaded_document(db: Session, knowledge_base: KnowledgeBase, upload: UploadFile) -> DocumentBuildResult:
+def normalize_knowledge_type(value: str | None, default: str = "worldbuilding") -> str:
+    return value if value in KNOWLEDGE_TYPES else default
+
+
+async def add_uploaded_document(
+    db: Session,
+    knowledge_base: KnowledgeBase,
+    upload: UploadFile,
+    knowledge_type: str = "worldbuilding",
+) -> DocumentBuildResult:
     settings = get_settings()
     file_type = validate_extension(upload.filename or "document")
     safe_name = safe_upload_name(upload.filename or f"document.{file_type}")
@@ -66,6 +76,7 @@ async def add_uploaded_document(db: Session, knowledge_base: KnowledgeBase, uplo
             incoming,
             original_filename=upload.filename or safe_name,
             source_kind="upload",
+            knowledge_type=normalize_knowledge_type(knowledge_type),
             source_path_label=upload.filename or safe_name,
             structure_path=safe_name,
             size_bytes=size,
@@ -82,6 +93,7 @@ def add_document_from_path(
     *,
     original_filename: str | None = None,
     source_kind: str = "upload",
+    knowledge_type: str = "worldbuilding",
     source_path_label: str | None = None,
     structure_path: str | None = None,
     size_bytes: int | None = None,
@@ -108,6 +120,7 @@ def add_document_from_path(
         file_hash=file_hash,
         document_title=_document_title(original_filename or file_path.name),
         source_kind=source_kind,
+        knowledge_type=normalize_knowledge_type(knowledge_type),
         source_path=source_path_label or file_path.name,
         structure_path=structure_path or file_path.name,
         status="pending",
@@ -123,6 +136,60 @@ def add_document_from_path(
         shutil.move(str(file_path), stored_path)
     else:
         shutil.copy2(file_path, stored_path)
+    document.stored_path = str(stored_path)
+    document.normalized_path = str(target_dir / "normalized.txt")
+    db.commit()
+    reindex_document(db, document)
+    return DocumentBuildResult(document, True)
+
+
+def add_document_from_text(
+    db: Session,
+    knowledge_base: KnowledgeBase,
+    *,
+    filename: str,
+    content: str,
+    knowledge_type: str = "worldbuilding",
+    source_kind: str = "user_text",
+    structure_path: str | None = None,
+) -> DocumentBuildResult:
+    text = content.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="知识文档内容不能为空")
+    safe_name = safe_upload_name(filename or "worldbuilding.md")
+    if Path(safe_name).suffix.lower() not in {".md", ".txt"}:
+        safe_name = f"{Path(safe_name).stem}.md"
+    file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    existing = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.knowledge_base_id == knowledge_base.id, KnowledgeDocument.file_hash == file_hash)
+        .first()
+    )
+    if existing:
+        return DocumentBuildResult(existing, False)
+
+    document = KnowledgeDocument(
+        knowledge_base_id=knowledge_base.id,
+        original_filename=safe_name,
+        stored_path="",
+        file_type=Path(safe_name).suffix.lower().lstrip(".") or "md",
+        size_bytes=len(text.encode("utf-8")),
+        file_hash=file_hash,
+        document_title=_document_title(safe_name),
+        source_kind=source_kind,
+        knowledge_type=normalize_knowledge_type(knowledge_type),
+        source_path=safe_name,
+        structure_path=structure_path or safe_name,
+        status="pending",
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    target_dir = get_settings().knowledge_dir / str(knowledge_base.id) / str(document.id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = target_dir / safe_name
+    stored_path.write_text(text + "\n", encoding="utf-8")
     document.stored_path = str(stored_path)
     document.normalized_path = str(target_dir / "normalized.txt")
     db.commit()
@@ -187,6 +254,7 @@ def split_knowledge_text(text: str, document: KnowledgeDocument) -> list[Knowled
             metadata = {
                 "file_hash": document.file_hash,
                 "source_kind": document.source_kind,
+                "knowledge_type": document.knowledge_type,
                 "source_path": document.source_path,
                 "structure_path": document.structure_path,
                 **current_meta,
@@ -250,6 +318,7 @@ def import_deconstruction_job(
             source,
             original_filename=item.path,
             source_kind="deconstruction_job",
+            knowledge_type="writing_guide",
             source_path_label=item.path,
             structure_path=item.path,
         )
@@ -306,6 +375,7 @@ def _hit_dict(index: int, score: float, chunk: KnowledgeChunk, document: Knowled
         "score": round(score, 4),
         "original_filename": document.original_filename,
         "document_title": document.document_title,
+        "knowledge_type": document.knowledge_type,
         "heading": chunk.heading,
         "page_number": chunk.page_number,
         "structure_path": document.structure_path,

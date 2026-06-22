@@ -12,6 +12,7 @@ from ..schemas import ChapterChunkRead, SourceFileRead, SplitRequest, SplitRespo
 from ..services.chapter_splitter import split_text_file
 from ..services.file_parser import normalize_text_file, save_upload, validate_extension
 from ..services.path_safety import project_output_dir, secure_slug
+from .workspace import get_workspace_id
 
 
 router = APIRouter(tags=["files"])
@@ -41,12 +42,25 @@ def _chapter_read(chapter: ChapterChunk) -> ChapterChunkRead:
     return data
 
 
-@router.post("/api/projects/{project_id}/files/upload", response_model=SourceFileRead)
-async def upload_file(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    settings = get_settings()
+def _get_project(db: Session, project_id: int, workspace_id: str) -> Project:
     project = db.get(Project, project_id)
-    if not project:
+    if not project or project.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+def _get_source_file(db: Session, file_id: int, workspace_id: str) -> tuple[SourceFile, Project]:
+    source_file = db.get(SourceFile, file_id)
+    if not source_file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    project = _get_project(db, source_file.project_id, workspace_id)
+    return source_file, project
+
+
+@router.post("/api/projects/{project_id}/files/upload", response_model=SourceFileRead)
+async def upload_file(project_id: int, file: UploadFile = File(...), workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    settings = get_settings()
+    project = _get_project(db, project_id, workspace_id)
     file_type = validate_extension(file.filename or "")
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     stored_name = f"{uuid4().hex}_{Path(file.filename or 'source').name}"
@@ -68,21 +82,15 @@ async def upload_file(project_id: int, file: UploadFile = File(...), db: Session
 
 
 @router.get("/api/projects/{project_id}/files", response_model=list[SourceFileRead])
-def list_files(project_id: int, db: Session = Depends(get_db)):
-    if not db.get(Project, project_id):
-        raise HTTPException(status_code=404, detail="项目不存在")
+def list_files(project_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    _get_project(db, project_id, workspace_id)
     files = db.query(SourceFile).filter(SourceFile.project_id == project_id).order_by(SourceFile.created_at.desc()).all()
     return [_file_read(db, item) for item in files]
 
 
 @router.post("/api/files/{file_id}/parse", response_model=SourceFileRead)
-def parse_file(file_id: int, db: Session = Depends(get_db)):
-    source_file = db.get(SourceFile, file_id)
-    if not source_file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    project = db.get(Project, source_file.project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+def parse_file(file_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    source_file, project = _get_source_file(db, file_id, workspace_id)
     try:
         normalize_text_file(Path(source_file.stored_path), _raw_path(project, source_file))
         source_file.parse_status = "parsed"
@@ -96,19 +104,14 @@ def parse_file(file_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/files/{file_id}/split", response_model=SplitResponse)
-def split_file(file_id: int, payload: SplitRequest | None = None, db: Session = Depends(get_db)):
+def split_file(file_id: int, payload: SplitRequest | None = None, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     settings = get_settings()
     payload = payload or SplitRequest()
-    source_file = db.get(SourceFile, file_id)
-    if not source_file:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    project = db.get(Project, source_file.project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    source_file, project = _get_source_file(db, file_id, workspace_id)
 
     raw_path = _raw_path(project, source_file)
     if source_file.parse_status != "parsed" or not raw_path.exists():
-        parse_file(file_id, db)
+        parse_file(file_id, workspace_id, db)
         db.refresh(source_file)
     if source_file.parse_status != "parsed":
         raise HTTPException(status_code=400, detail=source_file.parse_error or "文件解析失败")
@@ -150,9 +153,8 @@ def split_file(file_id: int, payload: SplitRequest | None = None, db: Session = 
 
 
 @router.get("/api/files/{file_id}/chapters", response_model=list[ChapterChunkRead])
-def list_chapters(file_id: int, db: Session = Depends(get_db)):
-    if not db.get(SourceFile, file_id):
-        raise HTTPException(status_code=404, detail="文件不存在")
+def list_chapters(file_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    _get_source_file(db, file_id, workspace_id)
     chapters = (
         db.query(ChapterChunk)
         .filter(ChapterChunk.source_file_id == file_id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -15,15 +15,18 @@ from ..schemas import (
     KnowledgeDocumentRead,
     KnowledgeImportJobRequest,
     KnowledgeImportResponse,
+    KnowledgeTextCreate,
     RetrievalSearchRequest,
     RetrievalSearchResponse,
 )
 from ..services.knowledge_base import (
+    add_document_from_text,
     add_uploaded_document,
     import_deconstruction_job,
     reindex_document,
     search_knowledge,
 )
+from .workspace import get_workspace_id
 
 
 router = APIRouter(tags=["knowledge"])
@@ -46,15 +49,37 @@ def _kb_read(db: Session, kb: KnowledgeBase) -> KnowledgeBaseRead:
     )
 
 
+def _get_kb(db: Session, knowledge_base_id: int, workspace_id: str) -> KnowledgeBase:
+    kb = db.get(KnowledgeBase, knowledge_base_id)
+    if not kb or kb.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    return kb
+
+
+def _get_document(db: Session, document_id: int, workspace_id: str) -> KnowledgeDocument:
+    document = db.get(KnowledgeDocument, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    _get_kb(db, document.knowledge_base_id, workspace_id)
+    return document
+
+
+def _workspace_kb_ids(db: Session, workspace_id: str, requested_ids: list[int]) -> list[int]:
+    query = db.query(KnowledgeBase.id).filter(KnowledgeBase.workspace_id == workspace_id)
+    if requested_ids:
+        query = query.filter(KnowledgeBase.id.in_(requested_ids))
+    return [item.id for item in query.all()]
+
+
 @router.get("/api/knowledge-bases", response_model=list[KnowledgeBaseRead])
-def list_knowledge_bases(db: Session = Depends(get_db)):
-    items = db.query(KnowledgeBase).order_by(KnowledgeBase.updated_at.desc()).all()
+def list_knowledge_bases(workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    items = db.query(KnowledgeBase).filter(KnowledgeBase.workspace_id == workspace_id).order_by(KnowledgeBase.updated_at.desc()).all()
     return [_kb_read(db, item) for item in items]
 
 
 @router.post("/api/knowledge-bases", response_model=KnowledgeBaseRead)
-def create_knowledge_base(payload: KnowledgeBaseCreate, db: Session = Depends(get_db)):
-    kb = KnowledgeBase(name=payload.name, description=payload.description)
+def create_knowledge_base(payload: KnowledgeBaseCreate, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    kb = KnowledgeBase(name=payload.name, description=payload.description, workspace_id=workspace_id)
     db.add(kb)
     db.commit()
     db.refresh(kb)
@@ -62,10 +87,13 @@ def create_knowledge_base(payload: KnowledgeBaseCreate, db: Session = Depends(ge
 
 
 @router.patch("/api/knowledge-bases/{knowledge_base_id}", response_model=KnowledgeBaseRead)
-def update_knowledge_base(knowledge_base_id: int, payload: KnowledgeBaseUpdate, db: Session = Depends(get_db)):
-    kb = db.get(KnowledgeBase, knowledge_base_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="知识库不存在")
+def update_knowledge_base(
+    knowledge_base_id: int,
+    payload: KnowledgeBaseUpdate,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _get_kb(db, knowledge_base_id, workspace_id)
     values = payload.model_dump(exclude_unset=True)
     for key, value in values.items():
         setattr(kb, key, value)
@@ -75,10 +103,8 @@ def update_knowledge_base(knowledge_base_id: int, payload: KnowledgeBaseUpdate, 
 
 
 @router.delete("/api/knowledge-bases/{knowledge_base_id}")
-def delete_knowledge_base(knowledge_base_id: int, db: Session = Depends(get_db)):
-    kb = db.get(KnowledgeBase, knowledge_base_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="知识库不存在")
+def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    kb = _get_kb(db, knowledge_base_id, workspace_id)
     base_dir = None
     first_doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).first()
     if first_doc and first_doc.stored_path:
@@ -91,9 +117,8 @@ def delete_knowledge_base(knowledge_base_id: int, db: Session = Depends(get_db))
 
 
 @router.get("/api/knowledge-bases/{knowledge_base_id}/documents", response_model=list[KnowledgeDocumentRead])
-def list_documents(knowledge_base_id: int, db: Session = Depends(get_db)):
-    if not db.get(KnowledgeBase, knowledge_base_id):
-        raise HTTPException(status_code=404, detail="知识库不存在")
+def list_documents(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    _get_kb(db, knowledge_base_id, workspace_id)
     return (
         db.query(KnowledgeDocument)
         .filter(KnowledgeDocument.knowledge_base_id == knowledge_base_id)
@@ -103,14 +128,18 @@ def list_documents(knowledge_base_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/knowledge-bases/{knowledge_base_id}/documents", response_model=KnowledgeImportResponse)
-async def upload_documents(knowledge_base_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
-    kb = db.get(KnowledgeBase, knowledge_base_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="知识库不存在")
+async def upload_documents(
+    knowledge_base_id: int,
+    files: list[UploadFile] = File(...),
+    knowledge_type: str = Form("worldbuilding"),
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _get_kb(db, knowledge_base_id, workspace_id)
     imported: list[KnowledgeDocument] = []
     skipped = 0
     for upload in files:
-        result = await add_uploaded_document(db, kb, upload)
+        result = await add_uploaded_document(db, kb, upload, knowledge_type)
         if result.created:
             imported.append(result.document)
         else:
@@ -122,13 +151,40 @@ async def upload_documents(knowledge_base_id: int, files: list[UploadFile] = Fil
     )
 
 
+@router.post("/api/knowledge-bases/{knowledge_base_id}/documents/text", response_model=KnowledgeImportResponse)
+def create_text_document(
+    knowledge_base_id: int,
+    payload: KnowledgeTextCreate,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _get_kb(db, knowledge_base_id, workspace_id)
+    result = add_document_from_text(
+        db,
+        kb,
+        filename=payload.filename,
+        content=payload.content,
+        knowledge_type=payload.knowledge_type,
+    )
+    imported = [result.document] if result.created else []
+    skipped = 0 if result.created else 1
+    return KnowledgeImportResponse(
+        imported=imported,
+        skipped_duplicates=skipped,
+        message=f"已导入 {len(imported)} 个文本知识文档，跳过重复 {skipped} 个。",
+    )
+
+
 @router.post("/api/knowledge-bases/{knowledge_base_id}/import-job", response_model=KnowledgeImportResponse)
-def import_job_outputs(knowledge_base_id: int, payload: KnowledgeImportJobRequest, db: Session = Depends(get_db)):
-    kb = db.get(KnowledgeBase, knowledge_base_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="知识库不存在")
+def import_job_outputs(
+    knowledge_base_id: int,
+    payload: KnowledgeImportJobRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _get_kb(db, knowledge_base_id, workspace_id)
     job = db.get(AnalysisJob, payload.job_id)
-    if not job:
+    if not job or not job.project or job.project.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="拆书任务不存在")
     flags = payload.model_dump(exclude={"job_id"})
     imported, skipped = import_deconstruction_job(db, kb, job, flags)
@@ -137,31 +193,24 @@ def import_job_outputs(knowledge_base_id: int, payload: KnowledgeImportJobReques
     return KnowledgeImportResponse(
         imported=imported,
         skipped_duplicates=skipped,
-        message=f"已从拆书任务导入 {len(imported)} 个结构化知识文档，跳过重复 {skipped} 个。",
+        message=f"已从拆书任务导入 {len(imported)} 个写作技巧指南文档，跳过重复 {skipped} 个。",
     )
 
 
 @router.get("/api/documents/{document_id}", response_model=KnowledgeDocumentRead)
-def get_document(document_id: int, db: Session = Depends(get_db)):
-    document = db.get(KnowledgeDocument, document_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
-    return document
+def get_document(document_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    return _get_document(db, document_id, workspace_id)
 
 
 @router.post("/api/documents/{document_id}/reindex", response_model=KnowledgeDocumentRead)
-def reindex(document_id: int, db: Session = Depends(get_db)):
-    document = db.get(KnowledgeDocument, document_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+def reindex(document_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    document = _get_document(db, document_id, workspace_id)
     return reindex_document(db, document)
 
 
 @router.delete("/api/documents/{document_id}")
-def delete_document(document_id: int, db: Session = Depends(get_db)):
-    document = db.get(KnowledgeDocument, document_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+def delete_document(document_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    document = _get_document(db, document_id, workspace_id)
     stored_dir = Path(document.stored_path).parent if document.stored_path else None
     db.delete(document)
     db.commit()
@@ -171,6 +220,7 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/retrieval/search", response_model=RetrievalSearchResponse)
-def retrieval_search(payload: RetrievalSearchRequest, db: Session = Depends(get_db)):
-    hits = search_knowledge(db, payload.knowledge_base_ids, payload.query, payload.top_k)
+def retrieval_search(payload: RetrievalSearchRequest, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
+    hits = search_knowledge(db, kb_ids, payload.query, payload.top_k) if kb_ids else []
     return RetrievalSearchResponse(hits=hits)
