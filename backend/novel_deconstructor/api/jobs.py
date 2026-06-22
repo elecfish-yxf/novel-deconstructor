@@ -6,6 +6,14 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
+from ..modes import (
+    AGGREGATE_MODES,
+    CHAPTER_ANALYSIS_MODES,
+    RESERVED_PROMPT_MODES,
+    ignored_aggregate_modes,
+    normalize_mode_list,
+    sanitize_chapter_modes,
+)
 from ..models import AnalysisJob, AnalysisResult, ChapterChunk, DeconstructionSkill, JobLog, Project, PromptTemplate, SourceFile
 from ..schemas import JobCreate, JobLogRead, JobRead
 from ..services.path_safety import job_output_dir
@@ -13,7 +21,6 @@ from ..services.pipeline import job_id_now, resolve_model, run_analysis_job
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
-RESERVED_PROMPT_MODES = {"system_base"}
 
 
 @router.post("", response_model=JobRead)
@@ -34,11 +41,20 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, db: 
         if not skill or not skill.enabled:
             raise HTTPException(status_code=404, detail="Skill 不存在或已禁用")
 
-    modes = payload.modes
-    if not modes and skill:
-        modes = json.loads(skill.default_modes_json)
-    modes = list(dict.fromkeys(modes or ["chapter_structure"]))
-    available_modes = {item.mode for item in db.query(PromptTemplate.mode).all()} - RESERVED_PROMPT_MODES
+    requested_modes = payload.modes
+    if not requested_modes and skill:
+        requested_modes = json.loads(skill.default_modes_json)
+    raw_modes = normalize_mode_list(requested_modes)
+    invalid_modes = [
+        mode
+        for mode in raw_modes
+        if mode not in CHAPTER_ANALYSIS_MODES and mode not in AGGREGATE_MODES and mode not in RESERVED_PROMPT_MODES
+    ]
+    if invalid_modes:
+        raise HTTPException(status_code=400, detail=f"分析模式不存在: {', '.join(invalid_modes)}")
+    ignored_modes = ignored_aggregate_modes(requested_modes)
+    modes = sanitize_chapter_modes(requested_modes)
+    available_modes = {item.mode for item in db.query(PromptTemplate.mode).all()} & CHAPTER_ANALYSIS_MODES
     missing_modes = [mode for mode in modes if mode not in available_modes]
     if missing_modes:
         raise HTTPException(status_code=400, detail=f"分析模式不存在: {', '.join(missing_modes)}")
@@ -71,6 +87,14 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, db: 
     )
     db.add(job)
     db.add(JobLog(job_id=job_id, level="info", message="任务已创建"))
+    if ignored_modes:
+        db.add(
+            JobLog(
+                job_id=job_id,
+                level="warning",
+                message=f"已忽略聚合导出模式: {', '.join(ignored_modes)}；这些内容由 Phase 3 导出生成。",
+            )
+        )
     db.commit()
     db.refresh(job)
     background_tasks.add_task(run_analysis_job, job_id, payload.api_key)

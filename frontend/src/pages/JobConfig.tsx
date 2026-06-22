@@ -8,10 +8,15 @@ const MODE_LABELS: Record<string, string> = {
   information_delivery: "信息投放",
   language_style: "语言风格",
   ai_bad_patterns: "AI 味检查",
-  volume_summary: "卷段总结",
-  final_knowledge_base: "知识库",
-  obsidian_export: "Obsidian",
 };
+
+const AGGREGATE_MODES = new Set(["volume_summary", "final_knowledge_base", "obsidian_export"]);
+const DEFAULT_MODE = "chapter_structure";
+
+function sanitizeModes(values?: string[]) {
+  const modes = (values || []).filter((mode) => mode && mode !== "system_base" && !AGGREGATE_MODES.has(mode));
+  return Array.from(new Set(modes)).length ? Array.from(new Set(modes)) : [DEFAULT_MODE];
+}
 
 const PROVIDER_PRESETS = {
   deepseekFlash: {
@@ -70,7 +75,7 @@ function loadJobConfigPrefs(): JobConfigPrefs {
     return {
       ...parsed,
       providerPreset: isProviderPreset(parsed.providerPreset) ? parsed.providerPreset : undefined,
-      modes: Array.isArray(parsed.modes) ? parsed.modes.filter((item) => typeof item === "string") : undefined,
+      modes: Array.isArray(parsed.modes) ? sanitizeModes(parsed.modes.filter((item) => typeof item === "string")) : undefined,
     };
   } catch {
     return {};
@@ -78,12 +83,12 @@ function loadJobConfigPrefs(): JobConfigPrefs {
 }
 
 function parseModes(skill?: DeconstructionSkill | null) {
-  if (!skill) return ["chapter_structure"];
+  if (!skill) return [DEFAULT_MODE];
   try {
     const parsed = JSON.parse(skill.default_modes_json);
-    return Array.isArray(parsed) && parsed.length ? parsed : ["chapter_structure"];
+    return Array.isArray(parsed) ? sanitizeModes(parsed) : [DEFAULT_MODE];
   } catch {
-    return ["chapter_structure"];
+    return [DEFAULT_MODE];
   }
 }
 
@@ -101,7 +106,7 @@ export default function JobConfig({
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
   const [skills, setSkills] = useState<DeconstructionSkill[]>([]);
   const [skillId, setSkillId] = useState<number | "">("");
-  const [modes, setModes] = useState<string[]>(initialPrefs.modes?.length ? initialPrefs.modes : ["chapter_structure"]);
+  const [modes, setModes] = useState<string[]>(initialPrefs.modes?.length ? sanitizeModes(initialPrefs.modes) : [DEFAULT_MODE]);
   const [outputDir, setOutputDir] = useState("");
   const [providerPreset, setProviderPreset] = useState<ProviderPresetKey>(initialProviderPreset);
   const [baseUrl, setBaseUrl] = useState<string>(initialPrefs.baseUrl || PROVIDER_PRESETS[initialProviderPreset].baseUrl);
@@ -119,8 +124,8 @@ export default function JobConfig({
 
   const selectedSkill = skills.find((item) => item.id === skillId) || null;
   const modeOptions = useMemo(() => {
-    const names = prompts.map((item) => item.mode).filter((mode) => mode !== "system_base");
-    return Array.from(new Set(["chapter_structure", ...names]));
+    const names = prompts.map((item) => item.mode).filter((mode) => mode !== "system_base" && !AGGREGATE_MODES.has(mode));
+    return Array.from(new Set([DEFAULT_MODE, ...names]));
   }, [prompts]);
 
   useEffect(() => {
@@ -133,9 +138,9 @@ export default function JobConfig({
         const first = preferredSkill || enabled[0];
         if (first) {
           setSkillId(first.id);
-          setModes(initialPrefs.modes?.length ? initialPrefs.modes : parseModes(first));
+          setModes(initialPrefs.modes?.length ? sanitizeModes(initialPrefs.modes) : parseModes(first));
         } else if (initialPrefs.modes?.length) {
-          setModes(initialPrefs.modes);
+          setModes(sanitizeModes(initialPrefs.modes));
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : "加载配置失败"));
@@ -144,7 +149,7 @@ export default function JobConfig({
   useEffect(() => {
     const payload: JobConfigPrefs = {
       skillId,
-      modes,
+      modes: sanitizeModes(modes),
       providerPreset,
       baseUrl,
       model,
@@ -209,7 +214,7 @@ export default function JobConfig({
         source_file_id: sourceFile.id,
         skill_id: skillId || undefined,
         output_dir: outputDir || undefined,
-        modes,
+        modes: sanitizeModes(modes),
         base_url: baseUrl,
         model: model || undefined,
         api_key: apiKey || undefined,
@@ -299,7 +304,7 @@ export default function JobConfig({
             ))}
           </div>
           <small>
-            当前 Skill：{selectedSkill?.name || "默认内置模板"}；每个章节会按勾选模式分别生成 Markdown，适合大文件分批处理。
+            当前 Skill：{selectedSkill?.name || "默认内置模板"}；每个章节会按勾选模式分别生成 Markdown。知识库、Obsidian、图谱由 Phase 3 导出生成。
           </small>
         </div>
 

@@ -8,18 +8,23 @@ const MODE_LABELS: Record<string, string> = {
   information_delivery: "信息投放",
   language_style: "语言风格",
   ai_bad_patterns: "AI 味检查",
-  volume_summary: "卷段总结",
-  final_knowledge_base: "知识库",
-  obsidian_export: "Obsidian",
 };
 
+const AGGREGATE_MODES = new Set(["volume_summary", "final_knowledge_base", "obsidian_export"]);
+const DEFAULT_MODE = "chapter_structure";
+
+function sanitizeModes(values?: string[]) {
+  const modes = (values || []).filter((mode) => mode && mode !== "system_base" && !AGGREGATE_MODES.has(mode));
+  return Array.from(new Set(modes)).length ? Array.from(new Set(modes)) : [DEFAULT_MODE];
+}
+
 function parseModes(skill?: DeconstructionSkill | null) {
-  if (!skill) return ["chapter_structure"];
+  if (!skill) return [DEFAULT_MODE];
   try {
     const parsed = JSON.parse(skill.default_modes_json);
-    return Array.isArray(parsed) && parsed.length ? parsed : ["chapter_structure"];
+    return Array.isArray(parsed) ? sanitizeModes(parsed) : [DEFAULT_MODE];
   } catch {
-    return ["chapter_structure"];
+    return [DEFAULT_MODE];
   }
 }
 
@@ -35,7 +40,7 @@ export default function SkillManager() {
   const [name, setName] = useState("自定义拆书 Skill");
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(true);
-  const [modes, setModes] = useState<string[]>(["chapter_structure"]);
+  const [modes, setModes] = useState<string[]>([DEFAULT_MODE]);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [promptTemplate, setPromptTemplate] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,8 +48,8 @@ export default function SkillManager() {
   const [error, setError] = useState("");
 
   const modeOptions = useMemo(() => {
-    const names = prompts.map((item) => item.mode).filter((mode) => mode !== "system_base");
-    return Array.from(new Set(["chapter_structure", ...names]));
+    const names = prompts.map((item) => item.mode).filter((mode) => mode !== "system_base" && !AGGREGATE_MODES.has(mode));
+    return Array.from(new Set([DEFAULT_MODE, ...names]));
   }, [prompts]);
 
   async function load() {
@@ -75,7 +80,7 @@ export default function SkillManager() {
     setName("自定义拆书 Skill");
     setDescription("");
     setEnabled(true);
-    setModes(["chapter_structure"]);
+    setModes([DEFAULT_MODE]);
     setSystemPrompt("");
     setPromptTemplate("");
     setMessage("");
@@ -98,7 +103,7 @@ export default function SkillManager() {
       source: selected?.source || "custom",
       phase: 2,
       enabled,
-      default_modes: modes,
+      default_modes: sanitizeModes(modes),
       system_prompt: systemPrompt || null,
       prompt_template: promptTemplate || null,
       metadata: { phase3_ready: true },
@@ -198,6 +203,7 @@ export default function SkillManager() {
                 </label>
               ))}
             </div>
+            <small>知识库、Obsidian、图谱属于 Phase 3 聚合导出，不作为逐章 Skill 模式保存。</small>
           </div>
 
           <label className="full-row">

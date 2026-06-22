@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..modes import sanitize_chapter_modes
 from ..models import DeconstructionSkill
 from ..schemas import SkillCreate, SkillRead, SkillUpdate
 
@@ -13,10 +14,7 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 
 def _normalize_modes(modes: list[str]) -> str:
-    clean = [mode.strip() for mode in modes if mode.strip()]
-    if not clean:
-        clean = ["chapter_structure"]
-    return json.dumps(list(dict.fromkeys(clean)), ensure_ascii=False)
+    return json.dumps(sanitize_chapter_modes(modes), ensure_ascii=False)
 
 
 def _normalize_metadata(metadata: dict) -> str:

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import AnalysisJob, AnalysisResult
 from ..schemas import AnalysisResultRead, FileListItem
-from ..services.exporter import list_result_files
+from ..services.exporter import list_result_files, should_include_result_file
 from ..services.path_safety import safe_relative_file
 
 
@@ -37,6 +37,9 @@ def download_file(job_id: str, path: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     target = safe_relative_file(Path(job.output_dir), path)
+    relative = target.relative_to(Path(job.output_dir)).as_posix()
+    if not should_include_result_file(relative):
+        raise HTTPException(status_code=404, detail="结果文件不存在")
     return FileResponse(target, filename=target.name)
 
 
@@ -55,6 +58,8 @@ def download_zip(job_id: str, db: Session = Depends(get_db)):
             if not item.is_file() or item.name.endswith(".tmp"):
                 continue
             relative = item.relative_to(output_dir).as_posix()
+            if not should_include_result_file(relative):
+                continue
             archive.write(item, relative)
     buffer.seek(0)
     headers = {"Content-Disposition": f'attachment; filename="{job_id}_results.zip"'}

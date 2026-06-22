@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+from ..modes import AGGREGATE_MODES
 from ..schemas import FileListItem
 
 
@@ -17,6 +18,19 @@ RESULT_DIRS = {
 }
 
 
+def should_include_result_file(relative_path: str) -> bool:
+    path = Path(relative_path)
+    if len(path.parts) < 2:
+        return True
+    top = path.parts[0]
+    name = path.name
+    if top == "chapter_analysis" and any(name.endswith(f"_{mode}.md") for mode in AGGREGATE_MODES):
+        return False
+    if top == "metadata" and "llm_calls" in path.parts and any(f"_{mode}_" in name for mode in AGGREGATE_MODES):
+        return False
+    return True
+
+
 def list_result_files(job_output_dir: Path) -> list[FileListItem]:
     if not job_output_dir.exists():
         return []
@@ -25,6 +39,8 @@ def list_result_files(job_output_dir: Path) -> list[FileListItem]:
         if not path.is_file():
             continue
         relative = path.relative_to(job_output_dir).as_posix()
+        if not should_include_result_file(relative):
+            continue
         first = relative.split("/", 1)[0]
         files.append(
             FileListItem(
