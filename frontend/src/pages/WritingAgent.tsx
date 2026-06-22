@@ -24,8 +24,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [outlineContext, setOutlineContext] = useState("");
   const [outline, setOutline] = useState("");
   const [confirmedOutline, setConfirmedOutline] = useState("");
-  const [draftTask, setDraftTask] = useState("请基于已确认提纲生成第一章小说正文。");
-  const [draftContext, setDraftContext] = useState("");
   const [draft, setDraft] = useState("");
   const [memoryType, setMemoryType] = useState("note");
   const [memoryTitle, setMemoryTitle] = useState("");
@@ -253,7 +251,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function generateDraft(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !draftTask.trim() || !confirmedOutline.trim()) return;
+    if (!selected || !confirmedOutline.trim()) return;
     setBusy("draft");
     setError("");
     setDraft("");
@@ -261,9 +259,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     try {
       const result = await api.generateDraft({
         knowledge_base_ids: [selected.id],
-        task: draftTask,
+        task: `请根据用户已确认的章节提纲生成小说正文：${outlineTask}`,
         confirmed_outline: confirmedOutline,
-        current_content: draftContext,
+        current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
         dry_run: dryRun,
@@ -510,14 +508,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
           <div className="writing-flow">
             <form className="panel compact-form writing-step" onSubmit={generateOutline}>
               <div className="step-badge">1</div>
-              <h2>先生成章节提纲</h2>
-              <p className="muted">这一部分会输出类似“章节信息、开头状态、冲突推进、信息投放、结构核对”的详细提纲。确认后才进入正文。</p>
+              <h2>发送请求</h2>
+              <p className="muted">把你想写的章节、风格、字数、承接上下文都放在这里。系统会先生成提纲，不会直接生成正文。</p>
               <label>
-                提纲任务
+                写作请求
                 <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
               </label>
               <label>
-                补充上下文，可选
+                补充上下文/已有正文，可选
                 <textarea rows={5} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
               </label>
               <div className="mode-grid">
@@ -542,56 +540,49 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 dry-run：不调用模型，只验证检索和引用
               </label>
               <button className="primary" disabled={!selected || busy === "outline"}>
-                生成提纲
+                发送请求，生成提纲
               </button>
-              <div className="preview-panel inline-output">
-                <div className="preview-toolbar">
-                  <strong>章节提纲</strong>
-                  <div className="button-row">
-                    <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
-                      复制
-                    </button>
-                    <button type="button" className="primary" disabled={!selected || !outline || busy === "confirm-outline"} onClick={confirmOutline}>
-                      确认提纲
-                    </button>
-                  </div>
-                </div>
-                <pre>{outline || "提纲会显示在这里。确认后会写入 Memory，并交给右侧生成正文。"}</pre>
-              </div>
             </form>
 
-            <form className="panel compact-form writing-step" onSubmit={generateDraft}>
+            <div className="panel compact-form writing-step">
               <div className="step-badge">2</div>
-              <h2>再生成小说正文</h2>
-              <p className="muted">这一部分只输出正文，不输出提纲、表格、结构核对或写作说明。</p>
+              <h2>生成并确认提纲</h2>
+              <p className="muted">这里显示模型生成的章节提纲。你可以直接编辑，确认后才允许进入正文生成。</p>
               <label>
-                正文任务
-                <textarea rows={4} value={draftTask} onChange={(event) => setDraftTask(event.target.value)} />
+                章节提纲
+                <textarea rows={16} value={outline} onChange={(event) => setOutline(event.target.value)} placeholder="提纲会显示在这里。你也可以手动粘贴或修改提纲，然后点击确认。" />
               </label>
-              <label>
-                已确认提纲
-                <textarea rows={8} value={confirmedOutline} onChange={(event) => setConfirmedOutline(event.target.value)} placeholder="请先在左侧生成并确认提纲，或手动粘贴已确认提纲。" />
-              </label>
-              <label>
-                已有正文/上一章上下文，可选
-                <textarea rows={5} value={draftContext} onChange={(event) => setDraftContext(event.target.value)} />
-              </label>
+              <div className="button-row">
+                <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
+                  复制提纲
+                </button>
+                <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline"} onClick={confirmOutline}>
+                  确认提纲
+                </button>
+              </div>
+              <small className="muted">{confirmedOutline ? "已确认提纲，可以生成正文。" : "提纲确认后会写入 Memory，并解锁第三个对话框。"}</small>
+            </div>
+
+            <form className="panel compact-form writing-step" onSubmit={generateDraft}>
+              <div className="step-badge">3</div>
+              <h2>生成正文</h2>
+              <p className="muted">用户确认提纲后，点击这里生成小说正文。这里不会再输出提纲、表格、结构核对或写作说明。</p>
               <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft"}>
-                生成正文
+                根据确认提纲生成正文
               </button>
               <div className="preview-panel inline-output">
                 <div className="preview-toolbar">
                   <strong>小说正文</strong>
                   <div className="button-row">
                     <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
-                      复制
+                      复制正文
                     </button>
                     <button type="button" disabled={!selected || !draft || busy === "memory"} onClick={() => saveMemory(`正文片段 ${new Date().toLocaleString()}`, draft, "draft", "generated_draft")}>
                       存入 Memory
                     </button>
                   </div>
                 </div>
-                <pre>{draft || "正文会显示在这里。这里应当是连续叙事，而不是提纲。"}</pre>
+                <pre>{draft || (confirmedOutline ? "正文会显示在这里。" : "请先在第二个对话框确认提纲。")}</pre>
               </div>
             </form>
           </div>
