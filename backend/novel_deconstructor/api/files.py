@@ -121,6 +121,7 @@ def split_file(file_id: int, payload: SplitRequest | None = None, db: Session = 
         source_file.id,
         payload.max_chapter_chars or settings.max_chapter_chars,
         payload.overlap_chars if payload.overlap_chars is not None else settings.chunk_overlap_chars,
+        payload.strict_chapter_split,
     )
     for artifact in artifacts:
         db.add(

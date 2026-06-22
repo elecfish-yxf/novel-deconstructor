@@ -21,6 +21,7 @@ export default function FileUpload({
   const [activeFile, setActiveFile] = useState<SourceFile | null>(selectedFile);
   const [maxChars, setMaxChars] = useState(12000);
   const [overlap, setOverlap] = useState(800);
+  const [strictChapterSplit, setStrictChapterSplit] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,7 +39,11 @@ export default function FileUpload({
     try {
       const uploaded = await api.uploadFile(project.id, file);
       const parsed = await api.parseFile(uploaded.id);
-      const split = await api.splitFile(parsed.id, { max_chapter_chars: maxChars, overlap_chars: overlap });
+      const split = await api.splitFile(parsed.id, {
+        max_chapter_chars: maxChars,
+        overlap_chars: overlap,
+        strict_chapter_split: strictChapterSplit,
+      });
       setActiveFile(parsed);
       await loadFiles();
       onFileReady(parsed, split.chapters);
@@ -54,7 +59,11 @@ export default function FileUpload({
     setError("");
     try {
       const parsed = file.parse_status === "parsed" ? file : await api.parseFile(file.id);
-      const split = await api.splitFile(parsed.id, { max_chapter_chars: maxChars, overlap_chars: overlap });
+      const split = await api.splitFile(parsed.id, {
+        max_chapter_chars: maxChars,
+        overlap_chars: overlap,
+        strict_chapter_split: strictChapterSplit,
+      });
       setActiveFile(parsed);
       await loadFiles();
       onFileReady(parsed, split.chapters);
@@ -103,7 +112,11 @@ export default function FileUpload({
             overlap 字符数
             <input type="number" value={overlap} min={0} onChange={(event) => setOverlap(Number(event.target.value))} />
           </label>
-          <p className="muted">没有识别到章节标题时，会按最大字符数自动分块；单章过长会二次切分。</p>
+          <label className="check-row">
+            <input type="checkbox" checked={strictChapterSplit} onChange={(event) => setStrictChapterSplit(event.target.checked)} />
+            识别到章节标题时严格按章切分
+          </label>
+          <p className="muted">开启后会优先按“第一章 / 第1章 / Chapter 1”等标题切分；关闭后，超长章节会按最大字符数二次分块。</p>
         </div>
       </div>
 

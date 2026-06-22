@@ -8,7 +8,8 @@
 - TXT / MD 解析，支持 UTF-8、GBK、GB18030 等常见编码
 - DOCX / PDF 文本提取；扫描版 PDF 请先 OCR
 - 章节标题识别：第1章、第一章、卷一、序章、楔子、终章、Chapter 1 等
-- 无章节时按最大字符数分块，超长章节自动二次分块并支持 overlap
+- 默认严格按章节标题切分，能跳过轻小说开头目录/版权信息中的重复章节标题
+- 无章节时按最大字符数分块；关闭“严格按章切分”后，超长章节会二次分块并支持 overlap
 - OpenAI-compatible Chat Completions 调用，内置 DeepSeek Flash / Pro 预设
 - Skill 管理：可选择内置 oh-story Phase 2 Skill，也可自定义主拆书 Prompt、System Prompt 和默认分析模式
 - Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
@@ -87,11 +88,12 @@ npm run dev
 2. 点击“选择文件夹”设置默认输出路径，或留空使用 `outputs/`。
 3. 上传 TXT、MD、DOCX 或 PDF。
 4. 设置每章最大字符数与 overlap，完成解析/切章。
-5. 在章节预览页检查标题、字符数和 token 估算。
-6. 配置任务，选择 Skill、分析模式和 Phase 3 导出项。
-7. 使用 dry-run，或选择 DeepSeek / OpenAI-compatible 并填写 API Key。
-8. 启动任务，在进度页查看日志。
-9. 到结果页预览或下载 Markdown。
+5. 默认开启“识别到章节标题时严格按章切分”；如果单章太长需要控制模型输入，可关闭它来启用二次分块。
+6. 在章节预览页检查标题、字符数和 token 估算。
+7. 配置任务，选择 Skill、分析模式和 Phase 3 导出项。
+8. 使用 dry-run，或选择 DeepSeek / OpenAI-compatible 并填写 API Key。
+9. 启动任务，在进度页查看日志。
+10. 到结果页预览或下载 Markdown。
 
 ## CLI 使用
 

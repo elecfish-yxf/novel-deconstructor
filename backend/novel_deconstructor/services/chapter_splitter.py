@@ -7,19 +7,38 @@ from pathlib import Path
 import re
 
 
+HEADING_NUMBER = r"[0-9０-９零〇一二三四五六七八九十百千万两壹贰叁肆伍陆柒捌玖拾佰仟]+"
 CHAPTER_HEADING_RE = re.compile(
     r"^\s*("
-    r"第[0-9零〇一二三四五六七八九十百千万两]+[章节回集卷部篇](?:\s*[:：、.-]?\s*.{0,50})?"
+    rf"第\s*{HEADING_NUMBER}\s*[章节回集卷部篇话幕](?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
+    rf"|[章节回集卷部篇话幕]\s*{HEADING_NUMBER}(?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
     r"|[序楔终尾]章(?:\s*[:：、.-]?\s*.{0,50})?"
     r"|楔子(?:\s*[:：、.-]?\s*.{0,50})?"
     r"|终章(?:\s*[:：、.-]?\s*.{0,50})?"
     r"|尾声(?:\s*[:：、.-]?\s*.{0,50})?"
-    r"|卷[0-9零〇一二三四五六七八九十百千万两]+(?:\s*[:：、.-]?\s*.{0,50})?"
-    r"|Chapter\s+[0-9]+(?:\s*[:：、.-]?\s*.{0,50})?"
-    r"|CHAPTER\s+[0-9]+(?:\s*[:：、.-]?\s*.{0,50})?"
+    r"|番外(?:\s*[:：、.．\-—·]?\s*.{0,80})?"
+    rf"|卷\s*{HEADING_NUMBER}(?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
+    rf"|Chapter\s+{HEADING_NUMBER}(?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
+    rf"|CHAPTER\s+{HEADING_NUMBER}(?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
+    rf"|Act\.?\s*{HEADING_NUMBER}(?:\s*[:：、.．\-—·]?\s*.{{0,80}})?"
     r")\s*$",
     re.IGNORECASE,
 )
+DECORATION_RE = re.compile(r"^[\s#>*\-_=~★☆◆◇●○◎【\[\(（《〈「『]+|[\s#<*\-_=~★☆◆◇●○◎】\]\)）》〉」』]+$")
+FRONT_MATTER_MARKERS = [
+    "书名",
+    "作者",
+    "插画",
+    "翻译",
+    "校对",
+    "润色",
+    "书源",
+    "轻之国",
+    "下载后请在",
+    "仅供个人",
+    ".jpg",
+    ".png",
+]
 
 
 @dataclass
@@ -38,10 +57,20 @@ class ChapterArtifact:
 
 
 def is_chapter_heading(line: str) -> bool:
-    text = line.strip()
-    if not text or len(text) > 80:
+    text = normalize_heading_text(line)
+    if not text or len(text) > 120:
         return False
     return bool(CHAPTER_HEADING_RE.match(text))
+
+
+def normalize_heading_text(line: str) -> str:
+    text = line.strip().replace("\u3000", " ")
+    text = DECORATION_RE.sub("", text).strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def _heading_key(title: str) -> str:
+    return re.sub(r"\s+", "", normalize_heading_text(title)).casefold()
 
 
 def estimate_tokens(text: str) -> int:
@@ -134,6 +163,7 @@ def split_text_file(
     source_file_id: int,
     max_chars: int,
     overlap_chars: int,
+    strict_chapter_split: bool = True,
 ) -> list[ChapterArtifact]:
     output_dir.mkdir(parents=True, exist_ok=True)
     for old in output_dir.glob("chunk_*.txt"):
@@ -143,7 +173,7 @@ def split_text_file(
 
     heading_count = _count_headings(raw_text_path)
     if heading_count:
-        return _split_by_headings(raw_text_path, output_dir, source_file_id, max_chars, overlap_chars)
+        return _split_by_headings(raw_text_path, output_dir, source_file_id, max_chars, overlap_chars, strict_chapter_split)
     return _split_by_size(raw_text_path, output_dir, source_file_id, max_chars, overlap_chars)
 
 
@@ -153,44 +183,78 @@ def _split_by_headings(
     source_file_id: int,
     max_chars: int,
     overlap_chars: int,
+    strict_chapter_split: bool,
 ) -> list[ChapterArtifact]:
-    artifacts: list[ChapterArtifact] = []
-    chapter_lines: list[str] = []
-    chapter_title = "开篇"
-    chapter_start = 0
+    text = raw_text_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    headings: list[tuple[int, str]] = []
     absolute_pos = 0
+    for line in lines:
+        if is_chapter_heading(line):
+            headings.append((absolute_pos, normalize_heading_text(line)))
+        absolute_pos += len(line)
 
-    def flush(reason: str) -> None:
-        nonlocal chapter_lines, chapter_title, chapter_start
-        text = "".join(chapter_lines).strip("\n")
-        if not text.strip():
-            chapter_lines = []
+    headings = _drop_front_matter_headings(text, headings)
+    if not headings:
+        return _split_by_size(raw_text_path, output_dir, source_file_id, max_chars, overlap_chars)
+
+    artifacts: list[ChapterArtifact] = []
+
+    def write_chapter(title: str, chapter_text: str, chapter_start: int, reason: str) -> None:
+        chapter_text = chapter_text.strip("\n")
+        if not chapter_text.strip():
             return
-        for part_index, (part_text, offset) in enumerate(_split_long_text(text, max_chars, overlap_chars), start=1):
-            title = chapter_title if part_index == 1 else f"{chapter_title}（续 {part_index}）"
+        parts = [(chapter_text, 0)] if strict_chapter_split else _split_long_text(chapter_text, max_chars, overlap_chars)
+        for part_index, (part_text, offset) in enumerate(parts, start=1):
+            part_title = title if part_index == 1 else f"{title}（续 {part_index}）"
             artifacts.append(
                 _write_artifact(
                     output_dir,
                     source_file_id,
                     len(artifacts) + 1,
-                    title,
+                    part_title,
                     part_text,
                     chapter_start + offset,
                     reason if part_index == 1 else "chapter_too_long",
                 )
             )
-        chapter_lines = []
 
-    with raw_text_path.open("r", encoding="utf-8") as source:
-        for line in source:
-            if is_chapter_heading(line):
-                flush("chapter_heading")
-                chapter_title = line.strip()
-                chapter_start = absolute_pos
-            chapter_lines.append(line)
-            absolute_pos += len(line)
-    flush("chapter_heading")
+    first_start = headings[0][0]
+    preface = text[:first_start]
+    if preface.strip() and not _looks_like_front_matter(preface):
+        write_chapter("开篇", preface, 0, "preface")
+
+    for index, (start, chapter_title) in enumerate(headings):
+        end = headings[index + 1][0] if index + 1 < len(headings) else len(text)
+        write_chapter(chapter_title, text[start:end], start, "chapter_heading")
     return artifacts
+
+
+def _drop_front_matter_headings(text: str, headings: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    if len(headings) < 2:
+        return headings
+    first_start, first_title = headings[0]
+    if first_start > 20:
+        return headings
+
+    first_key = _heading_key(first_title)
+    for index, (start, title) in enumerate(headings[1:], start=1):
+        if _heading_key(title) != first_key:
+            continue
+        front_matter = text[first_start:start]
+        marker_hits = sum(1 for marker in FRONT_MATTER_MARKERS if marker in front_matter)
+        if start <= 12000 and marker_hits >= 2:
+            return headings[index:]
+        break
+    return headings
+
+
+def _looks_like_front_matter(text: str) -> bool:
+    if not text.strip():
+        return False
+    marker_hits = sum(1 for marker in FRONT_MATTER_MARKERS if marker in text)
+    first_nonempty = next((line for line in text.splitlines() if line.strip()), "")
+    return marker_hits >= 2 and is_chapter_heading(first_nonempty)
 
 
 def _split_by_size(

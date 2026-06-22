@@ -155,7 +155,7 @@ export const api = {
     return request<SourceFile>(`/api/projects/${projectId}/files/upload`, { method: "POST", body: data });
   },
   parseFile: (fileId: number) => request<SourceFile>(`/api/files/${fileId}/parse`, { method: "POST" }),
-  splitFile: (fileId: number, payload: { max_chapter_chars?: number; overlap_chars?: number }) =>
+  splitFile: (fileId: number, payload: { max_chapter_chars?: number; overlap_chars?: number; strict_chapter_split?: boolean }) =>
     request<{ file_id: number; chapter_count: number; chapters: Chapter[] }>(`/api/files/${fileId}/split`, {
       method: "POST",
       body: JSON.stringify(payload),

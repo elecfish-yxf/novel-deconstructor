@@ -56,6 +56,7 @@ class ChapterChunkRead(ORMModel):
 class SplitRequest(BaseModel):
     max_chapter_chars: int | None = None
     overlap_chars: int | None = None
+    strict_chapter_split: bool = True
 
 
 class SplitResponse(BaseModel):
