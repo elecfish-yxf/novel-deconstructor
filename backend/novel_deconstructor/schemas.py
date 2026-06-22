@@ -273,6 +273,17 @@ class KnowledgeDocumentRead(ORMModel):
     updated_at: datetime
 
 
+class KnowledgeDocumentBulkDeleteRequest(BaseModel):
+    document_ids: list[int] = Field(default_factory=list)
+    knowledge_type: str | None = None
+    delete_all: bool = False
+
+
+class KnowledgeDocumentBulkDeleteResponse(BaseModel):
+    deleted: int
+    message: str
+
+
 class KnowledgeImportJobRequest(BaseModel):
     job_id: str
     include_chapter_analysis: bool = False

@@ -14,6 +14,8 @@ from ..schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseRead,
     KnowledgeBaseUpdate,
+    KnowledgeDocumentBulkDeleteRequest,
+    KnowledgeDocumentBulkDeleteResponse,
     KnowledgeDocumentRead,
     KnowledgeImportJobRequest,
     KnowledgeImportResponse,
@@ -245,6 +247,34 @@ def delete_document(document_id: int, workspace_id: str = Depends(get_workspace_
     if stored_dir and stored_dir.exists():
         shutil.rmtree(stored_dir, ignore_errors=True)
     return {"ok": True}
+
+
+@router.post("/api/knowledge-bases/{knowledge_base_id}/documents/bulk-delete", response_model=KnowledgeDocumentBulkDeleteResponse)
+def bulk_delete_documents(
+    knowledge_base_id: int,
+    payload: KnowledgeDocumentBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    _get_kb(db, knowledge_base_id, workspace_id)
+    query = db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == knowledge_base_id)
+    if payload.knowledge_type:
+        query = query.filter(KnowledgeDocument.knowledge_type == payload.knowledge_type)
+    if not payload.delete_all:
+        unique_ids = list(dict.fromkeys(payload.document_ids))
+        if not unique_ids:
+            return KnowledgeDocumentBulkDeleteResponse(deleted=0, message="没有选择要删除的文件")
+        query = query.filter(KnowledgeDocument.id.in_(unique_ids))
+
+    documents = query.all()
+    stored_dirs = [Path(document.stored_path).parent for document in documents if document.stored_path]
+    for document in documents:
+        db.delete(document)
+    db.commit()
+    for stored_dir in stored_dirs:
+        if stored_dir.exists():
+            shutil.rmtree(stored_dir, ignore_errors=True)
+    return KnowledgeDocumentBulkDeleteResponse(deleted=len(documents), message=f"已删除 {len(documents)} 个文件")
 
 
 @router.post("/api/retrieval/search", response_model=RetrievalSearchResponse)

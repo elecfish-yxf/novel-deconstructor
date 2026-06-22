@@ -530,7 +530,7 @@ th {
 
 .agent-layout {
   display: grid;
-  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -538,6 +538,192 @@ th {
   align-self: start;
   display: grid;
   gap: 14px;
+}
+
+.work-sidebar {
+  padding: 0;
+  overflow: hidden;
+}
+
+.work-create-form {
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.work-tree {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  max-height: 78vh;
+  overflow: auto;
+}
+
+.work-tree-title,
+.work-node-head,
+.knowledge-tree-head,
+.file-row-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.work-tree-title {
+  justify-content: space-between;
+  color: #334155;
+  padding: 2px 2px 8px;
+}
+
+.work-tree-title small,
+.knowledge-tree-head small,
+.file-row-main small {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.work-node {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.work-node.active-work {
+  border-color: #99f6e4;
+  box-shadow: 0 0 0 1px #ccfbf1;
+}
+
+.work-node-head {
+  padding: 8px;
+  background: #f8fafc;
+}
+
+.tree-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font-size: 18px;
+}
+
+.work-title-button,
+.knowledge-title-button {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.work-title-button strong,
+.knowledge-title-button strong,
+.file-row-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-files {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.file-manager-controls {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.tight-row {
+  gap: 6px;
+}
+
+.compact-action {
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.file-bulk-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.file-bulk-toolbar button {
+  padding: 7px 6px;
+  font-size: 12px;
+}
+
+.knowledge-tree-group {
+  display: grid;
+  gap: 6px;
+}
+
+.knowledge-tree-head {
+  padding: 7px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.knowledge-tree-head input,
+.file-row-item input {
+  width: auto;
+}
+
+.file-row-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+}
+
+.file-row-item {
+  min-width: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
+.file-row-item.selected-file {
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+
+.file-row-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.file-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.file-row-actions button {
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.file-empty {
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.selected-work-card {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
 }
 
 .agent-sidebar h2,

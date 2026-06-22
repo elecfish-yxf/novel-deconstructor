@@ -1,10 +1,31 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { api, getWorkspaceId, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit, WritingMemory } from "../api";
 
+const KNOWLEDGE_GROUPS = [
+  {
+    key: "writing_guide",
+    label: "写作技巧指南",
+    hint: "拆书沉淀出的结构、节奏、爽点、人物塑造方法。",
+  },
+  {
+    key: "worldbuilding",
+    label: "世界观设定",
+    hint: "用户提供或确认导入的原创世界观、人物、地点与规则。",
+  },
+] as const;
+
 function formatSize(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
   if (value > 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${value} B`;
+}
+
+function knowledgeTypeLabel(type: string) {
+  return KNOWLEDGE_GROUPS.find((group) => group.key === type)?.label || type;
+}
+
+function documentTitle(document: KnowledgeDocument) {
+  return document.document_title || document.original_filename;
 }
 
 export default function WritingAgent({ job }: { job?: Job | null }) {
@@ -13,11 +34,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [memories, setMemories] = useState<WritingMemory[]>([]);
-  const [name, setName] = useState("小说拆书知识库");
-  const [description, setDescription] = useState("用于 AI 写作 Agent 的本地知识库");
+  const [name, setName] = useState("作品 1");
+  const [description, setDescription] = useState("用于 AI 写作 Agent 的独立作品空间");
+  const [expandedWorkIds, setExpandedWorkIds] = useState<number[]>([]);
+  const [expandedTypes, setExpandedTypes] = useState<Record<string, boolean>>({
+    writing_guide: true,
+    worldbuilding: true,
+  });
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<RetrievalHit[]>([]);
-  const [uploadType, setUploadType] = useState("worldbuilding");
+  const [uploadType, setUploadType] = useState("writing_guide");
   const [storySeed, setStorySeed] = useState("一个普通人在高压规则世界中寻找自我选择权。");
   const [worldbuildingDraft, setWorldbuildingDraft] = useState("");
   const [outlineTask, setOutlineTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说第一章章节提纲。");
@@ -37,20 +64,52 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [error, setError] = useState("");
 
   const selected = useMemo(() => knowledgeBases.find((item) => item.id === selectedId) || null, [knowledgeBases, selectedId]);
+  const selectedDocumentSet = useMemo(() => new Set(selectedDocumentIds), [selectedDocumentIds]);
+  const documentsByType = useMemo(() => {
+    return documents.reduce<Record<string, KnowledgeDocument[]>>(
+      (groups, document) => {
+        const key = document.knowledge_type || "worldbuilding";
+        groups[key] = [...(groups[key] || []), document];
+        return groups;
+      },
+      { writing_guide: [], worldbuilding: [] },
+    );
+  }, [documents]);
+  const selectedDocumentsInWork = useMemo(
+    () => documents.filter((document) => selectedDocumentSet.has(document.id)),
+    [documents, selectedDocumentSet],
+  );
+
+  function clearTransientWritingState() {
+    setHits([]);
+    setCitations([]);
+    setWorldbuildingDraft("");
+    setOutline("");
+    setConfirmedOutline("");
+    setDraft("");
+  }
 
   async function load(nextSelectedId?: number | null) {
     const [nextConfig, nextBases] = await Promise.all([api.getPublicConfig(), api.listKnowledgeBases()]);
     setConfig(nextConfig);
     setKnowledgeBases(nextBases);
-    const preferred = nextSelectedId || selectedId || nextBases[0]?.id || null;
+    let preferred = nextSelectedId ?? selectedId ?? nextBases[0]?.id ?? null;
+    if (preferred && !nextBases.some((item) => item.id === preferred)) {
+      preferred = nextBases[0]?.id ?? null;
+    }
+    const selectedChanged = preferred !== selectedId;
     setSelectedId(preferred);
+    if (selectedChanged) clearTransientWritingState();
     if (preferred) {
+      setExpandedWorkIds((items) => (items.includes(preferred) ? items : [...items, preferred]));
       const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(preferred), api.listWritingMemories(preferred)]);
       setDocuments(nextDocuments);
       setMemories(nextMemories);
+      setSelectedDocumentIds((items) => items.filter((id) => nextDocuments.some((document) => document.id === id)));
     } else {
       setDocuments([]);
       setMemories([]);
+      setSelectedDocumentIds([]);
     }
   }
 
@@ -65,21 +124,54 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setMessage("");
     try {
       const kb = await api.createKnowledgeBase({ name, description });
-      setMessage("知识库已创建");
+      setMessage("作品已创建");
+      setName(`作品 ${knowledgeBases.length + 2}`);
       await load(kb.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "创建知识库失败");
+      setError(err instanceof Error ? err.message : "创建作品失败");
     } finally {
       setBusy("");
     }
   }
 
   async function chooseKnowledgeBase(id: number) {
+    const selectedChanged = id !== selectedId;
     setSelectedId(id);
+    setSelectedDocumentIds([]);
+    if (selectedChanged) clearTransientWritingState();
+    setExpandedWorkIds((items) => (items.includes(id) ? items : [...items, id]));
     setError("");
     const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(id), api.listWritingMemories(id)]);
     setDocuments(nextDocuments);
     setMemories(nextMemories);
+  }
+
+  function toggleWork(id: number) {
+    if (expandedWorkIds.includes(id)) {
+      setExpandedWorkIds((items) => items.filter((item) => item !== id));
+      return;
+    }
+    chooseKnowledgeBase(id).catch((err) => setError(err instanceof Error ? err.message : "加载作品失败"));
+  }
+
+  function toggleKnowledgeType(type: string) {
+    setExpandedTypes((items) => ({ ...items, [type]: !items[type] }));
+  }
+
+  function toggleDocumentSelection(documentId: number) {
+    setSelectedDocumentIds((items) => (items.includes(documentId) ? items.filter((id) => id !== documentId) : [...items, documentId]));
+  }
+
+  function setGroupSelection(type: string, checked: boolean) {
+    const groupIds = (documentsByType[type] || []).map((document) => document.id);
+    setSelectedDocumentIds((items) => {
+      if (!checked) return items.filter((id) => !groupIds.includes(id));
+      return Array.from(new Set([...items, ...groupIds]));
+    });
+  }
+
+  function selectAllCurrentDocuments() {
+    setSelectedDocumentIds(documents.map((document) => document.id));
   }
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -93,7 +185,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setMessage(result.message);
       await load(selected.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "上传知识库文件失败");
+      setError(err instanceof Error ? err.message : "上传作品文件失败");
     } finally {
       event.target.value = "";
       setBusy("");
@@ -111,6 +203,37 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       await load(selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入拆书结果失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function bulkDeleteDocuments(knowledgeType?: string, deleteAll = false) {
+    if (!selected) return;
+    const typeDocuments = knowledgeType ? documentsByType[knowledgeType] || [] : documents;
+    const selectedIds = typeDocuments.filter((document) => selectedDocumentSet.has(document.id)).map((document) => document.id);
+    if (!deleteAll && !selectedIds.length) return;
+
+    const targetLabel = knowledgeType ? knowledgeTypeLabel(knowledgeType) : selected.name;
+    const confirmText = deleteAll
+      ? `确定删除「${targetLabel}」下的全部文件吗？这个操作不会删除其他作品。`
+      : `确定删除已选中的 ${selectedIds.length} 个文件吗？`;
+    if (!window.confirm(confirmText)) return;
+
+    setBusy(`bulk-delete-${knowledgeType || "all"}`);
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.bulkDeleteKnowledgeDocuments(selected.id, {
+        document_ids: selectedIds,
+        knowledge_type: knowledgeType,
+        delete_all: deleteAll,
+      });
+      setSelectedDocumentIds([]);
+      setMessage(result.message);
+      await load(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除文件失败");
     } finally {
       setBusy("");
     }
@@ -158,14 +281,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function deleteDocument(documentId: number) {
-    if (!window.confirm("确定删除这个知识文档和对应分块吗？")) return;
+    if (!window.confirm("确定删除这个文件和对应分块吗？")) return;
     setBusy(`delete-${documentId}`);
     setError("");
     try {
       await api.deleteKnowledgeDocument(documentId);
+      setSelectedDocumentIds((items) => items.filter((id) => id !== documentId));
       if (selected) await load(selected.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除文档失败");
+      setError(err instanceof Error ? err.message : "删除文件失败");
     } finally {
       setBusy("");
     }
@@ -205,6 +329,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setBusy("outline");
     setError("");
     setOutline("");
+    setConfirmedOutline("");
     setCitations([]);
     try {
       const result = await api.generateOutline({
@@ -320,125 +445,194 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
           <p className="eyebrow">Writing Agent</p>
           <h1>AI 写作 Agent</h1>
         </div>
-        <p>知识库分为写作技巧指南与世界观设定。故事围绕世界观写，拆书结果只沉淀为技巧指南。</p>
+        <p>每个作品都是独立空间：写作技巧指南用于提升写法，世界观设定用于约束故事事实，作品之间互不共享文件和 Memory。</p>
       </div>
 
-      {config && <div className="notice panel">{config.privacy_note} 当前模型：{config.deepseek_model}；API Key：{config.has_deepseek_api_key ? "已配置" : "未配置"}。</div>}
-      <div className="notice panel">当前浏览器工作区：{getWorkspaceId()}。项目、进度和知识库会按这个工作区隔离，其他访客默认看不到你的进程。</div>
+      {config && (
+        <div className="notice panel">
+          {config.privacy_note} 当前模型：{config.deepseek_model}，API Key：{config.has_deepseek_api_key ? "已配置" : "未配置"}。
+        </div>
+      )}
+      <div className="notice panel">
+        当前浏览器工作区：{getWorkspaceId()}。项目、进度、作品和文件会按这个工作区隔离，其他访客默认看不到你的进程。
+      </div>
       {error && <div className="alert">{error}</div>}
       {message && <div className="panel notice">{message}</div>}
 
       <div className="agent-layout">
-        <aside className="panel agent-sidebar">
-          <form className="compact-form" onSubmit={createKnowledgeBase}>
-            <h2>知识库</h2>
+        <aside className="panel agent-sidebar work-sidebar">
+          <form className="compact-form work-create-form" onSubmit={createKnowledgeBase}>
+            <div>
+              <p className="eyebrow">Agent 写作</p>
+              <h2>作品管理</h2>
+            </div>
             <label>
-              名称
+              作品名
               <input value={name} onChange={(event) => setName(event.target.value)} />
             </label>
             <label>
-              描述
+              作品备注
               <textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
             </label>
             <button className="primary" disabled={busy === "create"}>
-              新建知识库
+              新建作品
             </button>
           </form>
 
-          <div className="file-group kb-list">
-            {knowledgeBases.map((kb) => (
-              <button key={kb.id} className={selectedId === kb.id ? "active-file" : ""} onClick={() => chooseKnowledgeBase(kb.id)}>
-                <span>
-                  <strong>{kb.name}</strong>
-                  <small>
-                    {kb.document_count} 文档 · {kb.chunk_count} 分块
-                  </small>
-                </span>
-              </button>
-            ))}
-            {!knowledgeBases.length && <p className="muted">还没有知识库。</p>}
+          <div className="work-tree">
+            <div className="work-tree-title">
+              <strong>作品文件树</strong>
+              <small>{knowledgeBases.length} 个作品</small>
+            </div>
+            {knowledgeBases.map((kb) => {
+              const expanded = expandedWorkIds.includes(kb.id);
+              const active = selectedId === kb.id;
+              return (
+                <section key={kb.id} className={`work-node ${active ? "active-work" : ""}`}>
+                  <div className="work-node-head">
+                    <button type="button" className="tree-toggle" onClick={() => toggleWork(kb.id)} aria-label={expanded ? "收起作品" : "展开作品"}>
+                      {expanded ? "⌄" : "›"}
+                    </button>
+                    <button type="button" className="work-title-button" onClick={() => chooseKnowledgeBase(kb.id)}>
+                      <strong>{kb.name}</strong>
+                      <small>
+                        {kb.document_count} 文件 · {kb.chunk_count} 分块
+                      </small>
+                    </button>
+                  </div>
+
+                  {expanded && active && (
+                    <div className="work-files">
+                      <div className="file-manager-controls">
+                        <label>
+                          导入到
+                          <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
+                            {KNOWLEDGE_GROUPS.map((group) => (
+                              <option key={group.key} value={group.key}>
+                                {group.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="button-row tight-row">
+                          <label className="button-link compact-action">
+                            上传
+                            <input
+                              className="hidden-input"
+                              type="file"
+                              multiple
+                              accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                              onChange={uploadFiles}
+                              disabled={!selected || busy === "upload"}
+                            />
+                          </label>
+                          <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
+                            导入拆书技巧
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="file-bulk-toolbar">
+                        <button type="button" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
+                          全选
+                        </button>
+                        <button type="button" onClick={() => setSelectedDocumentIds([])} disabled={!selectedDocumentIds.length}>
+                          取消
+                        </button>
+                        <button type="button" className="danger" onClick={() => bulkDeleteDocuments()} disabled={!selectedDocumentsInWork.length}>
+                          删除选中
+                        </button>
+                        <button type="button" className="danger" onClick={() => bulkDeleteDocuments(undefined, true)} disabled={!documents.length}>
+                          全部删除
+                        </button>
+                      </div>
+
+                      {KNOWLEDGE_GROUPS.map((group) => {
+                        const groupDocuments = documentsByType[group.key] || [];
+                        const groupSelected = groupDocuments.filter((document) => selectedDocumentSet.has(document.id)).length;
+                        const allGroupSelected = groupDocuments.length > 0 && groupSelected === groupDocuments.length;
+                        return (
+                          <div key={group.key} className="knowledge-tree-group">
+                            <div className="knowledge-tree-head">
+                              <button type="button" className="tree-toggle" onClick={() => toggleKnowledgeType(group.key)}>
+                                {expandedTypes[group.key] ? "⌄" : "›"}
+                              </button>
+                              <input
+                                type="checkbox"
+                                checked={allGroupSelected}
+                                disabled={!groupDocuments.length}
+                                onChange={(event) => setGroupSelection(group.key, event.target.checked)}
+                                aria-label={`选择${group.label}`}
+                              />
+                              <button type="button" className="knowledge-title-button" onClick={() => toggleKnowledgeType(group.key)}>
+                                <strong>{group.label}</strong>
+                                <small>
+                                  {groupDocuments.length} 文件
+                                  {groupSelected ? ` · 已选 ${groupSelected}` : ""}
+                                </small>
+                              </button>
+                              <button
+                                type="button"
+                                className="danger compact-action"
+                                onClick={() => bulkDeleteDocuments(group.key, true)}
+                                disabled={!groupDocuments.length || busy === `bulk-delete-${group.key}`}
+                              >
+                                清空
+                              </button>
+                            </div>
+                            {expandedTypes[group.key] && (
+                              <div className="file-row-list">
+                                {!groupDocuments.length && <p className="muted file-empty">{group.hint}</p>}
+                                {groupDocuments.map((document) => (
+                                  <div key={document.id} className={`file-row-item ${selectedDocumentSet.has(document.id) ? "selected-file" : ""}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedDocumentSet.has(document.id)}
+                                      onChange={() => toggleDocumentSelection(document.id)}
+                                      aria-label={`选择${documentTitle(document)}`}
+                                    />
+                                    <div className="file-row-main">
+                                      <strong title={documentTitle(document)}>{documentTitle(document)}</strong>
+                                      <small>
+                                        {document.chunk_count} 分块 · {formatSize(document.size_bytes)} · {document.status}
+                                      </small>
+                                      {document.error_message && <small className="warn-cell">{document.error_message}</small>}
+                                    </div>
+                                    <div className="file-row-actions">
+                                      <button type="button" onClick={() => reindexDocument(document.id)} disabled={busy === `reindex-${document.id}`}>
+                                        重建
+                                      </button>
+                                      <button type="button" className="danger" onClick={() => deleteDocument(document.id)} disabled={busy === `delete-${document.id}`}>
+                                        删
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+            {!knowledgeBases.length && <p className="muted file-empty">还没有作品。先新建一个作品，再上传知识文件。</p>}
           </div>
         </aside>
 
         <div className="agent-main">
-          <div className="panel compact-form">
-            <div className="button-row">
-              <strong>{selected?.name || "请选择知识库"}</strong>
-              <label>
-                知识类型
-                <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
-                  <option value="worldbuilding">世界观设定</option>
-                  <option value="writing_guide">写作技巧指南</option>
-                </select>
-              </label>
-              <label className="button-link">
-                上传知识文件
-                <input
-                  className="hidden-input"
-                  type="file"
-                  multiple
-                  accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  onChange={uploadFiles}
-                  disabled={!selected || busy === "upload"}
-                />
-              </label>
-              <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
-                导入当前拆书技巧
-              </button>
+          <div className="panel compact-form selected-work-card">
+            <div>
+              <p className="eyebrow">Current Work</p>
+              <h2>{selected?.name || "请选择或新建作品"}</h2>
             </div>
-            <small className="muted">拆书任务默认只导入写作技巧指南：final_reports 与 knowledge_base。世界观设定请由用户上传，或生成草案后确认导入。</small>
-          </div>
-
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>文档</th>
-                  <th>结构路径</th>
-                  <th>类型</th>
-                  <th>状态</th>
-                  <th>分块</th>
-                  <th>大小</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {documents.map((document) => (
-                  <tr key={document.id}>
-                    <td>
-                      <strong>{document.document_title || document.original_filename}</strong>
-                      <br />
-                      <small className="muted">{document.original_filename}</small>
-                      {document.error_message && <div className="warn-cell">{document.error_message}</div>}
-                    </td>
-                    <td>{document.structure_path}</td>
-                    <td>{document.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"}</td>
-                    <td>
-                      <span className={`status-pill status-${document.status}`}>{document.status}</span>
-                    </td>
-                    <td>{document.chunk_count}</td>
-                    <td>{formatSize(document.size_bytes)}</td>
-                    <td>
-                      <div className="button-row">
-                        <button type="button" onClick={() => reindexDocument(document.id)} disabled={busy === `reindex-${document.id}`}>
-                          重索引
-                        </button>
-                        <button className="danger" type="button" onClick={() => deleteDocument(document.id)} disabled={busy === `delete-${document.id}`}>
-                          删除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {!documents.length && (
-                  <tr>
-                    <td colSpan={7} className="muted">
-                      当前知识库还没有文档。可以上传文件，或导入已完成的拆书任务结果。
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            <p className="muted">
+              {selected
+                ? `${selected.name} 内共有 ${documents.length} 个文件：${documentsByType.writing_guide.length} 个写作技巧指南，${documentsByType.worldbuilding.length} 个世界观设定。`
+                : "每个作品有独立文件树、Memory 和生成上下文。"}
+            </p>
           </div>
 
           <div className="agent-two-col">
@@ -449,14 +643,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：黄金三章如何制造期待？" />
               </label>
               <button className="primary" disabled={!selected || busy === "search"}>
-                检索知识库
+                检索当前作品
               </button>
               <div className="hit-list">
                 {hits.map((hit) => (
                   <article key={hit.chunk_id}>
-                    <strong>[{hit.citation_id}] {hit.document_title || hit.original_filename}</strong>
+                    <strong>
+                      [{hit.citation_id}] {hit.document_title || hit.original_filename}
+                    </strong>
                     <small>
-                      {hit.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"} · {hit.structure_path} · score {hit.score}
+                      {knowledgeTypeLabel(hit.knowledge_type)} · {hit.structure_path} · score {hit.score}
                     </small>
                     <p>{hit.text}</p>
                   </article>
@@ -469,7 +665,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <h2>长期 Memory</h2>
                 <span className="muted">{memories.length} 条</span>
               </div>
-              <p className="muted">Memory 用来记住已确认提纲、已写正文、人物状态、伏笔和你的备注。后续生成会自动参考。</p>
+              <p className="muted">Memory 会跟随当前作品，用来承接已确认提纲、已写正文、人物状态、伏笔和你的备注。</p>
               <div className="mode-grid">
                 <label>
                   类型
@@ -486,14 +682,21 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 </label>
               </div>
               <textarea rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写下需要长期承接的上下文。" />
-              <button type="button" className="primary" disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim()} onClick={() => saveMemory(memoryTitle, memoryContent)}>
+              <button
+                type="button"
+                className="primary"
+                disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim()}
+                onClick={() => saveMemory(memoryTitle, memoryContent)}
+              >
                 保存 Memory
               </button>
               <div className="hit-list memory-list">
                 {memories.slice(0, 6).map((memory) => (
                   <article key={memory.id}>
                     <strong>{memory.title}</strong>
-                    <small>{memory.memory_type} · {memory.source}</small>
+                    <small>
+                      {memory.memory_type} · {memory.source}
+                    </small>
                     <p>{memory.content}</p>
                     <button type="button" className="danger" onClick={() => deleteMemory(memory.id)} disabled={busy === `memory-${memory.id}`}>
                       删除
@@ -509,7 +712,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
             <form className="panel compact-form writing-step" onSubmit={generateOutline}>
               <div className="step-badge">1</div>
               <h2>发送请求</h2>
-              <p className="muted">把你想写的章节、风格、字数、承接上下文都放在这里。系统会先生成提纲，不会直接生成正文。</p>
+              <p className="muted">把你想写的章节、风格、字数、承接上下文放在这里。系统会先生成提纲，不会直接生成正文。</p>
               <label>
                 写作请求
                 <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
@@ -589,7 +792,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
           <div className="panel compact-form">
             <h2>世界观设定草案</h2>
-            <p className="muted">这里生成的是原创世界观候选稿。它不会自动进入知识库，只有你确认后才会作为 worldbuilding 导入。</p>
+            <p className="muted">这里生成的是原创世界观候选稿。它不会自动进入作品文件树，只有你确认后才会作为世界观设定导入当前作品。</p>
             <label>
               故事种子
               <textarea rows={3} value={storySeed} onChange={(event) => setStorySeed(event.target.value)} />
@@ -602,7 +805,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 确认导入为世界观设定
               </button>
             </div>
-            <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入知识库。" />
+            <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入当前作品。" />
           </div>
 
           {!!citations.length && (
@@ -611,8 +814,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <div className="hit-list">
                 {citations.map((hit) => (
                   <article key={hit.chunk_id}>
-                    <strong>[{hit.citation_id}] {hit.original_filename}</strong>
-                    <small>{hit.knowledge_type === "writing_guide" ? "写作技巧" : "世界观"} · {hit.structure_path}</small>
+                    <strong>
+                      [{hit.citation_id}] {hit.original_filename}
+                    </strong>
+                    <small>
+                      {knowledgeTypeLabel(hit.knowledge_type)} · {hit.structure_path}
+                    </small>
                     <p>{hit.text}</p>
                   </article>
                 ))}

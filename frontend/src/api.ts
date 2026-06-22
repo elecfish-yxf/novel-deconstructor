@@ -299,6 +299,14 @@ export const api = {
     }),
   reindexKnowledgeDocument: (id: number) => request<KnowledgeDocument>(`/api/documents/${id}/reindex`, { method: "POST" }),
   deleteKnowledgeDocument: (id: number) => request<{ ok: boolean }>(`/api/documents/${id}`, { method: "DELETE" }),
+  bulkDeleteKnowledgeDocuments: (
+    id: number,
+    payload: { document_ids?: number[]; knowledge_type?: string; delete_all?: boolean },
+  ) =>
+    request<{ deleted: number; message: string }>(`/api/knowledge-bases/${id}/documents/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
     request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
   listWritingMemories: (knowledgeBaseId: number) => request<WritingMemory[]>(`/api/writing/memories?knowledge_base_id=${knowledgeBaseId}`),
