@@ -241,8 +241,57 @@ export type KnowledgeCard = {
   source_kind: string;
   package_id: string;
   markdown_path: string;
+  is_canonical: boolean;
+  merged_into_card_id?: string | null;
+  merged_from_ids: string[];
+  evidence_count: number;
+  content_fingerprint: string;
   created_at: string;
   updated_at: string;
+};
+
+export type KnowledgeMergeCardSummary = {
+  card_id: string;
+  title: string;
+  library_type: string;
+  card_type: string;
+  status: string;
+  is_canonical: boolean;
+  evidence_count: number;
+};
+
+export type KnowledgeMergeGroup = {
+  group_id: string;
+  action: string;
+  reason: string;
+  similarity: number;
+  primary_card_id: string;
+  candidate_card_ids: string[];
+  cards: KnowledgeMergeCardSummary[];
+};
+
+export type KnowledgeMergePreview = {
+  groups: KnowledgeMergeGroup[];
+  auto_merge_count: number;
+  review_required_count: number;
+  exact_duplicate_count: number;
+};
+
+export type KnowledgeMergeApplyResult = {
+  merged_card_count: number;
+  generated_markdown_count: number;
+  groups: KnowledgeMergeGroup[];
+  message: string;
+};
+
+export type KnowledgeMergeStats = {
+  raw_card_count: number;
+  canonical_card_count: number;
+  merged_card_count: number;
+  disabled_card_count: number;
+  deleted_card_count: number;
+  review_required_count: number;
+  reduction_rate: number;
 };
 
 export type KnowledgeMarkdownDoc = {
@@ -261,6 +310,12 @@ export type KnowledgeImportResult = {
   imported_count: number;
   generated_markdown_count: number;
   skipped_count: number;
+  raw_card_count?: number;
+  canonical_card_count?: number;
+  exact_duplicate_count?: number;
+  merged_card_count?: number;
+  review_required_count?: number;
+  reduction_rate?: number;
   card_types: Record<string, number>;
   markdown_root: string;
   message: string;
@@ -274,6 +329,9 @@ export type UsedKnowledge = {
   title: string;
   score: number;
   source_ref: Record<string, unknown>;
+  content_preview?: string;
+  tags?: string[];
+  status?: string | null;
 };
 
 export type RAGSearchResult = UsedKnowledge & {
@@ -289,15 +347,24 @@ export type LongGenerationSection = {
   status: string;
   focus: string;
   content: string;
+  supplement_count?: number;
+  cjk_chars?: number;
+  non_space_chars?: number;
+  estimated_tokens?: number;
+  error_message?: string | null;
   used_knowledge: UsedKnowledge[];
   retrieval_debug?: RetrievalDebug | null;
 };
 
 export type RetrievalDebug = {
   query: string;
+  raw_query?: string | null;
+  expanded_terms?: string[];
   preferred_card_types: string[];
   total_candidates: number;
   selected_count: number;
+  filtered_duplicate_count?: number;
+  diversity_buckets?: Record<string, number>;
   stage?: string | null;
   top_k?: number | null;
 };
@@ -311,9 +378,37 @@ export type WritingGenerateResult = {
   prompt_preview?: string | null;
   target_chars?: number | null;
   actual_chars?: number | null;
+  cjk_chars?: number | null;
+  non_space_chars?: number | null;
+  estimated_tokens?: number | null;
+  completion_ratio?: number | null;
   section_count?: number | null;
   sections?: LongGenerationSection[];
   warnings?: string[];
+  memory_written?: boolean;
+};
+
+export type WritingDraftJob = {
+  job_id: string;
+  work_id: number;
+  status: string;
+  stage: string;
+  target_chars?: number | null;
+  actual_chars?: number | null;
+  cjk_chars?: number | null;
+  non_space_chars?: number | null;
+  estimated_tokens?: number | null;
+  completion_ratio?: number | null;
+  section_count?: number | null;
+  current_section?: number | null;
+  content: string;
+  sections: LongGenerationSection[];
+  used_knowledge: UsedKnowledge[];
+  retrieval_debug?: RetrievalDebug | null;
+  warnings: string[];
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RetrievalHit = {
@@ -463,7 +558,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ job_id: jobId }),
     }),
-  importKnowledgePackage: (workId: number, payload: { package_path?: string; package_json?: Record<string, unknown>; library_type?: string; status?: string }) =>
+  importKnowledgePackage: (
+    workId: number,
+    payload: {
+      package_path?: string;
+      package_json?: Record<string, unknown>;
+      library_type?: string;
+      status?: string;
+      merge_mode?: string;
+      auto_merge_threshold?: number;
+      review_threshold?: number;
+      generate_markdown?: boolean;
+      markdown_scope?: string;
+    },
+  ) =>
     request<KnowledgeImportResult>(
       `/api/writing/works/${workId}/knowledge/import-package`,
       { method: "POST", body: JSON.stringify(payload) },
@@ -492,10 +600,10 @@ export const api = {
     }
     return results;
   },
-  listKnowledgeCards: (workId: number, params: { library_type?: string; card_type?: string; status?: string; tag?: string; keyword?: string } = {}) => {
+  listKnowledgeCards: (workId: number, params: { library_type?: string; card_type?: string; status?: string; tag?: string; keyword?: string; is_canonical?: boolean } = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
-      if (value) query.set(key, value);
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
     });
     return request<KnowledgeCard[]>(`/api/writing/works/${workId}/knowledge/cards${query.toString() ? `?${query}` : ""}`);
   },
@@ -506,6 +614,19 @@ export const api = {
     }),
   deleteKnowledgeCard: (workId: number, cardId: string) =>
     request<KnowledgeCard>(`/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}`, { method: "DELETE" }),
+  previewKnowledgeMerges: (workId: number, payload: { merge_mode?: string; auto_merge_threshold?: number; review_threshold?: number } = {}) =>
+    request<KnowledgeMergePreview>(`/api/writing/works/${workId}/knowledge/merge/preview`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  applyKnowledgeMerges: (workId: number, payload: { merge_mode?: string; auto_merge_threshold?: number; review_threshold?: number } = {}) =>
+    request<KnowledgeMergeApplyResult>(`/api/writing/works/${workId}/knowledge/merge/apply`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getKnowledgeMergeStats: (workId: number) => request<KnowledgeMergeStats>(`/api/writing/works/${workId}/knowledge/merge/stats`),
+  unmergeKnowledgeCard: (workId: number, cardId: string) =>
+    request<KnowledgeCard>(`/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}/unmerge`, { method: "POST" }),
   listKnowledgeMarkdownDocs: (workId: number) => request<KnowledgeMarkdownDoc[]>(`/api/writing/works/${workId}/knowledge/docs`),
   readKnowledgeMarkdownDoc: (workId: number, docId: string) =>
     request<{ doc_id: string; card_id: string; content: string; path: string }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}`),
@@ -625,6 +746,54 @@ export const api = {
   ) =>
     request<WritingGenerateResult>(
       `/api/writing/works/${workId}/agent/draft`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  createWorkDraftJob: (
+    workId: number,
+    payload: {
+      knowledge_base_ids?: number[];
+      task: string;
+      confirmed_outline: string;
+      current_content?: string;
+      mode?: string;
+      knowledge_mode?: string;
+      model_provider?: string;
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      dry_run?: boolean;
+      top_k?: number;
+      target_chars?: number;
+    },
+  ) =>
+    request<WritingDraftJob>(
+      `/api/writing/works/${workId}/agent/draft-jobs`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  getWorkDraftJob: (workId: number, jobId: string) =>
+    request<WritingDraftJob>(`/api/writing/works/${workId}/agent/draft-jobs/${encodeURIComponent(jobId)}`),
+  cancelWorkDraftJob: (workId: number, jobId: string) =>
+    request<WritingDraftJob>(`/api/writing/works/${workId}/agent/draft-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
+  generateWorkRevision: (
+    workId: number,
+    payload: {
+      knowledge_base_ids?: number[];
+      task: string;
+      confirmed_outline?: string;
+      current_content?: string;
+      mode?: string;
+      knowledge_mode?: string;
+      model_provider?: string;
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      dry_run?: boolean;
+      top_k?: number;
+      target_chars?: number;
+    },
+  ) =>
+    request<WritingGenerateResult>(
+      `/api/writing/works/${workId}/agent/revision`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
   generateWriting: (payload: {

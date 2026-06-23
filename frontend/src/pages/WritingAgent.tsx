@@ -7,6 +7,8 @@ import {
   KnowledgeCard,
   KnowledgeDocument,
   KnowledgeImportResult,
+  KnowledgeMergeGroup,
+  KnowledgeMergeStats,
   KnowledgeMarkdownDoc,
   LongGenerationSection,
   PublicConfig,
@@ -14,8 +16,11 @@ import {
   RetrievalDebug,
   RetrievalHit,
   UsedKnowledge,
+  WritingDraftJob,
   WritingMemory,
 } from "../api";
+
+const DRAFT_JOB_KEY = "novel-deconstructor.last-draft-job";
 
 const KNOWLEDGE_GROUPS = [
   {
@@ -53,6 +58,19 @@ function compactSourceRef(sourceRef: Record<string, unknown>) {
     .join(" · ");
 }
 
+function storeDraftJobRef(workId: number, jobId: string) {
+  window.localStorage.setItem(DRAFT_JOB_KEY, JSON.stringify({ workId, jobId }));
+}
+
+function readDraftJobRef(): { workId: number; jobId: string } | null {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DRAFT_JOB_KEY) || "null");
+    return typeof parsed?.workId === "number" && typeof parsed?.jobId === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function WritingAgent({ job }: { job?: Job | null }) {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -60,6 +78,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [markdownDocs, setMarkdownDocs] = useState<KnowledgeMarkdownDoc[]>([]);
+  const [mergeStats, setMergeStats] = useState<KnowledgeMergeStats | null>(null);
+  const [mergeGroups, setMergeGroups] = useState<KnowledgeMergeGroup[]>([]);
   const [memories, setMemories] = useState<WritingMemory[]>([]);
   const [name, setName] = useState("作品 1");
   const [description, setDescription] = useState("用于 AI 写作 Agent 的独立作品空间");
@@ -81,6 +101,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [markdownSourcePath, setMarkdownSourcePath] = useState("");
   const [activeKnowledgeTab, setActiveKnowledgeTab] = useState<"cards" | "docs" | "result">("cards");
   const [cardTypeFilter, setCardTypeFilter] = useState("all");
+  const [showRawCards, setShowRawCards] = useState(false);
   const [selectedCardId, setSelectedCardId] = useState("");
   const [selectedDocId, setSelectedDocId] = useState("");
   const [markdownContent, setMarkdownContent] = useState("");
@@ -96,6 +117,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [actualChars, setActualChars] = useState<number | null>(null);
   const [longSections, setLongSections] = useState<LongGenerationSection[]>([]);
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const [draftJob, setDraftJob] = useState<WritingDraftJob | null>(null);
   const [memoryType, setMemoryType] = useState("note");
   const [memoryTitle, setMemoryTitle] = useState("");
   const [memoryContent, setMemoryContent] = useState("");
@@ -126,7 +148,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     [documents, selectedDocumentSet],
   );
   const cardFilterGroups = useMemo(() => {
-    const grouped = cards.reduce<Record<string, { key: string; label: string; count: number }>>((acc, card) => {
+    const visibleCards = showRawCards ? cards : cards.filter((card) => card.is_canonical);
+    const grouped = visibleCards.reduce<Record<string, { key: string; label: string; count: number }>>((acc, card) => {
       const key = `${card.library_type}/${card.card_type}`;
       if (!acc[key]) {
         acc[key] = { key, label: key, count: 0 };
@@ -134,12 +157,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       acc[key].count += 1;
       return acc;
     }, {});
-    return [{ key: "all", label: "全部", count: cards.length }, ...Object.values(grouped).sort((a, b) => a.label.localeCompare(b.label))];
-  }, [cards]);
+    return [{ key: "all", label: showRawCards ? "全部" : "Canonical", count: visibleCards.length }, ...Object.values(grouped).sort((a, b) => a.label.localeCompare(b.label))];
+  }, [cards, showRawCards]);
   const filteredCards = useMemo(() => {
-    if (cardTypeFilter === "all") return cards;
-    return cards.filter((card) => `${card.library_type}/${card.card_type}` === cardTypeFilter);
-  }, [cards, cardTypeFilter]);
+    const visibleCards = showRawCards ? cards : cards.filter((card) => card.is_canonical);
+    if (cardTypeFilter === "all") return visibleCards;
+    return visibleCards.filter((card) => `${card.library_type}/${card.card_type}` === cardTypeFilter);
+  }, [cards, cardTypeFilter, showRawCards]);
   const writingModels = useMemo(() => {
     if (config?.writing_models?.length) return config.writing_models;
     return [
@@ -174,6 +198,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setActualChars(null);
     setLongSections([]);
     setGenerationWarnings([]);
+    setDraftJob(null);
   }
 
   async function load(nextSelectedId?: number | null) {
@@ -194,22 +219,27 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     if (selectedChanged) clearTransientWritingState();
     if (preferred) {
       setExpandedWorkIds((items) => (items.includes(preferred) ? items : [...items, preferred]));
-      const [nextDocuments, nextMemories, nextCards, nextDocs] = await Promise.all([
+      const [nextDocuments, nextMemories, nextCards, nextDocs, nextStats] = await Promise.all([
         api.listKnowledgeDocuments(preferred),
         api.listWritingMemories(preferred),
         api.listKnowledgeCards(preferred),
         api.listKnowledgeMarkdownDocs(preferred),
+        api.getKnowledgeMergeStats(preferred),
       ]);
       setDocuments(nextDocuments);
       setMemories(nextMemories);
       setCards(nextCards);
       setMarkdownDocs(nextDocs);
+      setMergeStats(nextStats);
+      setMergeGroups([]);
       setSelectedDocumentIds((items) => items.filter((id) => nextDocuments.some((document) => document.id === id)));
     } else {
       setDocuments([]);
       setMemories([]);
       setCards([]);
       setMarkdownDocs([]);
+      setMergeStats(null);
+      setMergeGroups([]);
       setSelectedDocumentIds([]);
     }
   }
@@ -217,6 +247,35 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   useEffect(() => {
     load().catch((err) => setError(err instanceof Error ? err.message : "加载写作 Agent 失败"));
   }, []);
+
+  function applyDraftJob(job: WritingDraftJob) {
+    setDraftJob(job);
+    setDraft(job.content || "");
+    setUsedKnowledge(job.used_knowledge || []);
+    setRetrievalDebug(job.retrieval_debug || null);
+    setActualChars(job.actual_chars ?? null);
+    setLongSections(job.sections || []);
+    setGenerationWarnings(job.warnings || []);
+    if (job.status === "failed" && job.error_message) setError(job.error_message);
+  }
+
+  useEffect(() => {
+    if (!selected || !draftJob || ["completed", "failed", "cancelled"].includes(draftJob.status)) return;
+    const timer = window.setTimeout(() => {
+      api
+        .getWorkDraftJob(selected.id, draftJob.job_id)
+        .then(applyDraftJob)
+        .catch((err) => setError(err instanceof Error ? err.message : "查询长文本任务失败"));
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [selected, draftJob]);
+
+  useEffect(() => {
+    if (!selected || draftJob) return;
+    const ref = readDraftJobRef();
+    if (!ref || ref.workId !== selected.id) return;
+    api.getWorkDraftJob(selected.id, ref.jobId).then(applyDraftJob).catch(() => undefined);
+  }, [selected, draftJob]);
 
   async function createKnowledgeBase(event: FormEvent) {
     event.preventDefault();
@@ -242,16 +301,19 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     if (selectedChanged) clearTransientWritingState();
     setExpandedWorkIds((items) => (items.includes(id) ? items : [...items, id]));
     setError("");
-    const [nextDocuments, nextMemories, nextCards, nextDocs] = await Promise.all([
+    const [nextDocuments, nextMemories, nextCards, nextDocs, nextStats] = await Promise.all([
       api.listKnowledgeDocuments(id),
       api.listWritingMemories(id),
       api.listKnowledgeCards(id),
       api.listKnowledgeMarkdownDocs(id),
+      api.getKnowledgeMergeStats(id),
     ]);
     setDocuments(nextDocuments);
     setMemories(nextMemories);
     setCards(nextCards);
     setMarkdownDocs(nextDocs);
+    setMergeStats(nextStats);
+    setMergeGroups([]);
   }
 
   function toggleWork(id: number) {
@@ -318,9 +380,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function refreshKnowledgeCards(workId = selected?.id) {
     if (!workId) return;
-    const [nextCards, nextDocs] = await Promise.all([api.listKnowledgeCards(workId), api.listKnowledgeMarkdownDocs(workId)]);
+    const [nextCards, nextDocs, nextStats] = await Promise.all([api.listKnowledgeCards(workId), api.listKnowledgeMarkdownDocs(workId), api.getKnowledgeMergeStats(workId)]);
     setCards(nextCards);
     setMarkdownDocs(nextDocs);
+    setMergeStats(nextStats);
   }
 
   async function importKnowledgePackage() {
@@ -333,6 +396,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         package_path: packagePath,
         library_type: "writing_guide",
         status: "approved",
+        merge_mode: "safe",
+        markdown_scope: "canonical_only",
       });
       setMessage(result.message);
       await refreshKnowledgeCards(selected.id);
@@ -546,6 +611,53 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     }
   }
 
+  async function previewMerges() {
+    if (!selected) return;
+    setBusy("merge-preview");
+    setError("");
+    try {
+      const result = await api.previewKnowledgeMerges(selected.id, { merge_mode: "preview" });
+      setMergeGroups(result.groups);
+      setMessage(`发现 ${result.auto_merge_count} 张可安全合并卡片，${result.review_required_count} 组需要人工确认。`);
+      await refreshKnowledgeCards(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "合并预览失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applySafeMerges() {
+    if (!selected) return;
+    setBusy("merge-apply");
+    setError("");
+    try {
+      const result = await api.applyKnowledgeMerges(selected.id, { merge_mode: "safe" });
+      setMergeGroups(result.groups);
+      setMessage(result.message);
+      await refreshKnowledgeCards(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "执行安全合并失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function unmergeCard(card: KnowledgeCard) {
+    if (!selected) return;
+    setBusy(`unmerge-${card.card_id}`);
+    setError("");
+    try {
+      await api.unmergeKnowledgeCard(selected.id, card.card_id);
+      await refreshKnowledgeCards(selected.id);
+      setMessage(`已恢复知识卡：${card.title}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "恢复知识卡失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function deleteKnowledgeCard(card: KnowledgeCard) {
     if (!selected || !window.confirm(`确定软删除知识卡「${card.title}」吗？`)) return;
     setBusy(`card-${card.card_id}`);
@@ -671,9 +783,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setRagResults(
         (result.used_knowledge || []).map((item) => ({
           ...item,
-          content_preview: "",
-          tags: [],
-          status: "used",
+          content_preview: item.content_preview || "",
+          tags: item.tags || [],
+          status: item.status || "used",
         })),
       );
     } catch (err) {
@@ -739,6 +851,83 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setGenerationWarnings(result.warnings || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成正文失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function startDraftJob() {
+    if (!selected || !confirmedOutline.trim()) return;
+    setBusy("draft-job");
+    setError("");
+    setDraftJob(null);
+    setDraft("");
+    setLongSections([]);
+    setGenerationWarnings([]);
+    try {
+      const job = await api.createWorkDraftJob(selected.id, {
+        task: `请根据用户已确认的章节提纲生成小说正文：${outlineTask}`,
+        confirmed_outline: confirmedOutline,
+        current_content: outlineContext,
+        mode,
+        knowledge_mode: knowledgeMode,
+        ...selectedWritingModelPayload,
+        dry_run: dryRun,
+        top_k: ragTopK,
+        target_chars: targetChars,
+      });
+      storeDraftJobRef(selected.id, job.job_id);
+      applyDraftJob(job);
+      setActiveKnowledgeTab("result");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建长文本任务失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function cancelDraftJob() {
+    if (!selected || !draftJob) return;
+    setBusy("draft-job-cancel");
+    setError("");
+    try {
+      const job = await api.cancelWorkDraftJob(selected.id, draftJob.job_id);
+      applyDraftJob(job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "取消长文本任务失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function generateRevision() {
+    if (!selected || !draft.trim()) return;
+    setBusy("revision");
+    setError("");
+    setCitations([]);
+    setGenerationWarnings([]);
+    try {
+      const result = await api.generateWorkRevision(selected.id, {
+        task: `请在不改变已确认世界观和人物连续性的前提下润色/改写当前正文：${outlineTask}`,
+        confirmed_outline: confirmedOutline,
+        current_content: draft,
+        mode,
+        knowledge_mode: knowledgeMode,
+        ...selectedWritingModelPayload,
+        dry_run: dryRun,
+        top_k: ragTopK,
+        target_chars: actualChars || targetChars,
+      });
+      setDraft(result.content);
+      setCitations(result.citations);
+      setUsedKnowledge(result.used_knowledge || []);
+      setRetrievalDebug(result.retrieval_debug || null);
+      setPromptPreview(result.prompt_preview || "");
+      setActualChars(result.actual_chars ?? result.content.length);
+      setLongSections(result.sections || []);
+      setGenerationWarnings(result.warnings || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "润色正文失败");
     } finally {
       setBusy("");
     }
@@ -1029,6 +1218,53 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
             {activeKnowledgeTab === "cards" && (
               <div className="knowledge-card-panel">
+                <div className="metric-grid">
+                  <div>
+                    <strong>{mergeStats?.raw_card_count ?? 0}</strong>
+                    <span>Raw Cards</span>
+                  </div>
+                  <div>
+                    <strong>{mergeStats?.canonical_card_count ?? cards.filter((card) => card.is_canonical).length}</strong>
+                    <span>Canonical Cards</span>
+                  </div>
+                  <div>
+                    <strong>{mergeStats?.merged_card_count ?? cards.filter((card) => card.status === "merged").length}</strong>
+                    <span>已合并</span>
+                  </div>
+                  <div>
+                    <strong>{mergeStats?.review_required_count ?? 0}</strong>
+                    <span>待确认组</span>
+                  </div>
+                  <div>
+                    <strong>{Math.round((mergeStats?.reduction_rate ?? 0) * 100)}%</strong>
+                    <span>精简比例</span>
+                  </div>
+                </div>
+                <div className="button-row">
+                  <button type="button" onClick={() => setShowRawCards((value) => !value)}>
+                    {showRawCards ? "隐藏 Raw Evidence" : "显示 Raw Evidence"}
+                  </button>
+                  <button type="button" onClick={previewMerges} disabled={!selected || busy === "merge-preview"}>
+                    预览安全合并
+                  </button>
+                  <button type="button" className="primary" onClick={applySafeMerges} disabled={!selected || busy === "merge-apply"}>
+                    执行安全合并
+                  </button>
+                </div>
+                {!!mergeGroups.length && (
+                  <div className="merge-preview-list">
+                    {mergeGroups.slice(0, 6).map((group) => (
+                      <div key={group.group_id} className="merge-preview-item">
+                        <strong>
+                          {group.reason} · {group.action} · {Math.round(group.similarity * 100)}%
+                        </strong>
+                        <small>
+                          主卡 {group.primary_card_id}；候选 {group.candidate_card_ids.join("、") || "无"}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="filter-chip-row">
                   {cardFilterGroups.map((group) => (
                     <button key={group.key} type="button" className={cardTypeFilter === group.key ? "active-chip" : ""} onClick={() => setCardTypeFilter(group.key)}>
@@ -1045,8 +1281,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                         <span className={`status-pill status-${card.status}`}>{card.status}</span>
                       </div>
                       <small>
-                        {card.library_type} / {card.card_type} · {Math.round(card.confidence * 100)}%
+                        {card.library_type} / {card.card_type} · {card.is_canonical ? "canonical" : "raw"} · evidence {card.evidence_count} · {Math.round(card.confidence * 100)}%
                       </small>
+                      {card.merged_into_card_id && <small className="source-ref">merged into {card.merged_into_card_id}</small>}
                       <p>{card.summary || card.content.slice(0, 180)}</p>
                       <div className="tag-row">
                         {card.tags.slice(0, 5).map((tag) => (
@@ -1064,6 +1301,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                         <button type="button" onClick={() => regenerateMarkdown(card)} disabled={busy === `export-${card.card_id}`}>
                           生成 MD
                         </button>
+                        {!card.is_canonical && (
+                          <button type="button" onClick={() => unmergeCard(card)} disabled={busy === `unmerge-${card.card_id}`}>
+                            恢复
+                          </button>
+                        )}
                         <button type="button" className="danger" onClick={() => deleteKnowledgeCard(card)} disabled={busy === `card-${card.card_id}`}>
                           删除
                         </button>
@@ -1124,6 +1366,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     <strong>{usedKnowledge.length}</strong>
                   </div>
                   <div>
+                    <span>Job</span>
+                    <strong>{draftJob?.status || "sync"}</strong>
+                  </div>
+                  <div>
                     <span>目标/实际字数</span>
                     <strong>
                       {targetChars} / {actualChars ?? 0}
@@ -1133,7 +1379,20 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     <span>分段数</span>
                     <strong>{longSections.length || 1}</strong>
                   </div>
+                  <div>
+                    <span>Ratio</span>
+                    <strong>{draftJob?.completion_ratio ? `${Math.round(draftJob.completion_ratio * 100)}%` : actualChars ? `${Math.round((actualChars / targetChars) * 100)}%` : "0%"}</strong>
+                  </div>
                 </div>
+                {draftJob && (
+                  <div className="retrieval-debug">
+                    <strong>长文本任务</strong>
+                    <small>
+                      {draftJob.job_id.slice(0, 8)} · {draftJob.status} · {draftJob.current_section || 0}/{draftJob.section_count || longSections.length || 0}
+                    </small>
+                    {!!draftJob.error_message && <p>{draftJob.error_message}</p>}
+                  </div>
+                )}
                 {!!generationWarnings.length && (
                   <div className="retrieval-debug">
                     <strong>生成提示</strong>
@@ -1152,6 +1411,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                         <small>
                           {item.library_type} · score {item.score}
                         </small>
+                        {!!compactSourceRef(item.source_ref) && <small className="source-ref">{compactSourceRef(item.source_ref)}</small>}
+                        {!!item.content_preview && <p>{item.content_preview}</p>}
                       </article>
                     ))}
                   </div>
@@ -1169,7 +1430,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                           </span>
                         </div>
                         <p>{section.focus}</p>
-                        <small>used_knowledge {section.used_knowledge.length}</small>
+                        <small>
+                          used_knowledge {section.used_knowledge.length} · supplement {section.supplement_count || 0} · cjk {section.cjk_chars || 0}
+                        </small>
                       </article>
                     ))}
                   </div>
@@ -1216,8 +1479,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   <strong>召回策略</strong>
                   <small>
                     {retrievalDebug.stage} · top_k {retrievalDebug.top_k} · 候选 {retrievalDebug.total_candidates} · 选中 {retrievalDebug.selected_count}
+                    {!!retrievalDebug.filtered_duplicate_count && ` · 去重 ${retrievalDebug.filtered_duplicate_count}`}
                   </small>
+                  {retrievalDebug.raw_query && <p>raw: {retrievalDebug.raw_query}</p>}
                   <p>{retrievalDebug.preferred_card_types.join(" / ")}</p>
+                  {!!retrievalDebug.expanded_terms?.length && <p>{retrievalDebug.expanded_terms.slice(0, 16).join(" / ")}</p>}
                 </div>
               )}
               <div className="hit-list">
@@ -1385,12 +1651,23 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft" || modelCallBlocked}>
                 根据确认提纲生成正文
               </button>
+              <div className="button-row">
+                <button type="button" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked} onClick={startDraftJob}>
+                  后台长文本任务
+                </button>
+                <button type="button" disabled={!draftJob || ["completed", "failed", "cancelled"].includes(draftJob.status) || busy === "draft-job-cancel"} onClick={cancelDraftJob}>
+                  取消任务
+                </button>
+              </div>
               <div className="preview-panel inline-output">
                 <div className="preview-toolbar">
                   <strong>小说正文</strong>
                   <div className="button-row">
                     <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
                       复制正文
+                    </button>
+                    <button type="button" disabled={!selected || !draft || busy === "revision" || modelCallBlocked} onClick={generateRevision}>
+                      润色/改写正文
                     </button>
                     <button
                       type="button"

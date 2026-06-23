@@ -813,6 +813,45 @@ th {
   padding: 14px;
 }
 
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.metric-grid div {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 3px;
+}
+
+.metric-grid strong {
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.metric-grid span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.merge-preview-list {
+  display: grid;
+  gap: 8px;
+}
+
+.merge-preview-item {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 3px;
+}
+
 .filter-chip-row {
   display: flex;
   flex-wrap: wrap;

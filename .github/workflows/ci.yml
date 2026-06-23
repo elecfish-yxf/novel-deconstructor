@@ -5,6 +5,44 @@ on:
   pull_request:
 
 jobs:
+  hygiene:
+    name: Whitespace check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check patch whitespace
+        run: git diff --check HEAD^..HEAD
+
+  security:
+    name: Security smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure env files are not tracked
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; then
+            echo "Tracked .env file detected"
+            exit 1
+          fi
+      - name: Scan common secret patterns
+        run: |
+          if grep -RInE '(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AKTP[0-9A-Za-z_-]{20,}|mysql\+pymysql://[^<[:space:]]+:[^<[:space:]]+@)' \
+            --exclude-dir=.git \
+            --exclude-dir=node_modules \
+            --exclude-dir=.venv \
+            --exclude-dir=dist \
+            --exclude-dir=storage \
+            --exclude-dir=uploads \
+            --exclude-dir=outputs \
+            --exclude-dir=logs \
+            --exclude='*.tsbuildinfo' \
+            .; then
+            echo "Potential secret detected"
+            exit 1
+          fi
+
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
@@ -36,3 +74,6 @@ jobs:
       - name: Type check
         working-directory: frontend
         run: npm exec tsc -- --noEmit -p tsconfig.json
+      - name: Production build
+        working-directory: frontend
+        run: npm run build

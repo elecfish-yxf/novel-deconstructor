@@ -106,6 +106,18 @@ def ensure_schema_upgrades() -> None:
             connection.execute(text("ALTER TABLE writing_memories ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'"))
         if rows and "source_ref_json" not in columns:
             connection.execute(text("ALTER TABLE writing_memories ADD COLUMN source_ref_json TEXT NOT NULL DEFAULT '{}'"))
+        rows = connection.execute(text("PRAGMA table_info(knowledge_cards)")).mappings().all()
+        columns = {row["name"] for row in rows}
+        if rows and "is_canonical" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN is_canonical BOOLEAN NOT NULL DEFAULT 1"))
+        if rows and "merged_into_card_id" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN merged_into_card_id VARCHAR(96)"))
+        if rows and "merged_from_ids_json" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN merged_from_ids_json TEXT NOT NULL DEFAULT '[]'"))
+        if rows and "evidence_count" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1"))
+        if rows and "content_fingerprint" not in columns:
+            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN content_fingerprint VARCHAR(64) NOT NULL DEFAULT ''"))
 
 
 def seed_deconstruction_skills(db: Session) -> None:

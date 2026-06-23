@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 import json
 import math
 import re
+import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..config import PROJECT_ROOT
 from ..config import get_settings
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..models import DeconstructionSkill, KnowledgeBase, KnowledgeCard, WritingMemory
 from ..schemas import (
     KnowledgeCardRead,
     KnowledgeCardUpdate,
+    KnowledgeMergeApplyResponse,
+    KnowledgeMergePreviewResponse,
+    KnowledgeMergeRequest,
+    KnowledgeMergeStatsResponse,
     KnowledgeMarkdownImportRequest,
     KnowledgeMarkdownImportResponse,
     KnowledgeMarkdownDocContent,
@@ -29,32 +35,38 @@ from ..schemas import (
     WorldbuildingDraftRequest,
     WorldbuildingDraftResponse,
     WritingDraftRequest,
+    WritingDraftJobRead,
     WritingGenerateRequest,
     WritingGenerateResponse,
     WritingMemoryConfirmRequest,
     WritingMemoryCreate,
     WritingMemoryRead,
     WritingOutlineRequest,
+    WritingRevisionRequest,
 )
 from ..services.knowledge_cards import (
     card_to_read,
     delete_markdown_doc,
     export_card_markdown,
     get_card_or_404,
+    apply_knowledge_card_merges,
     import_knowledge_package,
     import_markdown_knowledge_source,
+    knowledge_card_merge_stats,
     list_markdown_docs,
+    preview_knowledge_card_merges,
     read_markdown_doc,
     save_markdown_doc,
-    search_knowledge_cards,
     sync_card_from_markdown,
     sync_deleted_markdown,
     sync_memory_card,
+    unmerge_knowledge_card,
     used_knowledge_from_results,
     write_card_markdown,
 )
 from ..services.knowledge_base import search_knowledge
 from ..services.llm_provider import DoubaoResponsesProvider, LLMProvider, LLMRequest, OpenAICompatibleProvider, is_doubao_base_url
+from ..services.rag_retrieval import search_rag_cards
 from .workspace import get_workspace_id
 
 
@@ -73,6 +85,9 @@ AGENT_RETRIEVAL_PROTOCOL = {
 SINGLE_CALL_SOFT_LIMIT_CHARS = 2500
 DEFAULT_LONG_SECTION_CHARS = 2000
 LONG_GENERATION_TOLERANCE = 0.1
+SECTION_MIN_COMPLETION_RATIO = 0.8
+MAX_SECTION_SUPPLEMENTS = 2
+DRAFT_GENERATION_JOBS: dict[str, dict[str, Any]] = {}
 
 
 @router.get("/memories", response_model=list[WritingMemoryRead])
@@ -182,7 +197,19 @@ def import_package_to_work(
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     package = _load_package_payload(payload)
-    return KnowledgePackageImportResponse(**import_knowledge_package(db, kb, package, library_type=payload.library_type, status=payload.status))
+    return KnowledgePackageImportResponse(
+        **import_knowledge_package(
+            db,
+            kb,
+            package,
+            library_type=payload.library_type,
+            status=payload.status,
+            merge_mode=payload.merge_mode,
+            auto_merge_threshold=payload.auto_merge_threshold,
+            review_threshold=payload.review_threshold,
+            generate_markdown=payload.generate_markdown,
+        )
+    )
 
 
 @router.post("/works/{work_id}/knowledge/import-markdown", response_model=KnowledgeMarkdownImportResponse)
@@ -244,6 +271,7 @@ def list_cards(
     status: str | None = None,
     tag: str | None = None,
     keyword: str | None = None,
+    is_canonical: bool | None = None,
     workspace_id: str = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
@@ -255,6 +283,8 @@ def list_cards(
         query = query.filter(KnowledgeCard.card_type == card_type)
     if status:
         query = query.filter(KnowledgeCard.status == status)
+    if is_canonical is not None:
+        query = query.filter(KnowledgeCard.is_canonical.is_(is_canonical))
     if tag:
         query = query.filter(KnowledgeCard.tags_json.ilike(f"%{tag}%"))
     if keyword:
@@ -267,6 +297,52 @@ def list_cards(
         )
     cards = query.order_by(KnowledgeCard.library_type, KnowledgeCard.card_type, KnowledgeCard.card_id).all()
     return [KnowledgeCardRead.model_validate(card_to_read(card)) for card in cards]
+
+
+@router.post("/works/{work_id}/knowledge/merge/preview", response_model=KnowledgeMergePreviewResponse)
+def preview_card_merges(
+    work_id: int,
+    payload: KnowledgeMergeRequest | None = None,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    payload = payload or KnowledgeMergeRequest()
+    return KnowledgeMergePreviewResponse.model_validate(
+        preview_knowledge_card_merges(
+            db,
+            kb,
+            merge_mode=payload.merge_mode,
+            auto_merge_threshold=payload.auto_merge_threshold,
+            review_threshold=payload.review_threshold,
+        )
+    )
+
+
+@router.post("/works/{work_id}/knowledge/merge/apply", response_model=KnowledgeMergeApplyResponse)
+def apply_card_merges(
+    work_id: int,
+    payload: KnowledgeMergeRequest | None = None,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    payload = payload or KnowledgeMergeRequest()
+    return KnowledgeMergeApplyResponse.model_validate(
+        apply_knowledge_card_merges(
+            db,
+            kb,
+            merge_mode=payload.merge_mode,
+            auto_merge_threshold=payload.auto_merge_threshold,
+            review_threshold=payload.review_threshold,
+        )
+    )
+
+
+@router.get("/works/{work_id}/knowledge/merge/stats", response_model=KnowledgeMergeStatsResponse)
+def card_merge_stats(work_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    return KnowledgeMergeStatsResponse.model_validate(knowledge_card_merge_stats(db, kb))
 
 
 @router.get("/works/{work_id}/knowledge/cards/{card_id}", response_model=KnowledgeCardRead)
@@ -306,6 +382,12 @@ def delete_card(work_id: int, card_id: str, workspace_id: str = Depends(get_work
     db.commit()
     db.refresh(card)
     return KnowledgeCardRead.model_validate(card_to_read(card))
+
+
+@router.post("/works/{work_id}/knowledge/cards/{card_id}/unmerge", response_model=KnowledgeCardRead)
+def unmerge_card(work_id: int, card_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    return KnowledgeCardRead.model_validate(card_to_read(unmerge_knowledge_card(db, kb, card_id)))
 
 
 @router.get("/works/{work_id}/knowledge/docs", response_model=list[KnowledgeMarkdownDocRead])
@@ -364,7 +446,7 @@ def rag_search(
     db: Session = Depends(get_db),
 ):
     _ensure_workspace_kb(db, workspace_id, work_id)
-    results, debug = search_knowledge_cards(
+    results, debug = search_rag_cards(
         db,
         [work_id],
         stage=payload.stage,
@@ -398,7 +480,80 @@ async def generate_work_draft(
     return await _generate_with_cards(db, kb, payload, stage="draft", confirmed_outline=payload.confirmed_outline)
 
 
-@router.post("/outline", response_model=WritingGenerateResponse)
+@router.post("/works/{work_id}/agent/draft-jobs", response_model=WritingDraftJobRead)
+async def create_work_draft_job(
+    work_id: int,
+    payload: WritingDraftRequest,
+    background_tasks: BackgroundTasks,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    _ensure_workspace_kb(db, workspace_id, work_id)
+    job_id = uuid.uuid4().hex
+    now = datetime.utcnow()
+    target_chars = _resolve_target_chars(payload)
+    DRAFT_GENERATION_JOBS[job_id] = {
+        "job_id": job_id,
+        "work_id": work_id,
+        "workspace_id": workspace_id,
+        "status": "queued",
+        "stage": "draft",
+        "target_chars": target_chars,
+        "actual_chars": None,
+        "cjk_chars": None,
+        "non_space_chars": None,
+        "estimated_tokens": None,
+        "completion_ratio": None,
+        "section_count": None,
+        "current_section": None,
+        "content": "",
+        "sections": [],
+        "used_knowledge": [],
+        "retrieval_debug": None,
+        "warnings": ["长文本任务已排队；确认正文前不会写入 Memory。"],
+        "error_message": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    background_tasks.add_task(_run_draft_generation_job, job_id, work_id, workspace_id, payload.model_dump())
+    return _job_read_or_404(job_id, workspace_id, work_id)
+
+
+@router.get("/works/{work_id}/agent/draft-jobs/{job_id}", response_model=WritingDraftJobRead)
+def read_work_draft_job(
+    work_id: int,
+    job_id: str,
+    workspace_id: str = Depends(get_workspace_id),
+):
+    return _job_read_or_404(job_id, workspace_id, work_id)
+
+
+@router.post("/works/{work_id}/agent/draft-jobs/{job_id}/cancel", response_model=WritingDraftJobRead)
+def cancel_work_draft_job(
+    work_id: int,
+    job_id: str,
+    workspace_id: str = Depends(get_workspace_id),
+):
+    job = _job_or_404(job_id, workspace_id, work_id)
+    if job["status"] not in {"completed", "failed", "cancelled"}:
+        job["status"] = "cancelled"
+        job["warnings"] = [*job.get("warnings", []), "用户已取消任务；已完成内容保留在 job 中。"]
+        job["updated_at"] = datetime.utcnow()
+    return WritingDraftJobRead.model_validate(job)
+
+
+@router.post("/works/{work_id}/agent/revision", response_model=WritingGenerateResponse)
+async def generate_work_revision(
+    work_id: int,
+    payload: WritingRevisionRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    return await _generate_with_cards(db, kb, payload, stage="revision", confirmed_outline=payload.confirmed_outline)
+
+
+@router.post("/outline", response_model=WritingGenerateResponse, deprecated=True)
 async def generate_outline(
     payload: WritingOutlineRequest,
     workspace_id: str = Depends(get_workspace_id),
@@ -432,7 +587,7 @@ async def generate_outline(
     return WritingGenerateResponse(content=content, citations=hits)
 
 
-@router.post("/draft", response_model=WritingGenerateResponse)
+@router.post("/draft", response_model=WritingGenerateResponse, deprecated=True)
 async def generate_draft(
     payload: WritingDraftRequest,
     workspace_id: str = Depends(get_workspace_id),
@@ -466,7 +621,7 @@ async def generate_draft(
     return WritingGenerateResponse(content=content, citations=hits)
 
 
-@router.post("/generate", response_model=WritingGenerateResponse)
+@router.post("/generate", response_model=WritingGenerateResponse, deprecated=True)
 async def generate(payload: WritingGenerateRequest, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     """Backward-compatible endpoint. New UI uses /outline and /draft."""
     outline_payload = WritingOutlineRequest(**payload.model_dump())
@@ -562,21 +717,94 @@ def _create_memory_record(
     return memory
 
 
+def _job_or_404(job_id: str, workspace_id: str, work_id: int) -> dict[str, Any]:
+    job = DRAFT_GENERATION_JOBS.get(job_id)
+    if not job or job.get("workspace_id") != workspace_id or job.get("work_id") != work_id:
+        raise HTTPException(status_code=404, detail="生成任务不存在")
+    return job
+
+
+def _job_read_or_404(job_id: str, workspace_id: str, work_id: int) -> WritingDraftJobRead:
+    return WritingDraftJobRead.model_validate(_job_or_404(job_id, workspace_id, work_id))
+
+
+def _update_draft_job(job_id: str, **updates: Any) -> None:
+    job = DRAFT_GENERATION_JOBS.get(job_id)
+    if not job:
+        return
+    job.update(updates)
+    job["updated_at"] = datetime.utcnow()
+
+
+async def _run_draft_generation_job(job_id: str, work_id: int, workspace_id: str, payload_data: dict[str, Any]) -> None:
+    job = DRAFT_GENERATION_JOBS.get(job_id)
+    if not job or job.get("status") == "cancelled":
+        return
+    db = SessionLocal()
+    try:
+        _update_draft_job(job_id, status="planning")
+        knowledge_base = _ensure_workspace_kb(db, workspace_id, work_id)
+        payload = WritingDraftRequest(**payload_data)
+        if DRAFT_GENERATION_JOBS.get(job_id, {}).get("status") == "cancelled":
+            return
+        _update_draft_job(job_id, status="generating")
+        result = await _generate_with_cards(
+            db,
+            knowledge_base,
+            payload,
+            stage="draft",
+            confirmed_outline=payload.confirmed_outline,
+            progress_callback=lambda updates: _update_draft_job(job_id, **updates),
+        )
+        if DRAFT_GENERATION_JOBS.get(job_id, {}).get("status") == "cancelled":
+            return
+        _update_draft_job(
+            job_id,
+            status="completed",
+            target_chars=result.target_chars,
+            actual_chars=result.actual_chars,
+            cjk_chars=result.cjk_chars,
+            non_space_chars=result.non_space_chars,
+            estimated_tokens=result.estimated_tokens,
+            completion_ratio=result.completion_ratio,
+            section_count=result.section_count,
+            current_section=result.section_count,
+            content=result.content,
+            sections=[section.model_dump() for section in result.sections],
+            used_knowledge=[item.model_dump() for item in result.used_knowledge],
+            retrieval_debug=result.retrieval_debug.model_dump() if result.retrieval_debug else None,
+            warnings=result.warnings,
+            error_message=None,
+        )
+    except Exception as exc:  # noqa: BLE001 - keep partial job visible to the user.
+        _update_draft_job(job_id, status="failed", error_message=str(exc))
+    finally:
+        db.close()
+
+
 async def _generate_with_cards(
     db: Session,
     knowledge_base: KnowledgeBase,
-    payload: WritingOutlineRequest | WritingDraftRequest,
+    payload: WritingGenerateRequest,
     *,
     stage: str,
     confirmed_outline: str,
+    progress_callback=None,
 ) -> WritingGenerateResponse:
     settings = get_settings()
     target_chars = _resolve_target_chars(payload)
     if stage == "draft" and target_chars and target_chars > SINGLE_CALL_SOFT_LIMIT_CHARS:
-        return await _generate_long_draft_with_cards(db, knowledge_base, payload, confirmed_outline=confirmed_outline, target_chars=target_chars)
+        return await _generate_long_draft_with_cards(
+            db,
+            knowledge_base,
+            payload,
+            confirmed_outline=confirmed_outline,
+            target_chars=target_chars,
+            progress_callback=progress_callback,
+        )
 
     query = "\n".join(item for item in [payload.task, confirmed_outline, payload.current_content] if item)
-    results, debug = search_knowledge_cards(
+    results, debug = search_rag_cards(
         db,
         [knowledge_base.id],
         stage=stage,
@@ -594,11 +822,12 @@ async def _generate_with_cards(
         )
 
     cards = _cards_for_search_results(db, knowledge_base.id, results)
+    prompt_results = _results_for_prompt_cards(results, cards)
     oh_story_kernel = _oh_story_writing_kernel(db)
     system_prompt = _system_prompt(payload.knowledge_mode, oh_story_kernel, stage=stage)
-    user_prompt = _card_agent_prompt(stage, payload, cards, confirmed_outline)
+    user_prompt = _build_card_agent_prompt(stage, payload, cards, confirmed_outline)
     prompt_preview = _clip(f"{system_prompt}\n\n{user_prompt}", 9000)
-    used_knowledge = used_knowledge_from_results(results)
+    used_knowledge = used_knowledge_from_results(prompt_results)
 
     if payload.dry_run:
         content = f"""# Dry-run RAG Writing Agent
@@ -636,7 +865,7 @@ async def _generate_with_cards(
     try:
         content = await provider.complete(request)
     except Exception as exc:  # noqa: BLE001
-        label = "正文" if stage == "draft" else "提纲"
+        label = {"outline": "提纲", "draft": "正文", "revision": "润色"}.get(stage, "内容")
         raise HTTPException(status_code=502, detail=f"{label}生成失败：{exc}") from exc
     return WritingGenerateResponse(
         content=content,
@@ -646,7 +875,11 @@ async def _generate_with_cards(
         retrieval_debug=debug,
         prompt_preview=_clip(prompt_preview, 3000),
         target_chars=target_chars,
-        actual_chars=_display_char_count(content),
+        actual_chars=_char_stats(content)["actual_chars"],
+        cjk_chars=_char_stats(content)["cjk_chars"],
+        non_space_chars=_char_stats(content)["non_space_chars"],
+        estimated_tokens=_char_stats(content)["estimated_tokens"],
+        completion_ratio=_completion_ratio(_char_stats(content)["actual_chars"], target_chars),
     )
 
 
@@ -657,6 +890,7 @@ async def _generate_long_draft_with_cards(
     *,
     confirmed_outline: str,
     target_chars: int,
+    progress_callback=None,
 ) -> WritingGenerateResponse:
     settings = get_settings()
     section_targets = _plan_section_targets(target_chars)
@@ -674,9 +908,13 @@ async def _generate_long_draft_with_cards(
     generated_parts: list[str] = []
     aggregate_debug = {
         "query": payload.task,
+        "raw_query": payload.task,
+        "expanded_terms": [],
         "preferred_card_types": [],
         "total_candidates": 0,
         "selected_count": 0,
+        "filtered_duplicate_count": 0,
+        "diversity_buckets": {},
         "stage": "draft",
         "top_k": payload.top_k or settings.retrieval_top_k,
     }
@@ -685,7 +923,7 @@ async def _generate_long_draft_with_cards(
         focus = focuses[index - 1]
         previous_tail = _clip("\n\n".join([payload.current_content, *generated_parts]), 1800)
         query = "\n".join(item for item in [payload.task, confirmed_outline, focus, previous_tail] if item)
-        results, debug = search_knowledge_cards(
+        results, debug = search_rag_cards(
             db,
             [knowledge_base.id],
             stage="draft",
@@ -693,9 +931,10 @@ async def _generate_long_draft_with_cards(
             top_k=payload.top_k or settings.retrieval_top_k,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
-        used_knowledge = used_knowledge_from_results(results)
-        _merge_used_knowledge(merged_used, used_knowledge)
         cards = _cards_for_search_results(db, knowledge_base.id, results)
+        prompt_results = _results_for_prompt_cards(results, cards)
+        used_knowledge = used_knowledge_from_results(prompt_results)
+        _merge_used_knowledge(merged_used, used_knowledge)
         user_prompt = _long_section_prompt(payload, cards, confirmed_outline, focus, index, len(section_targets), section_target, previous_tail)
         if index == 1:
             prompt_preview_parts.append(f"{system_prompt}\n\n{user_prompt}")
@@ -718,7 +957,7 @@ async def _generate_long_draft_with_cards(
                 section_content = await provider.complete(request)
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"第 {index} 段正文生成失败：{exc}") from exc
-            section_content = await _maybe_pad_section(
+            section_content, supplement_count = await _maybe_supplement_section(
                 provider,
                 model,
                 settings,
@@ -730,21 +969,47 @@ async def _generate_long_draft_with_cards(
                 len(section_targets),
                 section_target,
             )
+        if payload.dry_run:
+            supplement_count = 0
 
-        actual_chars = _display_char_count(section_content)
+        section_stats = _char_stats(section_content)
+        actual_chars = section_stats["actual_chars"]
         generated_parts.append(section_content.strip())
         sections.append(
             {
                 "index": index,
                 "target_chars": section_target,
                 "actual_chars": actual_chars,
-                "status": "completed" if actual_chars >= int(section_target * 0.55) or payload.dry_run else "needs_padding",
+                "status": "completed" if actual_chars >= int(section_target * SECTION_MIN_COMPLETION_RATIO) or payload.dry_run else "under_target",
                 "focus": focus,
                 "content": section_content,
+                "supplement_count": supplement_count,
+                "cjk_chars": section_stats["cjk_chars"],
+                "non_space_chars": section_stats["non_space_chars"],
+                "estimated_tokens": section_stats["estimated_tokens"],
                 "used_knowledge": used_knowledge,
                 "retrieval_debug": debug,
             }
         )
+        if progress_callback:
+            partial_content = "\n\n".join(part for part in generated_parts if part)
+            partial_stats = _char_stats(partial_content)
+            progress_callback(
+                {
+                    "status": "generating",
+                    "current_section": index,
+                    "section_count": len(section_targets),
+                    "content": partial_content,
+                    "actual_chars": partial_stats["actual_chars"],
+                    "cjk_chars": partial_stats["cjk_chars"],
+                    "non_space_chars": partial_stats["non_space_chars"],
+                    "estimated_tokens": partial_stats["estimated_tokens"],
+                    "completion_ratio": _completion_ratio(partial_stats["actual_chars"], target_chars),
+                    "sections": sections.copy(),
+                    "used_knowledge": list(merged_used.values()),
+                    "retrieval_debug": aggregate_debug,
+                }
+            )
 
     content = "\n\n".join(part for part in generated_parts if part)
     actual_chars = _display_char_count(content)
@@ -752,9 +1017,11 @@ async def _generate_long_draft_with_cards(
     warnings = [f"目标字数 {target_chars} 超过单次软上限 {SINGLE_CALL_SOFT_LIMIT_CHARS}，已自动分为 {len(section_targets)} 段生成。"]
 
     if not payload.dry_run and actual_chars < target_min and provider is not None:
+        if progress_callback:
+            progress_callback({"status": "supplementing"})
         padding_target = min(DEFAULT_LONG_SECTION_CHARS, max(500, target_min - actual_chars))
         padding_query = "\n".join([payload.task, confirmed_outline, "补齐整体字数，延展场景动作、对话互动、冲突升级、情绪余波和章尾牵引。", _clip(content, 1800)])
-        results, debug = search_knowledge_cards(
+        results, debug = search_rag_cards(
             db,
             [knowledge_base.id],
             stage="draft",
@@ -762,9 +1029,10 @@ async def _generate_long_draft_with_cards(
             top_k=payload.top_k or settings.retrieval_top_k,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
-        used_knowledge = used_knowledge_from_results(results)
-        _merge_used_knowledge(merged_used, used_knowledge)
         cards = _cards_for_search_results(db, knowledge_base.id, results)
+        prompt_results = _results_for_prompt_cards(results, cards)
+        used_knowledge = used_knowledge_from_results(prompt_results)
+        _merge_used_knowledge(merged_used, used_knowledge)
         padding_prompt = _long_padding_prompt(payload, cards, confirmed_outline, content, padding_target)
         try:
             padding_content = await provider.complete(
@@ -784,21 +1052,33 @@ async def _generate_long_draft_with_cards(
         generated_parts.append(padding_content.strip())
         content = "\n\n".join(part for part in generated_parts if part)
         actual_chars = _display_char_count(content)
+        padding_stats = _char_stats(padding_content)
         sections.append(
             {
                 "index": len(sections) + 1,
                 "target_chars": padding_target,
-                "actual_chars": _display_char_count(padding_content),
+                "actual_chars": padding_stats["actual_chars"],
                 "status": "padding",
                 "focus": "整体补齐：补充场景动作、对话互动、冲突升级、情绪余波和章尾牵引。",
                 "content": padding_content,
+                "supplement_count": 0,
+                "cjk_chars": padding_stats["cjk_chars"],
+                "non_space_chars": padding_stats["non_space_chars"],
+                "estimated_tokens": padding_stats["estimated_tokens"],
                 "used_knowledge": used_knowledge,
                 "retrieval_debug": debug,
             }
         )
         warnings.append("初次分段合并后低于目标下限，已追加一次整体补齐生成。")
 
+    if actual_chars < target_min:
+        warnings.append(f"最终正文约 {actual_chars} 字，仍低于目标下限 {target_min} 字；已保留实际结果，没有伪造达标。")
+
+    if progress_callback:
+        progress_callback({"status": "merging"})
+
     aggregate_debug["selected_count"] = len(merged_used)
+    content_stats = _char_stats(content)
     return WritingGenerateResponse(
         content=content,
         citations=[],
@@ -807,7 +1087,11 @@ async def _generate_long_draft_with_cards(
         retrieval_debug=aggregate_debug,
         prompt_preview=_clip("\n\n".join(prompt_preview_parts), 5000),
         target_chars=target_chars,
-        actual_chars=actual_chars,
+        actual_chars=content_stats["actual_chars"],
+        cjk_chars=content_stats["cjk_chars"],
+        non_space_chars=content_stats["non_space_chars"],
+        estimated_tokens=content_stats["estimated_tokens"],
+        completion_ratio=_completion_ratio(content_stats["actual_chars"], target_chars),
         section_count=len(sections),
         sections=sections,
         warnings=warnings,
@@ -827,9 +1111,14 @@ def _cards_for_search_results(db: Session, knowledge_base_id: int, results: list
     return [by_id[card_id] for card_id in ids if card_id in by_id]
 
 
+def _results_for_prompt_cards(results: list[dict[str, Any]], cards: list[KnowledgeCard]) -> list[dict[str, Any]]:
+    prompt_card_ids = {card.card_id for card in cards}
+    return [item for item in results if item["id"] in prompt_card_ids]
+
+
 def _card_agent_prompt(
     stage: str,
-    payload: WritingOutlineRequest | WritingDraftRequest,
+    payload: WritingGenerateRequest,
     cards: list[KnowledgeCard],
     confirmed_outline: str,
 ) -> str:
@@ -876,6 +1165,58 @@ def _card_agent_prompt(
 """
 
 
+def _build_card_agent_prompt(
+    stage: str,
+    payload: WritingGenerateRequest,
+    cards: list[KnowledgeCard],
+    confirmed_outline: str,
+) -> str:
+    worldbuilding = [card for card in cards if card.library_type == "worldbuilding"]
+    memory = [card for card in cards if card.library_type == "memory"]
+    anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
+    writing_guide = [card for card in cards if card.library_type == "writing_guide" and card.card_type != "anti_pattern"]
+    output_rule = {
+        "outline": "只输出章节提纲，不要写正文。提纲要能直接进入下一步正文生成。",
+        "draft": "只输出小说正文，不要输出提纲、表格、写作说明或引用编号。",
+        "revision": "只输出修改后的文本，不要输出修改说明、清单、表格或引用编号。",
+    }.get(stage, "只输出当前任务要求的正文内容，不要输出检索过程、写作说明或引用编号。")
+    target_chars = payload.target_chars if payload.target_chars else "未指定"
+    return f"""[STORY FACTS / WORLDBUILDING]
+用户确认的原创人物、地点、势力、规则和世界观设定。它们是硬约束，优先级最高。
+{_format_card_context(worldbuilding) or "未检索到用户确认的 worldbuilding。不要沿用拆书来源作品的世界观、人物、势力、地名或专名。"}
+
+[PROJECT MEMORY]
+已确认提纲、已写正文、人物状态、伏笔、连续性和当前作品上下文。它们高于写作技巧指南。
+{_format_card_context(memory) or "暂无可用 memory。"}
+
+[WRITING GUIDE]
+拆书或手动沉淀出的结构、冲突、情绪链、节奏、语言和风格规则。只指导写法，不提供故事事实。
+{_format_card_context(writing_guide) or "未检索到 writing_guide。"}
+
+[ANTI PATTERNS]
+本次生成需要避免的问题，例如 AI 味、解释腔、机械对白、硬讲设定和来源作品式桥段。
+{_format_card_context(anti_patterns) or "暂无 anti_pattern。"}
+
+[CURRENT TASK]
+Stage: {stage}
+Target chars: {target_chars}
+User request:
+{payload.task}
+
+Confirmed outline:
+{confirmed_outline or "（空）"}
+
+Current context:
+{payload.current_content or "（空）"}
+
+[OUTPUT REQUIREMENTS]
+- {output_rule}
+- worldbuilding 和 memory 高于 writing_guide；若写作规则与当前故事事实冲突，以 worldbuilding / memory 为准。
+- writing_guide 只能作为写法参考，不能复制来源作品的人名、地名、专名、势力、世界观和标志性桥段。
+- 正文或润色结果中不要暴露知识卡名称、检索过程、评分或引用编号。
+- 可以内化召回规则，但不要机械逐条复述。"""
+
+
 def _format_card_context(cards: list[KnowledgeCard]) -> str:
     return "\n\n".join(
         f"[{card.card_id}] {card.library_type}/{card.card_type} | {card.title}\n{_clip(card.content, 1400)}"
@@ -890,6 +1231,14 @@ def _format_used_knowledge(items: list[dict[str, Any]]) -> str:
 def _resolve_target_chars(payload: WritingGenerateRequest) -> int | None:
     if payload.target_chars and payload.target_chars > 0:
         return min(int(payload.target_chars), 50000)
+    parse_source = "\n".join(
+        str(item)
+        for item in [payload.task, getattr(payload, "confirmed_outline", ""), payload.current_content]
+        if item
+    )
+    parsed = _parse_target_chars_from_text(parse_source)
+    if parsed:
+        return parsed
     text = "\n".join(
         str(item)
         for item in [payload.task, getattr(payload, "confirmed_outline", ""), payload.current_content]
@@ -909,6 +1258,68 @@ def _plan_section_targets(target_chars: int, section_size: int = DEFAULT_LONG_SE
     base = target_chars // section_count
     remainder = target_chars % section_count
     return [base + (1 if index < remainder else 0) for index in range(section_count)]
+
+
+def _parse_target_chars_from_text(text: str) -> int | None:
+    normalized = (text or "").replace(",", "").replace("，", "")
+    patterns = [
+        (r"(\d+(?:\.\d+)?)\s*(?:万|萬)\s*(?:字|字符|汉字)?", 10000),
+        (r"(\d+(?:\.\d+)?)\s*(?:千|k|K)\s*(?:字|字符|汉字)?", 1000),
+        (r"(\d{4,6})\s*(?:字|字符|汉字)", 1),
+    ]
+    for pattern, multiplier in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            return min(int(float(match.group(1)) * multiplier), 50000)
+    chinese = _parse_chinese_number(normalized)
+    return min(chinese, 50000) if chinese else None
+
+
+def _parse_chinese_number(text: str) -> int | None:
+    digit_map = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    match = re.search(r"([一二两三四五六七八九十]+)\s*(万|萬|千)\s*(?:字|字符|汉字)?", text)
+    if not match:
+        return None
+    raw, unit = match.groups()
+    number = _simple_chinese_int(raw, digit_map)
+    if not number:
+        return None
+    return number * (10000 if unit in {"万", "萬"} else 1000)
+
+
+def _simple_chinese_int(raw: str, digit_map: dict[str, int]) -> int | None:
+    if raw == "十":
+        return 10
+    if "十" in raw:
+        left, _, right = raw.partition("十")
+        tens = digit_map.get(left, 1) if left else 1
+        ones = digit_map.get(right, 0) if right else 0
+        return tens * 10 + ones
+    total = 0
+    for char in raw:
+        if char not in digit_map:
+            return None
+        total = total * 10 + digit_map[char]
+    return total or None
+
+
+def _completion_ratio(actual_chars: int | None, target_chars: int | None) -> float | None:
+    if not actual_chars or not target_chars:
+        return None
+    return round(actual_chars / target_chars, 3)
 
 
 def _plan_section_focuses(confirmed_outline: str, task: str, section_count: int) -> list[str]:
@@ -935,7 +1346,7 @@ def _long_section_prompt(
     section_target: int,
     previous_tail: str,
 ) -> str:
-    base = _card_agent_prompt("draft", payload, cards, confirmed_outline)
+    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline)
     return f"""{base}
 
 [LONG GENERATION SECTION CONTROL]
@@ -959,7 +1370,7 @@ def _long_padding_prompt(
     existing_content: str,
     padding_target: int,
 ) -> str:
-    base = _card_agent_prompt("draft", payload, cards, confirmed_outline)
+    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline)
     return f"""{base}
 
 [PADDING CONTROL]
@@ -971,6 +1382,63 @@ def _long_padding_prompt(
 [EXISTING CONTENT TAIL]
 {_clip(existing_content, 2200)}
 """
+
+
+async def _maybe_supplement_section(
+    provider: LLMProvider,
+    model: str,
+    settings,
+    system_prompt: str,
+    section_content: str,
+    payload: WritingOutlineRequest | WritingDraftRequest,
+    focus: str,
+    index: int,
+    section_count: int,
+    section_target: int,
+) -> tuple[str, int]:
+    supplement_count = 0
+    while supplement_count < MAX_SECTION_SUPPLEMENTS:
+        actual = _display_char_count(section_content)
+        missing = section_target - actual
+        if actual >= int(section_target * SECTION_MIN_COMPLETION_RATIO) or missing < 250:
+            return section_content, supplement_count
+        supplement_target = min(missing, max(350, int(section_target * 0.4)))
+        prompt = f"""上一段生成不足，请在不重复已有内容的前提下继续扩写本段。
+
+这是第 {index} / {section_count} 段的补写。
+本段 focus：{focus}
+目标补充：约 {supplement_target} 个中文字符。
+
+要求：
+- 继续围绕当前 focus。
+- 保持人物状态、语气和节奏一致。
+- 不要重新开头。
+- 不要总结。
+- 不要输出写作说明。
+
+[已生成本段]
+{section_content}
+"""
+        try:
+            addition = await provider.complete(
+                LLMRequest(
+                    system_prompt=system_prompt,
+                    user_prompt=prompt,
+                    model=model,
+                    temperature=0.35,
+                    max_tokens=_section_max_tokens(settings.openai_max_tokens, supplement_target),
+                    timeout_seconds=settings.llm_timeout_seconds,
+                    retry_count=settings.llm_retry_count,
+                    dry_run=False,
+                )
+            )
+        except Exception:
+            return section_content, supplement_count
+        if not addition.strip():
+            return section_content, supplement_count
+        section_content = f"{section_content.rstrip()}\n\n{addition.strip()}"
+        supplement_count += 1
+    return section_content, supplement_count
 
 
 async def _maybe_pad_section(
@@ -1041,6 +1509,13 @@ def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> Non
     target["total_candidates"] = int(target.get("total_candidates", 0)) + int(debug.get("total_candidates", 0))
     preferred = [*target.get("preferred_card_types", []), *debug.get("preferred_card_types", [])]
     target["preferred_card_types"] = list(dict.fromkeys(preferred))
+    expanded_terms = [*target.get("expanded_terms", []), *debug.get("expanded_terms", [])]
+    target["expanded_terms"] = list(dict.fromkeys(expanded_terms))
+    target["filtered_duplicate_count"] = int(target.get("filtered_duplicate_count", 0)) + int(debug.get("filtered_duplicate_count", 0))
+    buckets = dict(target.get("diversity_buckets", {}))
+    for card_type, count in debug.get("diversity_buckets", {}).items():
+        buckets[card_type] = int(buckets.get(card_type, 0)) + int(count)
+    target["diversity_buckets"] = buckets
 
 
 def _section_max_tokens(configured_max_tokens: int, target_chars: int) -> int:
@@ -1051,9 +1526,30 @@ def count_cjk_chars(text: str) -> int:
     return len(re.findall(r"[\u4e00-\u9fff]", text or ""))
 
 
+def count_non_space_chars(text: str) -> int:
+    return len(re.sub(r"\s+", "", text or ""))
+
+
+def estimate_output_tokens(text: str) -> int:
+    cjk = count_cjk_chars(text)
+    non_space = count_non_space_chars(text)
+    ascii_like = max(0, non_space - cjk)
+    return max(1, math.ceil(cjk * 1.15 + ascii_like / 4))
+
+
+def _char_stats(text: str) -> dict[str, int]:
+    cjk = count_cjk_chars(text)
+    non_space = count_non_space_chars(text)
+    return {
+        "actual_chars": max(cjk, non_space),
+        "cjk_chars": cjk,
+        "non_space_chars": non_space,
+        "estimated_tokens": estimate_output_tokens(text),
+    }
+
+
 def _display_char_count(text: str) -> int:
-    compact = re.sub(r"\s+", "", text or "")
-    return max(count_cjk_chars(text), len(compact))
+    return _char_stats(text)["actual_chars"]
 
 
 def _load_package_payload(payload: KnowledgePackageImportRequest) -> dict[str, Any]:

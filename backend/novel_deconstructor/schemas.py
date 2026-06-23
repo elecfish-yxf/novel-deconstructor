@@ -344,12 +344,23 @@ class KnowledgePackageImportRequest(BaseModel):
     package_json: dict[str, Any] | None = None
     library_type: str = "writing_guide"
     status: str = "approved"
+    merge_mode: str = "safe"
+    auto_merge_threshold: float = 0.88
+    review_threshold: float = 0.72
+    generate_markdown: bool = True
+    markdown_scope: str = "canonical_only"
 
 
 class KnowledgePackageImportResponse(BaseModel):
     imported_count: int
     generated_markdown_count: int = 0
     skipped_count: int = 0
+    raw_card_count: int = 0
+    canonical_card_count: int = 0
+    exact_duplicate_count: int = 0
+    merged_card_count: int = 0
+    review_required_count: int = 0
+    reduction_rate: float = 0
     card_types: dict[str, int] = Field(default_factory=dict)
     markdown_root: str
     message: str
@@ -385,6 +396,11 @@ class KnowledgeCardRead(ORMModel):
     source_kind: str
     package_id: str
     markdown_path: str
+    is_canonical: bool = True
+    merged_into_card_id: str | None = None
+    merged_from_ids: list[str] = Field(default_factory=list)
+    evidence_count: int = 1
+    content_fingerprint: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -399,6 +415,57 @@ class KnowledgeCardUpdate(BaseModel):
     avoid: str | None = None
     confidence: float | None = None
     status: str | None = None
+    is_canonical: bool | None = None
+
+
+class KnowledgeMergeRequest(BaseModel):
+    merge_mode: str = "safe"
+    auto_merge_threshold: float = 0.88
+    review_threshold: float = 0.72
+
+
+class KnowledgeMergeCardSummary(BaseModel):
+    card_id: str
+    title: str
+    library_type: str
+    card_type: str
+    status: str
+    is_canonical: bool
+    evidence_count: int
+
+
+class KnowledgeMergeGroup(BaseModel):
+    group_id: str
+    action: str
+    reason: str
+    similarity: float
+    primary_card_id: str
+    candidate_card_ids: list[str] = Field(default_factory=list)
+    cards: list[KnowledgeMergeCardSummary] = Field(default_factory=list)
+
+
+class KnowledgeMergePreviewResponse(BaseModel):
+    groups: list[KnowledgeMergeGroup] = Field(default_factory=list)
+    auto_merge_count: int = 0
+    review_required_count: int = 0
+    exact_duplicate_count: int = 0
+
+
+class KnowledgeMergeApplyResponse(BaseModel):
+    merged_card_count: int = 0
+    generated_markdown_count: int = 0
+    groups: list[KnowledgeMergeGroup] = Field(default_factory=list)
+    message: str
+
+
+class KnowledgeMergeStatsResponse(BaseModel):
+    raw_card_count: int = 0
+    canonical_card_count: int = 0
+    merged_card_count: int = 0
+    disabled_card_count: int = 0
+    deleted_card_count: int = 0
+    review_required_count: int = 0
+    reduction_rate: float = 0
 
 
 class KnowledgeMarkdownDocRead(BaseModel):
@@ -472,6 +539,9 @@ class UsedKnowledge(BaseModel):
     title: str
     score: float
     source_ref: dict[str, Any] = Field(default_factory=dict)
+    content_preview: str = ""
+    tags: list[str] = Field(default_factory=list)
+    status: str | None = None
 
 
 class RAGSearchResult(UsedKnowledge):
@@ -482,9 +552,13 @@ class RAGSearchResult(UsedKnowledge):
 
 class RetrievalDebug(BaseModel):
     query: str
+    raw_query: str | None = None
+    expanded_terms: list[str] = Field(default_factory=list)
     preferred_card_types: list[str] = Field(default_factory=list)
     total_candidates: int = 0
     selected_count: int = 0
+    filtered_duplicate_count: int = 0
+    diversity_buckets: dict[str, int] = Field(default_factory=dict)
     stage: str | None = None
     top_k: int | None = None
 
@@ -516,6 +590,10 @@ class WritingOutlineRequest(WritingGenerateRequest):
 
 class WritingDraftRequest(WritingGenerateRequest):
     confirmed_outline: str = Field(min_length=1)
+
+
+class WritingRevisionRequest(WritingGenerateRequest):
+    confirmed_outline: str = ""
 
 
 class WritingMemoryCreate(BaseModel):
@@ -577,6 +655,11 @@ class LongGenerationSection(BaseModel):
     status: str
     focus: str
     content: str = ""
+    supplement_count: int = 0
+    cjk_chars: int = 0
+    non_space_chars: int = 0
+    estimated_tokens: int = 0
+    error_message: str | None = None
     used_knowledge: list[UsedKnowledge] = Field(default_factory=list)
     retrieval_debug: RetrievalDebug | None = None
 
@@ -590,7 +673,35 @@ class WritingGenerateResponse(BaseModel):
     prompt_preview: str | None = None
     target_chars: int | None = None
     actual_chars: int | None = None
+    cjk_chars: int | None = None
+    non_space_chars: int | None = None
+    estimated_tokens: int | None = None
+    completion_ratio: float | None = None
     section_count: int | None = None
     sections: list[LongGenerationSection] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    memory_written: bool = False
+
+
+class WritingDraftJobRead(BaseModel):
+    job_id: str
+    work_id: int
+    status: str
+    stage: str = "draft"
+    target_chars: int | None = None
+    actual_chars: int | None = None
+    cjk_chars: int | None = None
+    non_space_chars: int | None = None
+    estimated_tokens: int | None = None
+    completion_ratio: float | None = None
+    section_count: int | None = None
+    current_section: int | None = None
+    content: str = ""
+    sections: list[LongGenerationSection] = Field(default_factory=list)
+    used_knowledge: list[UsedKnowledge] = Field(default_factory=list)
+    retrieval_debug: RetrievalDebug | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
 

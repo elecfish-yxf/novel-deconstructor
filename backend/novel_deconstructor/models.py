@@ -365,6 +365,11 @@ class KnowledgeCard(Base):
     source_kind = Column(String(64), default="knowledge_package", nullable=False)
     package_id = Column(String(255), default="", nullable=False)
     markdown_path = Column(Text, default="", nullable=False)
+    is_canonical = Column(Boolean, default=True, nullable=False, index=True)
+    merged_into_card_id = Column(String(96), nullable=True, index=True)
+    merged_from_ids_json = Column(Text, default="[]", nullable=False)
+    evidence_count = Column(Integer, default=1, nullable=False)
+    content_fingerprint = Column(String(64), default="", nullable=False, index=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 

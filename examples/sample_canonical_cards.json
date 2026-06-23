@@ -1,0 +1,157 @@
+{
+  "package_id": "demo_rain_lamp_street_canonical_cards",
+  "source": {
+    "title": "雨灯街的试营业",
+    "type": "copyright_safe_demo",
+    "file": "examples/demo_story.md"
+  },
+  "schema_version": "0.1.0",
+  "notes": [
+    "This file shows the expected shape after raw knowledge cards have been reviewed and merged into canonical cards.",
+    "The cards preserve reusable writing knowledge, not original story facts to copy into a new work."
+  ],
+  "canonical_cards": [
+    {
+      "id": "WR-001",
+      "card_type": "WritingRule",
+      "layer": "writing_guide",
+      "title": "用私人目标承载奇观入口",
+      "is_canonical": true,
+      "evidence_count": 2,
+      "confidence": 0.82,
+      "status": "reviewed",
+      "tags": ["章节结构", "世界观入口", "开篇"],
+      "content": {
+        "rule": "先给主角一个具体、私人、可行动的目标，再让异常世界规则阻挡这个目标。",
+        "use_when": ["提纲生成", "正文生成", "开篇设计"],
+        "avoid": "不要先铺大段设定，再让主角被动听解释。"
+      },
+      "source_refs": [
+        {
+          "file": "examples/demo_story.md",
+          "chapter": "第一章 雨灯亮起",
+          "analysis_mode": "chapter_structure"
+        }
+      ],
+      "merged_from_ids": ["raw-WR-001-a", "raw-WR-001-b"]
+    },
+    {
+      "id": "CP-001",
+      "card_type": "ConflictPattern",
+      "layer": "writing_guide",
+      "title": "规则拦路型开篇冲突",
+      "is_canonical": true,
+      "evidence_count": 1,
+      "confidence": 0.78,
+      "status": "reviewed",
+      "tags": ["开篇", "规则压力", "冲突升级"],
+      "content": {
+        "trigger": "主角带着私人目标进入陌生场域。",
+        "escalation": "场域规则要求主角付出代价，且代价与目标相关。",
+        "payoff": "主角获得线索，但问题扩大。",
+        "next_hook": "新线索附带禁令、时限或新的选择压力。"
+      },
+      "source_refs": [
+        {
+          "file": "examples/demo_story.md",
+          "chapter": "第一章 雨灯亮起",
+          "analysis_mode": "conflict_progression"
+        }
+      ],
+      "merged_from_ids": ["raw-CP-001-a"]
+    },
+    {
+      "id": "EM-001",
+      "card_type": "EmotionModule",
+      "layer": "writing_guide",
+      "title": "陌生规则压迫链",
+      "is_canonical": true,
+      "evidence_count": 1,
+      "confidence": 0.76,
+      "status": "reviewed",
+      "tags": ["情绪链", "章尾钩子", "压力释放"],
+      "content": {
+        "emotion_chain": "好奇 -> 不安 -> 被迫选择 -> 小发现 -> 新禁令",
+        "scene_function": "适合主角第一次进入异常空间、新制度或新组织时使用。",
+        "reusable_steps": ["展示异常规则", "让规则索取代价", "用小线索奖励行动", "用禁令牵引下一章"],
+        "do_not_copy": ["雨灯街", "赎梦店", "第三盏灯"]
+      },
+      "source_refs": [
+        {
+          "file": "examples/demo_story.md",
+          "chapter": "第一章 雨灯亮起",
+          "analysis_mode": "emotion_chain"
+        }
+      ],
+      "merged_from_ids": ["raw-EM-001-a"]
+    },
+    {
+      "id": "AP-001",
+      "card_type": "AntiPattern",
+      "layer": "writing_guide",
+      "title": "只堆设定名词",
+      "is_canonical": true,
+      "evidence_count": 1,
+      "confidence": 0.74,
+      "status": "reviewed",
+      "tags": ["设定投放", "AI味检查", "修订"],
+      "content": {
+        "problem": "场景有奇观名词，但主角目标没有被推动或阻挡。",
+        "why_bad": "读者只能看设定，感受不到行动压力。",
+        "fix_strategy": "把设定规则转成交易、时限、禁令或代价。"
+      },
+      "source_refs": [
+        {
+          "file": "examples/demo_story.md",
+          "chapter": "第一章 雨灯亮起",
+          "analysis_mode": "ai_taste_check"
+        }
+      ],
+      "merged_from_ids": ["raw-AP-001-a"]
+    },
+    {
+      "id": "WB-001",
+      "card_type": "WorldbuildingFact",
+      "layer": "worldbuilding",
+      "title": "原创作品的街区规则占位示例",
+      "is_canonical": true,
+      "evidence_count": 1,
+      "confidence": 0.7,
+      "status": "user_confirmed",
+      "tags": ["原创设定", "规则", "演示"],
+      "content": {
+        "fact": "新作品可以自定义一个与主角私人目标相冲突的街区规则。",
+        "scope": "This is a placeholder for user-created worldbuilding, not copied source lore."
+      },
+      "source_refs": [
+        {
+          "file": "user_worldbuilding.md",
+          "note": "demo placeholder"
+        }
+      ],
+      "merged_from_ids": []
+    },
+    {
+      "id": "MEM-001",
+      "card_type": "Memory",
+      "layer": "memory",
+      "title": "第一章确认提纲后的连续性记忆",
+      "is_canonical": true,
+      "evidence_count": 1,
+      "confidence": 0.68,
+      "status": "confirmed",
+      "tags": ["提纲记忆", "连续性", "章尾钩子"],
+      "content": {
+        "memory": "主角已经得到下一步路径，但受到一个禁令式钩子约束；续写时应承接这个限制。",
+        "write_next": "下一章先兑现禁令压力，再释放一个小线索。"
+      },
+      "source_refs": [
+        {
+          "origin": "confirmed_outline",
+          "chapter": "第一章"
+        }
+      ],
+      "merged_from_ids": []
+    }
+  ]
+}
