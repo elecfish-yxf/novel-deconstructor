@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
@@ -79,45 +79,85 @@ def seed_prompt_templates(db: Session) -> None:
 
 
 def ensure_schema_upgrades() -> None:
-    if not settings.app_database_url.startswith("sqlite"):
-        return
+    def table_columns(table_name: str) -> set[str]:
+        inspector = inspect(engine)
+        if not inspector.has_table(table_name):
+            return set()
+        return {column["name"] for column in inspector.get_columns(table_name)}
+
+    def add_column_if_missing(table_name: str, column_name: str, sqlite_sql: str, mysql_sql: str | None = None) -> None:
+        columns = table_columns(table_name)
+        if columns and column_name not in columns:
+            statement = mysql_sql if settings.app_database_url.startswith("mysql") and mysql_sql else sqlite_sql
+            connection.execute(text(statement))
+
     with engine.begin() as connection:
-        rows = connection.execute(text("PRAGMA table_info(analysis_jobs)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if "skill_id" not in columns:
-            connection.execute(text("ALTER TABLE analysis_jobs ADD COLUMN skill_id INTEGER"))
-        if "generate_graph" not in columns:
-            connection.execute(text("ALTER TABLE analysis_jobs ADD COLUMN generate_graph BOOLEAN NOT NULL DEFAULT 0"))
-        rows = connection.execute(text("PRAGMA table_info(projects)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if "workspace_id" not in columns:
-            connection.execute(text("ALTER TABLE projects ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'"))
-        rows = connection.execute(text("PRAGMA table_info(knowledge_bases)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if rows and "workspace_id" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_bases ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'"))
-        rows = connection.execute(text("PRAGMA table_info(knowledge_documents)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if rows and "knowledge_type" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_documents ADD COLUMN knowledge_type VARCHAR(32) NOT NULL DEFAULT 'worldbuilding'"))
-        rows = connection.execute(text("PRAGMA table_info(writing_memories)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if rows and "tags_json" not in columns:
-            connection.execute(text("ALTER TABLE writing_memories ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'"))
-        if rows and "source_ref_json" not in columns:
-            connection.execute(text("ALTER TABLE writing_memories ADD COLUMN source_ref_json TEXT NOT NULL DEFAULT '{}'"))
-        rows = connection.execute(text("PRAGMA table_info(knowledge_cards)")).mappings().all()
-        columns = {row["name"] for row in rows}
-        if rows and "is_canonical" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN is_canonical BOOLEAN NOT NULL DEFAULT 1"))
-        if rows and "merged_into_card_id" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN merged_into_card_id VARCHAR(96)"))
-        if rows and "merged_from_ids_json" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN merged_from_ids_json TEXT NOT NULL DEFAULT '[]'"))
-        if rows and "evidence_count" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1"))
-        if rows and "content_fingerprint" not in columns:
-            connection.execute(text("ALTER TABLE knowledge_cards ADD COLUMN content_fingerprint VARCHAR(64) NOT NULL DEFAULT ''"))
+        add_column_if_missing("analysis_jobs", "skill_id", "ALTER TABLE analysis_jobs ADD COLUMN skill_id INTEGER")
+        add_column_if_missing(
+            "analysis_jobs",
+            "generate_graph",
+            "ALTER TABLE analysis_jobs ADD COLUMN generate_graph BOOLEAN NOT NULL DEFAULT 0",
+        )
+        add_column_if_missing(
+            "projects",
+            "workspace_id",
+            "ALTER TABLE projects ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'",
+        )
+        add_column_if_missing(
+            "knowledge_bases",
+            "workspace_id",
+            "ALTER TABLE knowledge_bases ADD COLUMN workspace_id VARCHAR(80) NOT NULL DEFAULT 'legacy'",
+        )
+        add_column_if_missing(
+            "knowledge_documents",
+            "knowledge_type",
+            "ALTER TABLE knowledge_documents ADD COLUMN knowledge_type VARCHAR(32) NOT NULL DEFAULT 'worldbuilding'",
+        )
+        add_column_if_missing(
+            "writing_memories",
+            "tags_json",
+            "ALTER TABLE writing_memories ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE writing_memories ADD COLUMN tags_json TEXT NULL",
+        )
+        add_column_if_missing(
+            "writing_memories",
+            "source_ref_json",
+            "ALTER TABLE writing_memories ADD COLUMN source_ref_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE writing_memories ADD COLUMN source_ref_json TEXT NULL",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "is_canonical",
+            "ALTER TABLE knowledge_cards ADD COLUMN is_canonical BOOLEAN NOT NULL DEFAULT 1",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "merged_into_card_id",
+            "ALTER TABLE knowledge_cards ADD COLUMN merged_into_card_id VARCHAR(96)",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "merged_from_ids_json",
+            "ALTER TABLE knowledge_cards ADD COLUMN merged_from_ids_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE knowledge_cards ADD COLUMN merged_from_ids_json TEXT NULL",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "evidence_count",
+            "ALTER TABLE knowledge_cards ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "content_fingerprint",
+            "ALTER TABLE knowledge_cards ADD COLUMN content_fingerprint VARCHAR(64) NOT NULL DEFAULT ''",
+        )
+        if settings.app_database_url.startswith("mysql"):
+            if "tags_json" in table_columns("writing_memories"):
+                connection.execute(text("UPDATE writing_memories SET tags_json = '[]' WHERE tags_json IS NULL"))
+            if "source_ref_json" in table_columns("writing_memories"):
+                connection.execute(text("UPDATE writing_memories SET source_ref_json = '{}' WHERE source_ref_json IS NULL"))
+            if "merged_from_ids_json" in table_columns("knowledge_cards"):
+                connection.execute(text("UPDATE knowledge_cards SET merged_from_ids_json = '[]' WHERE merged_from_ids_json IS NULL"))
 
 
 def seed_deconstruction_skills(db: Session) -> None:
