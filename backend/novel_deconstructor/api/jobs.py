@@ -71,7 +71,7 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, work
     base_url = payload.base_url or settings.openai_base_url
     if not payload.dry_run and not (payload.api_key or "").strip():
         raise HTTPException(status_code=400, detail="关闭 dry-run 后必须填写你自己的 API Key。服务器不会使用站长的 Key 替你调用模型。")
-    output_dir = job_output_dir(project.name, job_id, payload.output_dir or project.root_output_dir)
+    output_dir = job_output_dir(project.name, job_id, payload.output_dir or project.root_output_dir, workspace_id=workspace_id)
     for name in ["chapter_analysis", "logs", "metadata/llm_calls"]:
         (Path(output_dir) / name).mkdir(parents=True, exist_ok=True)
 

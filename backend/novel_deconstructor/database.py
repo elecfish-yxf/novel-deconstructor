@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
-from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, KnowledgeDocument, PromptTemplate
+from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, KnowledgeDocument, PromptTemplate, Workspace
 
 
 settings = get_settings()
@@ -14,10 +14,19 @@ settings = get_settings()
 def _connect_args(database_url: str) -> dict:
     if database_url.startswith("sqlite"):
         return {"check_same_thread": False}
+    if database_url.startswith("mysql"):
+        return {"charset": "utf8mb4"}
     return {}
 
 
-engine = create_engine(settings.app_database_url, connect_args=_connect_args(settings.app_database_url))
+def _engine_kwargs(database_url: str) -> dict:
+    kwargs = {"connect_args": _connect_args(database_url)}
+    if database_url.startswith("mysql"):
+        kwargs.update({"pool_pre_ping": True, "pool_recycle": 280})
+    return kwargs
+
+
+engine = create_engine(settings.app_database_url, **_engine_kwargs(settings.app_database_url))
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -32,6 +41,16 @@ def get_db():
 def ensure_runtime_dirs() -> None:
     for path in [settings.storage_dir, settings.upload_dir, settings.output_dir, settings.knowledge_dir]:
         path.mkdir(parents=True, exist_ok=True)
+
+
+def seed_builtin_workspaces(db: Session) -> None:
+    changed = False
+    for workspace_id, name in [("anonymous", "Anonymous Workspace"), ("legacy", "Legacy Workspace")]:
+        if not db.get(Workspace, workspace_id):
+            db.add(Workspace(id=workspace_id, name=name, slug=workspace_id, plan="legacy"))
+            changed = True
+    if changed:
+        db.commit()
 
 
 def seed_prompt_templates(db: Session) -> None:
@@ -81,6 +100,12 @@ def ensure_schema_upgrades() -> None:
         columns = {row["name"] for row in rows}
         if rows and "knowledge_type" not in columns:
             connection.execute(text("ALTER TABLE knowledge_documents ADD COLUMN knowledge_type VARCHAR(32) NOT NULL DEFAULT 'worldbuilding'"))
+        rows = connection.execute(text("PRAGMA table_info(writing_memories)")).mappings().all()
+        columns = {row["name"] for row in rows}
+        if rows and "tags_json" not in columns:
+            connection.execute(text("ALTER TABLE writing_memories ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'"))
+        if rows and "source_ref_json" not in columns:
+            connection.execute(text("ALTER TABLE writing_memories ADD COLUMN source_ref_json TEXT NOT NULL DEFAULT '{}'"))
 
 
 def seed_deconstruction_skills(db: Session) -> None:
@@ -160,6 +185,7 @@ def init_db() -> None:
     ensure_schema_upgrades()
     db = SessionLocal()
     try:
+        seed_builtin_workspaces(db)
         seed_prompt_templates(db)
         seed_deconstruction_skills(db)
         mark_interrupted_jobs(db)

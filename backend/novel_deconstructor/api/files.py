@@ -19,12 +19,12 @@ router = APIRouter(tags=["files"])
 
 
 def _raw_path(project: Project, source_file: SourceFile) -> Path:
-    return project_output_dir(project.name, project.root_output_dir) / "raw" / f"source_{source_file.id}.txt"
+    return project_output_dir(project.name, project.root_output_dir, workspace_id=project.workspace_id) / "raw" / f"source_{source_file.id}.txt"
 
 
 def _chunks_dir(project: Project, source_file: SourceFile) -> Path:
     safe_name = secure_slug(Path(source_file.original_filename).stem, "source")
-    return project_output_dir(project.name, project.root_output_dir) / "chunks" / f"source_{source_file.id}_{safe_name}"
+    return project_output_dir(project.name, project.root_output_dir, workspace_id=project.workspace_id) / "chunks" / f"source_{source_file.id}_{safe_name}"
 
 
 def _file_read(db: Session, source_file: SourceFile) -> SourceFileRead:
@@ -64,7 +64,7 @@ async def upload_file(project_id: int, file: UploadFile = File(...), workspace_i
     file_type = validate_extension(file.filename or "")
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     stored_name = f"{uuid4().hex}_{Path(file.filename or 'source').name}"
-    stored_path = settings.upload_dir / str(project_id) / stored_name
+    stored_path = settings.upload_dir / workspace_id / str(project_id) / stored_name
     size_bytes = await save_upload(file, stored_path, max_bytes)
 
     source_file = SourceFile(

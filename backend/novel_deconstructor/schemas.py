@@ -8,6 +8,41 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AuthUserRead(ORMModel):
+    id: int
+    email: str
+    username: str | None
+    display_name: str
+    avatar_url: str | None
+    status: str
+    created_at: datetime
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    username: str | None = Field(default=None, max_length=80)
+    display_name: str = Field(default="", max_length=120)
+
+
+class AuthLoginRequest(BaseModel):
+    identity: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    workspace_id: str
+    user: AuthUserRead
+
+
+class AuthMeResponse(BaseModel):
+    user: AuthUserRead
+    workspace_id: str
+
+
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
@@ -304,6 +339,97 @@ class KnowledgeImportResponse(BaseModel):
     message: str
 
 
+class KnowledgePackageImportRequest(BaseModel):
+    package_path: str | None = None
+    package_json: dict[str, Any] | None = None
+    library_type: str = "writing_guide"
+    status: str = "approved"
+
+
+class KnowledgePackageImportResponse(BaseModel):
+    imported_count: int
+    generated_markdown_count: int = 0
+    skipped_count: int = 0
+    card_types: dict[str, int] = Field(default_factory=dict)
+    markdown_root: str
+    message: str
+
+
+class KnowledgeMarkdownImportRequest(BaseModel):
+    source_name: str = "external_knowledge.md"
+    source_path: str | None = None
+    content: str | None = None
+    library_type: str = "writing_guide"
+    status: str = "raw_extracted"
+
+
+class KnowledgeMarkdownImportResponse(KnowledgePackageImportResponse):
+    source_name: str | None = None
+
+
+class KnowledgeCardRead(ORMModel):
+    id: int
+    knowledge_base_id: int
+    card_id: str
+    library_type: str
+    card_type: str
+    title: str
+    content: str
+    summary: str
+    tags: list[str] = Field(default_factory=list)
+    source_ref: dict[str, Any] = Field(default_factory=dict)
+    use_when: list[str] = Field(default_factory=list)
+    avoid: str
+    confidence: float
+    status: str
+    source_kind: str
+    package_id: str
+    markdown_path: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeCardUpdate(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
+    source_ref: dict[str, Any] | None = None
+    use_when: list[str] | None = None
+    avoid: str | None = None
+    confidence: float | None = None
+    status: str | None = None
+
+
+class KnowledgeMarkdownDocRead(BaseModel):
+    doc_id: str
+    card_id: str
+    library_type: str
+    card_type: str
+    title: str
+    status: str
+    path: str
+    exists: bool
+    updated_at: datetime
+
+
+class KnowledgeMarkdownDocContent(BaseModel):
+    doc_id: str
+    card_id: str
+    content: str
+    path: str
+
+
+class KnowledgeMarkdownDocSave(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class KnowledgeMarkdownSyncResponse(BaseModel):
+    card_id: str
+    status: str
+    updated_fields: list[str] = Field(default_factory=list)
+
+
 class RetrievalSearchRequest(BaseModel):
     knowledge_base_ids: list[int] = Field(default_factory=list)
     query: str = Field(min_length=1)
@@ -331,6 +457,43 @@ class RetrievalSearchResponse(BaseModel):
     hits: list[RetrievalHit]
 
 
+class RAGSearchRequest(BaseModel):
+    stage: str = "draft"
+    query: str = Field(min_length=1)
+    top_k: int = 8
+    library_type: str | None = None
+    include_inactive: bool = False
+
+
+class UsedKnowledge(BaseModel):
+    id: str
+    library_type: str
+    card_type: str
+    title: str
+    score: float
+    source_ref: dict[str, Any] = Field(default_factory=dict)
+
+
+class RAGSearchResult(UsedKnowledge):
+    content_preview: str
+    tags: list[str] = Field(default_factory=list)
+    status: str
+
+
+class RetrievalDebug(BaseModel):
+    query: str
+    preferred_card_types: list[str] = Field(default_factory=list)
+    total_candidates: int = 0
+    selected_count: int = 0
+    stage: str | None = None
+    top_k: int | None = None
+
+
+class RAGSearchResponse(BaseModel):
+    results: list[RAGSearchResult]
+    retrieval_debug: RetrievalDebug
+
+
 class WritingGenerateRequest(BaseModel):
     knowledge_base_ids: list[int] = Field(default_factory=list)
     task: str = Field(min_length=1)
@@ -339,8 +502,12 @@ class WritingGenerateRequest(BaseModel):
     knowledge_mode: str = "reference"
     model_provider: str | None = None
     model: str | None = None
+    base_url: str | None = None
     api_key: str | None = None
     dry_run: bool = False
+    top_k: int | None = None
+    stage: str | None = None
+    target_chars: int | None = None
 
 
 class WritingOutlineRequest(WritingGenerateRequest):
@@ -356,7 +523,16 @@ class WritingMemoryCreate(BaseModel):
     memory_type: str = "note"
     title: str = Field(min_length=1, max_length=255)
     content: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_ref: dict[str, Any] = Field(default_factory=dict)
     source: str = "manual"
+
+
+class WritingMemoryConfirmRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_ref: dict[str, Any] = Field(default_factory=dict)
 
 
 class WritingMemoryRead(ORMModel):
@@ -366,6 +542,8 @@ class WritingMemoryRead(ORMModel):
     memory_type: str
     title: str
     content: str
+    tags: list[str] = Field(default_factory=list)
+    source_ref: dict[str, Any] = Field(default_factory=dict)
     source: str
     created_at: datetime
     updated_at: datetime
@@ -392,7 +570,27 @@ class WorldbuildingDraftResponse(BaseModel):
     citations: list[RetrievalHit]
 
 
+class LongGenerationSection(BaseModel):
+    index: int
+    target_chars: int
+    actual_chars: int
+    status: str
+    focus: str
+    content: str = ""
+    used_knowledge: list[UsedKnowledge] = Field(default_factory=list)
+    retrieval_debug: RetrievalDebug | None = None
+
+
 class WritingGenerateResponse(BaseModel):
     content: str
     citations: list[RetrievalHit]
+    stage: str | None = None
+    used_knowledge: list[UsedKnowledge] = Field(default_factory=list)
+    retrieval_debug: RetrievalDebug | None = None
+    prompt_preview: str | None = None
+    target_chars: int | None = None
+    actual_chars: int | None = None
+    section_count: int | None = None
+    sections: list[LongGenerationSection] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 

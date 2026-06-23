@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     app_output_dir: str = "./outputs"
     app_knowledge_dir: str = "./storage/knowledge"
     app_database_url: str = "sqlite:///./storage/novel_deconstructor.db"
+    app_require_auth: bool = False
+    app_auth_session_days: int = 30
 
     max_upload_size_mb: int = 20
     max_chapter_chars: int = 12000

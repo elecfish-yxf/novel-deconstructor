@@ -1,7 +1,28 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 const WORKSPACE_KEY = "novel-deconstructor.workspace-id";
+const AUTH_KEY = "novel-deconstructor.auth-session";
+
+export type AuthUser = {
+  id: number;
+  email: string;
+  username?: string | null;
+  display_name: string;
+  avatar_url?: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type AuthSession = {
+  access_token: string;
+  token_type: string;
+  expires_at: string;
+  workspace_id: string;
+  user: AuthUser;
+};
 
 export function getWorkspaceId() {
+  const session = getStoredAuthSession();
+  if (session?.workspace_id) return session.workspace_id;
   let existing = window.localStorage.getItem(WORKSPACE_KEY);
   if (existing) return existing;
   existing = `ws_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
@@ -9,12 +30,40 @@ export function getWorkspaceId() {
   return existing;
 }
 
+export function getStoredAuthSession(): AuthSession | null {
+  try {
+    const raw = window.localStorage.getItem(AUTH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthSession;
+    return parsed?.access_token ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeAuthSession(session: AuthSession) {
+  window.localStorage.setItem(AUTH_KEY, JSON.stringify(session));
+}
+
+export function clearAuthSession() {
+  window.localStorage.removeItem(AUTH_KEY);
+}
+
+function authToken() {
+  return getStoredAuthSession()?.access_token || "";
+}
+
+function authHeaders(): Record<string, string> {
+  const token = authToken();
+  return token ? { Authorization: `Bearer ${token}` } : { "X-Workspace-Id": getWorkspaceId() };
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const workspaceHeaders = { "X-Workspace-Id": getWorkspaceId() };
+  const baseHeaders = authHeaders();
   const headers =
     options.body instanceof FormData
-      ? { ...workspaceHeaders, ...(options.headers || {}) }
-      : { "Content-Type": "application/json", ...workspaceHeaders, ...(options.headers || {}) };
+      ? { ...baseHeaders, ...(options.headers || {}) }
+      : { "Content-Type": "application/json", ...baseHeaders, ...(options.headers || {}) };
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
@@ -174,6 +223,99 @@ export type KnowledgeDocument = {
   updated_at: string;
 };
 
+export type KnowledgeCard = {
+  id: number;
+  knowledge_base_id: number;
+  card_id: string;
+  library_type: string;
+  card_type: string;
+  title: string;
+  content: string;
+  summary: string;
+  tags: string[];
+  source_ref: Record<string, unknown>;
+  use_when: string[];
+  avoid: string;
+  confidence: number;
+  status: string;
+  source_kind: string;
+  package_id: string;
+  markdown_path: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeMarkdownDoc = {
+  doc_id: string;
+  card_id: string;
+  library_type: string;
+  card_type: string;
+  title: string;
+  status: string;
+  path: string;
+  exists: boolean;
+  updated_at: string;
+};
+
+export type KnowledgeImportResult = {
+  imported_count: number;
+  generated_markdown_count: number;
+  skipped_count: number;
+  card_types: Record<string, number>;
+  markdown_root: string;
+  message: string;
+  source_name?: string | null;
+};
+
+export type UsedKnowledge = {
+  id: string;
+  library_type: string;
+  card_type: string;
+  title: string;
+  score: number;
+  source_ref: Record<string, unknown>;
+};
+
+export type RAGSearchResult = UsedKnowledge & {
+  content_preview: string;
+  tags: string[];
+  status: string;
+};
+
+export type LongGenerationSection = {
+  index: number;
+  target_chars: number;
+  actual_chars: number;
+  status: string;
+  focus: string;
+  content: string;
+  used_knowledge: UsedKnowledge[];
+  retrieval_debug?: RetrievalDebug | null;
+};
+
+export type RetrievalDebug = {
+  query: string;
+  preferred_card_types: string[];
+  total_candidates: number;
+  selected_count: number;
+  stage?: string | null;
+  top_k?: number | null;
+};
+
+export type WritingGenerateResult = {
+  content: string;
+  citations: RetrievalHit[];
+  stage?: string | null;
+  used_knowledge?: UsedKnowledge[];
+  retrieval_debug?: RetrievalDebug | null;
+  prompt_preview?: string | null;
+  target_chars?: number | null;
+  actual_chars?: number | null;
+  section_count?: number | null;
+  sections?: LongGenerationSection[];
+  warnings?: string[];
+};
+
 export type RetrievalHit = {
   citation_id: string;
   knowledge_base_id: number;
@@ -198,6 +340,8 @@ export type WritingMemory = {
   memory_type: string;
   title: string;
   content: string;
+  tags: string[];
+  source_ref: Record<string, unknown>;
   source: string;
   created_at: string;
   updated_at: string;
@@ -216,6 +360,7 @@ export type PublicConfig = {
   knowledge_chunk_overlap: number;
   retrieval_top_k: number;
   max_upload_size_mb: number;
+  auth_required?: boolean;
   privacy_note: string;
 };
 
@@ -241,6 +386,12 @@ export type SkillPayload = {
 };
 
 export const api = {
+  register: (payload: { email: string; password: string; username?: string; display_name?: string }) =>
+    request<AuthSession>("/api/auth/register", { method: "POST", body: JSON.stringify(payload) }),
+  login: (payload: { identity: string; password: string }) =>
+    request<AuthSession>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+  me: () => request<{ user: AuthUser; workspace_id: string }>("/api/auth/me"),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   getPublicConfig: () => request<PublicConfig>("/api/config/public"),
   listProjects: () => request<Project[]>("/api/projects"),
   getProject: (id: number) => request<Project>(`/api/projects/${id}`),
@@ -312,6 +463,72 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ job_id: jobId }),
     }),
+  importKnowledgePackage: (workId: number, payload: { package_path?: string; package_json?: Record<string, unknown>; library_type?: string; status?: string }) =>
+    request<KnowledgeImportResult>(
+      `/api/writing/works/${workId}/knowledge/import-package`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  importKnowledgeMarkdown: (
+    workId: number,
+    payload: { source_name?: string; source_path?: string; content?: string; library_type?: string; status?: string },
+  ) =>
+    request<KnowledgeImportResult>(`/api/writing/works/${workId}/knowledge/import-markdown`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  uploadKnowledgeMarkdownFiles: async (workId: number, files: FileList | File[], libraryType: string, status = "raw_extracted") => {
+    const results: KnowledgeImportResult[] = [];
+    for (const file of Array.from(files)) {
+      const data = new FormData();
+      data.append("file", file);
+      data.append("library_type", libraryType);
+      data.append("status", status);
+      results.push(
+        await request<KnowledgeImportResult>(`/api/writing/works/${workId}/knowledge/import-markdown-file`, {
+          method: "POST",
+          body: data,
+        }),
+      );
+    }
+    return results;
+  },
+  listKnowledgeCards: (workId: number, params: { library_type?: string; card_type?: string; status?: string; tag?: string; keyword?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) query.set(key, value);
+    });
+    return request<KnowledgeCard[]>(`/api/writing/works/${workId}/knowledge/cards${query.toString() ? `?${query}` : ""}`);
+  },
+  updateKnowledgeCard: (workId: number, cardId: string, payload: Partial<KnowledgeCard>) =>
+    request<KnowledgeCard>(`/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteKnowledgeCard: (workId: number, cardId: string) =>
+    request<KnowledgeCard>(`/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}`, { method: "DELETE" }),
+  listKnowledgeMarkdownDocs: (workId: number) => request<KnowledgeMarkdownDoc[]>(`/api/writing/works/${workId}/knowledge/docs`),
+  readKnowledgeMarkdownDoc: (workId: number, docId: string) =>
+    request<{ doc_id: string; card_id: string; content: string; path: string }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}`),
+  saveKnowledgeMarkdownDoc: (workId: number, docId: string, content: string) =>
+    request<{ doc_id: string; card_id: string; content: string; path: string }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
+  syncKnowledgeMarkdownDoc: (workId: number, docId: string) =>
+    request<{ card_id: string; status: string; updated_fields: string[] }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}/sync`, {
+      method: "POST",
+    }),
+  deleteKnowledgeMarkdownDoc: (workId: number, docId: string) =>
+    request<{ card_id: string; status: string; updated_fields: string[] }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}`, {
+      method: "DELETE",
+    }),
+  exportKnowledgeCardMarkdown: (workId: number, cardId: string) =>
+    request<{ doc_id: string; card_id: string; content: string; path: string }>(
+      `/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}/export-md`,
+      { method: "POST" },
+    ),
+  syncDeletedKnowledgeMarkdownDocs: (workId: number) =>
+    request<{ card_id: string; status: string; updated_fields: string[] }>(`/api/writing/works/${workId}/knowledge/docs/sync-deleted`, { method: "POST" }),
   reindexKnowledgeDocument: (id: number) => request<KnowledgeDocument>(`/api/documents/${id}/reindex`, { method: "POST" }),
   deleteKnowledgeDocument: (id: number) => request<{ ok: boolean }>(`/api/documents/${id}`, { method: "DELETE" }),
   bulkDeleteKnowledgeDocuments: (
@@ -324,9 +541,26 @@ export const api = {
     }),
   searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
     request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
+  searchWorkRAG: (workId: number, payload: { stage: string; query: string; top_k?: number; library_type?: string; include_inactive?: boolean }) =>
+    request<{ results: RAGSearchResult[]; retrieval_debug: RetrievalDebug }>(`/api/writing/works/${workId}/rag/search`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   listWritingMemories: (knowledgeBaseId: number) => request<WritingMemory[]>(`/api/writing/memories?knowledge_base_id=${knowledgeBaseId}`),
-  createWritingMemory: (payload: { knowledge_base_id: number; memory_type: string; title: string; content: string; source?: string }) =>
+  createWritingMemory: (payload: {
+    knowledge_base_id: number;
+    memory_type: string;
+    title: string;
+    content: string;
+    tags?: string[];
+    source_ref?: Record<string, unknown>;
+    source?: string;
+  }) =>
     request<WritingMemory>("/api/writing/memories", { method: "POST", body: JSON.stringify(payload) }),
+  confirmOutlineMemory: (workId: number, payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown> }) =>
+    request<WritingMemory>(`/api/writing/works/${workId}/memory/confirm-outline`, { method: "POST", body: JSON.stringify(payload) }),
+  confirmDraftMemory: (workId: number, payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown> }) =>
+    request<WritingMemory>(`/api/writing/works/${workId}/memory/confirm-draft`, { method: "POST", body: JSON.stringify(payload) }),
   deleteWritingMemory: (id: number) => request<{ ok: boolean }>(`/api/writing/memories/${id}`, { method: "DELETE" }),
   generateOutline: (payload: {
     knowledge_base_ids: number[];
@@ -338,7 +572,7 @@ export const api = {
     model?: string;
     api_key?: string;
     dry_run?: boolean;
-  }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/outline", { method: "POST", body: JSON.stringify(payload) }),
+  }) => request<WritingGenerateResult>("/api/writing/outline", { method: "POST", body: JSON.stringify(payload) }),
   generateDraft: (payload: {
     knowledge_base_ids: number[];
     task: string;
@@ -350,7 +584,49 @@ export const api = {
     model?: string;
     api_key?: string;
     dry_run?: boolean;
-  }) => request<{ content: string; citations: RetrievalHit[] }>("/api/writing/draft", { method: "POST", body: JSON.stringify(payload) }),
+  }) => request<WritingGenerateResult>("/api/writing/draft", { method: "POST", body: JSON.stringify(payload) }),
+  generateWorkOutline: (
+    workId: number,
+    payload: {
+      knowledge_base_ids?: number[];
+      task: string;
+      current_content?: string;
+      mode?: string;
+      knowledge_mode?: string;
+      model_provider?: string;
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      dry_run?: boolean;
+      top_k?: number;
+    },
+  ) =>
+    request<WritingGenerateResult>(
+      `/api/writing/works/${workId}/agent/outline`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  generateWorkDraft: (
+    workId: number,
+    payload: {
+      knowledge_base_ids?: number[];
+      task: string;
+      confirmed_outline: string;
+      current_content?: string;
+      mode?: string;
+      knowledge_mode?: string;
+      model_provider?: string;
+      model?: string;
+      base_url?: string;
+      api_key?: string;
+      dry_run?: boolean;
+      top_k?: number;
+      target_chars?: number;
+    },
+  ) =>
+    request<WritingGenerateResult>(
+      `/api/writing/works/${workId}/agent/draft`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
   generateWriting: (payload: {
     knowledge_base_ids: number[];
     task: string;
@@ -390,7 +666,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  downloadUrl: (jobId: string, path: string) =>
-    `${API_BASE}/api/jobs/${jobId}/download?path=${encodeURIComponent(path)}&workspace_id=${encodeURIComponent(getWorkspaceId())}`,
-  downloadZipUrl: (jobId: string) => `${API_BASE}/api/jobs/${jobId}/download-zip?workspace_id=${encodeURIComponent(getWorkspaceId())}`,
+  downloadUrl: (jobId: string, path: string) => {
+    const token = authToken();
+    const access = token ? `access_token=${encodeURIComponent(token)}` : `workspace_id=${encodeURIComponent(getWorkspaceId())}`;
+    return `${API_BASE}/api/jobs/${jobId}/download?path=${encodeURIComponent(path)}&${access}`;
+  },
+  downloadZipUrl: (jobId: string) => {
+    const token = authToken();
+    const access = token ? `access_token=${encodeURIComponent(token)}` : `workspace_id=${encodeURIComponent(getWorkspaceId())}`;
+    return `${API_BASE}/api/jobs/${jobId}/download-zip?${access}`;
+  },
 };

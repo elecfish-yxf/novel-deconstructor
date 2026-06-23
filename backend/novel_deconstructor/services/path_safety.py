@@ -48,13 +48,15 @@ def resolve_output_root(requested_root: str | None = None) -> Path:
     return ensure_writable_dir(ensure_inside(base, base / candidate))
 
 
-def project_output_dir(project_name: str, requested_root: str | None = None) -> Path:
+def project_output_dir(project_name: str, requested_root: str | None = None, workspace_id: str | None = None) -> Path:
     root = resolve_output_root(requested_root)
+    if workspace_id:
+        root = root / secure_slug(workspace_id, "workspace")
     return ensure_writable_dir(root / secure_slug(project_name))
 
 
-def job_output_dir(project_name: str, job_id: str, requested_root: str | None = None) -> Path:
-    return ensure_writable_dir(project_output_dir(project_name, requested_root) / job_id)
+def job_output_dir(project_name: str, job_id: str, requested_root: str | None = None, workspace_id: str | None = None) -> Path:
+    return ensure_writable_dir(project_output_dir(project_name, requested_root, workspace_id=workspace_id) / job_id)
 
 
 def safe_relative_file(base: Path, relative_path: str) -> Path:

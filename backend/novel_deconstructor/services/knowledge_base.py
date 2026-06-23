@@ -59,6 +59,10 @@ def normalize_knowledge_type(value: str | None, default: str = "worldbuilding") 
     return value if value in KNOWLEDGE_TYPES else default
 
 
+def knowledge_base_storage_dir(knowledge_base: KnowledgeBase) -> Path:
+    return get_settings().knowledge_dir / secure_slug(knowledge_base.workspace_id, "workspace") / str(knowledge_base.id)
+
+
 async def add_uploaded_document(
     db: Session,
     knowledge_base: KnowledgeBase,
@@ -68,7 +72,7 @@ async def add_uploaded_document(
     settings = get_settings()
     file_type = validate_extension(upload.filename or "document")
     safe_name = safe_upload_name(upload.filename or f"document.{file_type}")
-    incoming = settings.knowledge_dir / str(knowledge_base.id) / "_incoming" / safe_name
+    incoming = knowledge_base_storage_dir(knowledge_base) / "_incoming" / safe_name
     size = await save_upload(upload, incoming, settings.max_upload_size_mb * 1024 * 1024)
     try:
         return add_document_from_path(
@@ -130,7 +134,7 @@ def add_document_from_path(
     db.commit()
     db.refresh(document)
 
-    target_dir = get_settings().knowledge_dir / str(knowledge_base.id) / str(document.id)
+    target_dir = knowledge_base_storage_dir(knowledge_base) / str(document.id)
     target_dir.mkdir(parents=True, exist_ok=True)
     stored_path = target_dir / safe_upload_name(original_filename or file_path.name)
     if move_source:
@@ -187,7 +191,7 @@ def add_document_from_text(
     db.commit()
     db.refresh(document)
 
-    target_dir = get_settings().knowledge_dir / str(knowledge_base.id) / str(document.id)
+    target_dir = knowledge_base_storage_dir(knowledge_base) / str(document.id)
     target_dir.mkdir(parents=True, exist_ok=True)
     stored_path = target_dir / safe_name
     stored_path.write_text(text + "\n", encoding="utf-8")

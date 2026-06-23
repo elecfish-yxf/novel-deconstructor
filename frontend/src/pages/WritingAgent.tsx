@@ -1,5 +1,21 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { api, getWorkspaceId, Job, KnowledgeBase, KnowledgeDocument, PublicConfig, RetrievalHit, WritingMemory } from "../api";
+import {
+  api,
+  getWorkspaceId,
+  Job,
+  KnowledgeBase,
+  KnowledgeCard,
+  KnowledgeDocument,
+  KnowledgeImportResult,
+  KnowledgeMarkdownDoc,
+  LongGenerationSection,
+  PublicConfig,
+  RAGSearchResult,
+  RetrievalDebug,
+  RetrievalHit,
+  UsedKnowledge,
+  WritingMemory,
+} from "../api";
 
 const KNOWLEDGE_GROUPS = [
   {
@@ -28,11 +44,22 @@ function documentTitle(document: KnowledgeDocument) {
   return document.document_title || document.original_filename;
 }
 
+function compactSourceRef(sourceRef: Record<string, unknown>) {
+  const entries = Object.entries(sourceRef || {});
+  if (!entries.length) return "";
+  return entries
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${String(value)}`)
+    .join(" · ");
+}
+
 export default function WritingAgent({ job }: { job?: Job | null }) {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [cards, setCards] = useState<KnowledgeCard[]>([]);
+  const [markdownDocs, setMarkdownDocs] = useState<KnowledgeMarkdownDoc[]>([]);
   const [memories, setMemories] = useState<WritingMemory[]>([]);
   const [name, setName] = useState("作品 1");
   const [description, setDescription] = useState("用于 AI 写作 Agent 的独立作品空间");
@@ -44,6 +71,19 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<RetrievalHit[]>([]);
+  const [ragStage, setRagStage] = useState("draft");
+  const [ragTopK, setRagTopK] = useState(8);
+  const [ragResults, setRagResults] = useState<RAGSearchResult[]>([]);
+  const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebug | null>(null);
+  const [usedKnowledge, setUsedKnowledge] = useState<UsedKnowledge[]>([]);
+  const [promptPreview, setPromptPreview] = useState("");
+  const [packagePath, setPackagePath] = useState("examples/sample_knowledge_package.json");
+  const [markdownSourcePath, setMarkdownSourcePath] = useState("");
+  const [activeKnowledgeTab, setActiveKnowledgeTab] = useState<"cards" | "docs" | "result">("cards");
+  const [cardTypeFilter, setCardTypeFilter] = useState("all");
+  const [selectedCardId, setSelectedCardId] = useState("");
+  const [selectedDocId, setSelectedDocId] = useState("");
+  const [markdownContent, setMarkdownContent] = useState("");
   const [uploadType, setUploadType] = useState("writing_guide");
   const [storySeed, setStorySeed] = useState("一个普通人在高压规则世界中寻找自我选择权。");
   const [worldbuildingDraft, setWorldbuildingDraft] = useState("");
@@ -52,6 +92,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [outline, setOutline] = useState("");
   const [confirmedOutline, setConfirmedOutline] = useState("");
   const [draft, setDraft] = useState("");
+  const [targetChars, setTargetChars] = useState(3000);
+  const [actualChars, setActualChars] = useState<number | null>(null);
+  const [longSections, setLongSections] = useState<LongGenerationSection[]>([]);
+  const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
   const [memoryType, setMemoryType] = useState("note");
   const [memoryTitle, setMemoryTitle] = useState("");
   const [memoryContent, setMemoryContent] = useState("");
@@ -81,6 +125,21 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     () => documents.filter((document) => selectedDocumentSet.has(document.id)),
     [documents, selectedDocumentSet],
   );
+  const cardFilterGroups = useMemo(() => {
+    const grouped = cards.reduce<Record<string, { key: string; label: string; count: number }>>((acc, card) => {
+      const key = `${card.library_type}/${card.card_type}`;
+      if (!acc[key]) {
+        acc[key] = { key, label: key, count: 0 };
+      }
+      acc[key].count += 1;
+      return acc;
+    }, {});
+    return [{ key: "all", label: "全部", count: cards.length }, ...Object.values(grouped).sort((a, b) => a.label.localeCompare(b.label))];
+  }, [cards]);
+  const filteredCards = useMemo(() => {
+    if (cardTypeFilter === "all") return cards;
+    return cards.filter((card) => `${card.library_type}/${card.card_type}` === cardTypeFilter);
+  }, [cards, cardTypeFilter]);
   const writingModels = useMemo(() => {
     if (config?.writing_models?.length) return config.writing_models;
     return [
@@ -103,11 +162,18 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   function clearTransientWritingState() {
     setHits([]);
+    setRagResults([]);
+    setRetrievalDebug(null);
+    setUsedKnowledge([]);
+    setPromptPreview("");
     setCitations([]);
     setWorldbuildingDraft("");
     setOutline("");
     setConfirmedOutline("");
     setDraft("");
+    setActualChars(null);
+    setLongSections([]);
+    setGenerationWarnings([]);
   }
 
   async function load(nextSelectedId?: number | null) {
@@ -128,13 +194,22 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     if (selectedChanged) clearTransientWritingState();
     if (preferred) {
       setExpandedWorkIds((items) => (items.includes(preferred) ? items : [...items, preferred]));
-      const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(preferred), api.listWritingMemories(preferred)]);
+      const [nextDocuments, nextMemories, nextCards, nextDocs] = await Promise.all([
+        api.listKnowledgeDocuments(preferred),
+        api.listWritingMemories(preferred),
+        api.listKnowledgeCards(preferred),
+        api.listKnowledgeMarkdownDocs(preferred),
+      ]);
       setDocuments(nextDocuments);
       setMemories(nextMemories);
+      setCards(nextCards);
+      setMarkdownDocs(nextDocs);
       setSelectedDocumentIds((items) => items.filter((id) => nextDocuments.some((document) => document.id === id)));
     } else {
       setDocuments([]);
       setMemories([]);
+      setCards([]);
+      setMarkdownDocs([]);
       setSelectedDocumentIds([]);
     }
   }
@@ -167,9 +242,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     if (selectedChanged) clearTransientWritingState();
     setExpandedWorkIds((items) => (items.includes(id) ? items : [...items, id]));
     setError("");
-    const [nextDocuments, nextMemories] = await Promise.all([api.listKnowledgeDocuments(id), api.listWritingMemories(id)]);
+    const [nextDocuments, nextMemories, nextCards, nextDocs] = await Promise.all([
+      api.listKnowledgeDocuments(id),
+      api.listWritingMemories(id),
+      api.listKnowledgeCards(id),
+      api.listKnowledgeMarkdownDocs(id),
+    ]);
     setDocuments(nextDocuments);
     setMemories(nextMemories);
+    setCards(nextCards);
+    setMarkdownDocs(nextDocs);
   }
 
   function toggleWork(id: number) {
@@ -230,6 +312,90 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入拆书结果失败");
     } finally {
+      setBusy("");
+    }
+  }
+
+  async function refreshKnowledgeCards(workId = selected?.id) {
+    if (!workId) return;
+    const [nextCards, nextDocs] = await Promise.all([api.listKnowledgeCards(workId), api.listKnowledgeMarkdownDocs(workId)]);
+    setCards(nextCards);
+    setMarkdownDocs(nextDocs);
+  }
+
+  async function importKnowledgePackage() {
+    if (!selected || !packagePath.trim()) return;
+    setBusy("import-package");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.importKnowledgePackage(selected.id, {
+        package_path: packagePath,
+        library_type: "writing_guide",
+        status: "approved",
+      });
+      setMessage(result.message);
+      await refreshKnowledgeCards(selected.id);
+      setActiveKnowledgeTab("cards");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入知识包失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function summarizeImportResults(results: KnowledgeImportResult[]) {
+    const imported = results.reduce((total, item) => total + item.imported_count, 0);
+    const generated = results.reduce((total, item) => total + item.generated_markdown_count, 0);
+    const skipped = results.reduce((total, item) => total + item.skipped_count, 0);
+    const typeTotals = results.reduce<Record<string, number>>((acc, item) => {
+      Object.entries(item.card_types || {}).forEach(([type, count]) => {
+        acc[type] = (acc[type] || 0) + count;
+      });
+      return acc;
+    }, {});
+    const typeText = Object.entries(typeTotals)
+      .map(([type, count]) => `${type} ${count}`)
+      .join(" / ");
+    return `Markdown 已自动生成 ${imported} 张知识卡，归档 ${generated} 个文档，跳过 ${skipped} 项${typeText ? `；${typeText}` : ""}`;
+  }
+
+  async function importMarkdownPath() {
+    if (!selected || !markdownSourcePath.trim()) return;
+    setBusy("import-md-path");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.importKnowledgeMarkdown(selected.id, {
+        source_path: markdownSourcePath,
+        library_type: uploadType,
+        status: "raw_extracted",
+      });
+      setMessage(summarizeImportResults([result]));
+      await refreshKnowledgeCards(selected.id);
+      setActiveKnowledgeTab("cards");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Markdown 拆卡失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function importMarkdownFiles(event: ChangeEvent<HTMLInputElement>) {
+    if (!selected || !event.target.files?.length) return;
+    const files = event.target.files;
+    setBusy("import-md-files");
+    setError("");
+    setMessage("");
+    try {
+      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, files, uploadType, "raw_extracted");
+      setMessage(summarizeImportResults(results));
+      await refreshKnowledgeCards(selected.id);
+      setActiveKnowledgeTab("cards");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Markdown 文件导入失败");
+    } finally {
+      event.target.value = "";
       setBusy("");
     }
   }
@@ -350,6 +516,130 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     }
   }
 
+  async function searchRAG(event?: FormEvent) {
+    event?.preventDefault();
+    if (!selected || !query.trim()) return;
+    setBusy("rag-search");
+    setError("");
+    try {
+      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK });
+      setRagResults(result.results);
+      setRetrievalDebug(result.retrieval_debug);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "RAG 召回失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function updateCardStatus(card: KnowledgeCard, status: string) {
+    if (!selected) return;
+    setBusy(`card-${card.card_id}`);
+    setError("");
+    try {
+      await api.updateKnowledgeCard(selected.id, card.card_id, { status });
+      await refreshKnowledgeCards(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新知识卡失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteKnowledgeCard(card: KnowledgeCard) {
+    if (!selected || !window.confirm(`确定软删除知识卡「${card.title}」吗？`)) return;
+    setBusy(`card-${card.card_id}`);
+    setError("");
+    try {
+      await api.deleteKnowledgeCard(selected.id, card.card_id);
+      await refreshKnowledgeCards(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除知识卡失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openMarkdownDoc(docId: string) {
+    if (!selected) return;
+    setBusy(`doc-${docId}`);
+    setError("");
+    try {
+      const doc = await api.readKnowledgeMarkdownDoc(selected.id, docId);
+      setSelectedDocId(doc.doc_id);
+      setMarkdownContent(doc.content);
+      setActiveKnowledgeTab("docs");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "读取 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveMarkdownDoc() {
+    if (!selected || !selectedDocId || !markdownContent.trim()) return;
+    setBusy(`doc-save-${selectedDocId}`);
+    setError("");
+    try {
+      await api.saveKnowledgeMarkdownDoc(selected.id, selectedDocId, markdownContent);
+      await refreshKnowledgeCards(selected.id);
+      setMessage("Markdown 已保存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function syncMarkdownDoc() {
+    if (!selected || !selectedDocId) return;
+    setBusy(`doc-sync-${selectedDocId}`);
+    setError("");
+    try {
+      const result = await api.syncKnowledgeMarkdownDoc(selected.id, selectedDocId);
+      await refreshKnowledgeCards(selected.id);
+      setMessage(`已同步到知识卡：${result.updated_fields.join("、") || "无字段变化"}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "同步 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteMarkdownDoc() {
+    if (!selected || !selectedDocId || !window.confirm("确定删除这个 Markdown 文档并软删除对应知识卡吗？")) return;
+    setBusy(`doc-delete-${selectedDocId}`);
+    setError("");
+    try {
+      await api.deleteKnowledgeMarkdownDoc(selected.id, selectedDocId);
+      setSelectedDocId("");
+      setMarkdownContent("");
+      await refreshKnowledgeCards(selected.id);
+      setMessage("Markdown 已删除，对应知识卡已标记为 deleted。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function regenerateMarkdown(card: KnowledgeCard) {
+    if (!selected) return;
+    setBusy(`export-${card.card_id}`);
+    setError("");
+    try {
+      const doc = await api.exportKnowledgeCardMarkdown(selected.id, card.card_id);
+      setSelectedDocId(doc.doc_id);
+      setMarkdownContent(doc.content);
+      await refreshKnowledgeCards(selected.id);
+      setActiveKnowledgeTab("docs");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重新生成 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function generateOutline(event: FormEvent) {
     event.preventDefault();
     if (!selected || !outlineTask.trim()) return;
@@ -358,18 +648,34 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setOutline("");
     setConfirmedOutline("");
     setCitations([]);
+    setActualChars(null);
+    setLongSections([]);
+    setGenerationWarnings([]);
     try {
-      const result = await api.generateOutline({
-        knowledge_base_ids: [selected.id],
+      const result = await api.generateWorkOutline(selected.id, {
         task: outlineTask,
         current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
         dry_run: dryRun,
+        top_k: ragTopK,
       });
       setOutline(result.content);
       setCitations(result.citations);
+      setUsedKnowledge(result.used_knowledge || []);
+      setRetrievalDebug(result.retrieval_debug || null);
+      setPromptPreview(result.prompt_preview || "");
+      setActualChars(result.actual_chars ?? result.content.length);
+      setGenerationWarnings(result.warnings || []);
+      setRagResults(
+        (result.used_knowledge || []).map((item) => ({
+          ...item,
+          content_preview: "",
+          tags: [],
+          status: "used",
+        })),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成提纲失败");
     } finally {
@@ -384,14 +690,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setMessage("");
     try {
       setConfirmedOutline(outline);
-      const saved = await api.createWritingMemory({
-        knowledge_base_id: selected.id,
-        memory_type: "outline",
+      const saved = await api.confirmOutlineMemory(selected.id, {
         title: `已确认提纲 ${new Date().toLocaleString()}`,
         content: outline,
-        source: "confirmed_outline",
+        tags: ["outline"],
       });
       setMemories((items) => [saved, ...items]);
+      await refreshKnowledgeCards(selected.id);
       setMemoryTitle("");
       setMemoryContent("");
       setMessage("提纲已确认，并写入长期 Memory。现在可以生成正文。");
@@ -409,9 +714,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setError("");
     setDraft("");
     setCitations([]);
+    setActualChars(null);
+    setLongSections([]);
+    setGenerationWarnings([]);
     try {
-      const result = await api.generateDraft({
-        knowledge_base_ids: [selected.id],
+      const result = await api.generateWorkDraft(selected.id, {
         task: `请根据用户已确认的章节提纲生成小说正文：${outlineTask}`,
         confirmed_outline: confirmedOutline,
         current_content: outlineContext,
@@ -419,9 +726,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
         dry_run: dryRun,
+        top_k: ragTopK,
+        target_chars: targetChars,
       });
       setDraft(result.content);
       setCitations(result.citations);
+      setUsedKnowledge(result.used_knowledge || []);
+      setRetrievalDebug(result.retrieval_debug || null);
+      setPromptPreview(result.prompt_preview || "");
+      setActualChars(result.actual_chars ?? result.content.length);
+      setLongSections(result.sections || []);
+      setGenerationWarnings(result.warnings || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成正文失败");
     } finally {
@@ -440,9 +755,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         memory_type: type,
         title,
         content,
+        tags: [type],
         source,
       });
       setMemories((items) => [saved, ...items]);
+      await refreshKnowledgeCards(selected.id);
       setMemoryTitle("");
       setMemoryContent("");
       setMessage("Memory 已保存，后续提纲和正文生成都会自动参考。");
@@ -559,6 +876,33 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                             导入拆书技巧
                           </button>
                         </div>
+                        <label>
+                          知识包路径
+                          <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="examples/sample_knowledge_package.json" />
+                        </label>
+                        <button type="button" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
+                          导入 knowledge_package
+                        </button>
+                        <label>
+                          Markdown 知识文档路径
+                          <input value={markdownSourcePath} onChange={(event) => setMarkdownSourcePath(event.target.value)} placeholder="examples/my_knowledge.md" />
+                        </label>
+                        <div className="button-row tight-row">
+                          <button type="button" onClick={importMarkdownPath} disabled={!selected || busy === "import-md-path" || !markdownSourcePath.trim()}>
+                            自动拆卡
+                          </button>
+                          <label className="button-link compact-action">
+                            上传 MD 拆卡
+                            <input
+                              className="hidden-input"
+                              type="file"
+                              multiple
+                              accept=".md,.markdown,text/markdown,text/plain"
+                              onChange={importMarkdownFiles}
+                              disabled={!selected || busy === "import-md-files"}
+                            />
+                          </label>
+                        </div>
                       </div>
 
                       <div className="file-bulk-toolbar">
@@ -659,31 +1003,239 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
             </div>
             <p className="muted">
               {selected
-                ? `${selected.name} 内共有 ${documents.length} 个文件：${documentsByType.writing_guide.length} 个写作技巧指南，${documentsByType.worldbuilding.length} 个世界观设定。`
+                ? `${selected.name} 内共有 ${documents.length} 个文件、${cards.length} 张知识卡、${markdownDocs.length} 个 Markdown 文档。`
                 : "每个作品有独立文件树、Memory 和生成上下文。"}
             </p>
           </div>
 
+          <div className="knowledge-workbench panel">
+            <div className="knowledge-workbench-head">
+              <div>
+                <p className="eyebrow">Knowledge Cards</p>
+                <h2>知识卡与 Markdown</h2>
+              </div>
+              <div className="tab-row">
+                <button type="button" className={activeKnowledgeTab === "cards" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("cards")}>
+                  知识卡
+                </button>
+                <button type="button" className={activeKnowledgeTab === "docs" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("docs")}>
+                  Markdown 文档
+                </button>
+                <button type="button" className={activeKnowledgeTab === "result" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("result")}>
+                  生成结果
+                </button>
+              </div>
+            </div>
+
+            {activeKnowledgeTab === "cards" && (
+              <div className="knowledge-card-panel">
+                <div className="filter-chip-row">
+                  {cardFilterGroups.map((group) => (
+                    <button key={group.key} type="button" className={cardTypeFilter === group.key ? "active-chip" : ""} onClick={() => setCardTypeFilter(group.key)}>
+                      {group.label}
+                      <span>{group.count}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="knowledge-card-grid">
+                  {filteredCards.map((card) => (
+                    <article key={card.card_id} className={`knowledge-card-item ${selectedCardId === card.card_id ? "selected-card" : ""}`}>
+                      <div className="card-title-row">
+                        <strong>{card.title}</strong>
+                        <span className={`status-pill status-${card.status}`}>{card.status}</span>
+                      </div>
+                      <small>
+                        {card.library_type} / {card.card_type} · {Math.round(card.confidence * 100)}%
+                      </small>
+                      <p>{card.summary || card.content.slice(0, 180)}</p>
+                      <div className="tag-row">
+                        {card.tags.slice(0, 5).map((tag) => (
+                          <span key={tag}>{tag}</span>
+                        ))}
+                      </div>
+                      {!!compactSourceRef(card.source_ref) && <small className="source-ref">{compactSourceRef(card.source_ref)}</small>}
+                      <div className="button-row tight-row">
+                        <button type="button" onClick={() => setSelectedCardId(card.card_id)}>
+                          详情
+                        </button>
+                        <button type="button" onClick={() => updateCardStatus(card, card.status === "disabled" ? "approved" : "disabled")} disabled={busy === `card-${card.card_id}`}>
+                          {card.status === "disabled" ? "启用" : "禁用"}
+                        </button>
+                        <button type="button" onClick={() => regenerateMarkdown(card)} disabled={busy === `export-${card.card_id}`}>
+                          生成 MD
+                        </button>
+                        <button type="button" className="danger" onClick={() => deleteKnowledgeCard(card)} disabled={busy === `card-${card.card_id}`}>
+                          删除
+                        </button>
+                      </div>
+                      {selectedCardId === card.card_id && <pre className="card-detail">{card.content}</pre>}
+                    </article>
+                  ))}
+                  {!!cards.length && !filteredCards.length && <p className="muted">当前分类下暂无知识卡。</p>}
+                  {!cards.length && <p className="muted">还没有知识卡。可以先导入 `examples/sample_knowledge_package.json`。</p>}
+                </div>
+              </div>
+            )}
+
+            {activeKnowledgeTab === "docs" && (
+              <div className="markdown-doc-layout">
+                <div className="doc-list">
+                  {markdownDocs.map((doc) => (
+                    <button key={doc.doc_id} type="button" className={selectedDocId === doc.doc_id ? "active-file" : ""} onClick={() => openMarkdownDoc(doc.doc_id)}>
+                      <span>
+                        <strong>{doc.title}</strong>
+                        <small>
+                          {doc.library_type}/{doc.card_type} · {doc.exists ? doc.status : "missing"}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                  {!markdownDocs.length && <p className="muted">暂无 Markdown 文档。</p>}
+                </div>
+                <div className="doc-editor">
+                  <div className="preview-toolbar">
+                    <strong>{selectedDocId || "选择 Markdown 文档"}</strong>
+                    <div className="button-row">
+                      <button type="button" onClick={saveMarkdownDoc} disabled={!selectedDocId || busy === `doc-save-${selectedDocId}`}>
+                        保存
+                      </button>
+                      <button type="button" className="primary" onClick={syncMarkdownDoc} disabled={!selectedDocId || busy === `doc-sync-${selectedDocId}`}>
+                        同步到知识卡
+                      </button>
+                      <button type="button" className="danger" onClick={deleteMarkdownDoc} disabled={!selectedDocId || busy === `doc-delete-${selectedDocId}`}>
+                        删除文档
+                      </button>
+                    </div>
+                  </div>
+                  <textarea rows={18} value={markdownContent} onChange={(event) => setMarkdownContent(event.target.value)} placeholder="Markdown 内容会显示在这里。" />
+                </div>
+              </div>
+            )}
+
+            {activeKnowledgeTab === "result" && (
+              <div className="generation-result-panel">
+                <div className="metric-strip">
+                  <div>
+                    <span>目标阶段</span>
+                    <strong>{retrievalDebug?.stage || ragStage}</strong>
+                  </div>
+                  <div>
+                    <span>召回知识</span>
+                    <strong>{usedKnowledge.length}</strong>
+                  </div>
+                  <div>
+                    <span>目标/实际字数</span>
+                    <strong>
+                      {targetChars} / {actualChars ?? 0}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>分段数</span>
+                    <strong>{longSections.length || 1}</strong>
+                  </div>
+                </div>
+                {!!generationWarnings.length && (
+                  <div className="retrieval-debug">
+                    <strong>生成提示</strong>
+                    {generationWarnings.map((item) => (
+                      <p key={item}>{item}</p>
+                    ))}
+                  </div>
+                )}
+                {!!usedKnowledge.length && (
+                  <div className="hit-list">
+                    {usedKnowledge.map((item) => (
+                      <article key={item.id}>
+                        <strong>
+                          [{item.card_type}] {item.title}
+                        </strong>
+                        <small>
+                          {item.library_type} · score {item.score}
+                        </small>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                {!!longSections.length && (
+                  <div className="section-progress-list">
+                    {longSections.map((section) => (
+                      <article key={section.index}>
+                        <div className="card-title-row">
+                          <strong>
+                            第 {section.index} 段 · {section.status}
+                          </strong>
+                          <span>
+                            {section.actual_chars}/{section.target_chars}
+                          </span>
+                        </div>
+                        <p>{section.focus}</p>
+                        <small>used_knowledge {section.used_knowledge.length}</small>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                <pre>{draft || outline || "生成结果会显示在下方正文区；这里保留最近一次 used_knowledge 和 prompt preview。"}</pre>
+                {promptPreview && (
+                  <>
+                    <h3>Prompt Preview</h3>
+                    <pre>{promptPreview}</pre>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="agent-two-col">
-            <form className="panel compact-form" onSubmit={search}>
-              <h2>检索测试</h2>
+            <form className="panel compact-form" onSubmit={searchRAG}>
+              <h2>RAG 召回预览</h2>
               <label>
-                问题或关键词
+                任务或关键词
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：黄金三章如何制造期待？" />
               </label>
-              <button className="primary" disabled={!selected || busy === "search"}>
-                检索当前作品
+              <div className="mode-grid">
+                <label>
+                  Stage
+                  <select value={ragStage} onChange={(event) => setRagStage(event.target.value)}>
+                    <option value="outline">outline</option>
+                    <option value="draft">draft</option>
+                    <option value="revision">revision</option>
+                    <option value="continue">continue</option>
+                    <option value="worldbuilding_check">worldbuilding_check</option>
+                  </select>
+                </label>
+                <label>
+                  top_k
+                  <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                </label>
+              </div>
+              <button className="primary" disabled={!selected || busy === "rag-search"}>
+                测试召回
               </button>
+              {retrievalDebug && (
+                <div className="retrieval-debug">
+                  <strong>召回策略</strong>
+                  <small>
+                    {retrievalDebug.stage} · top_k {retrievalDebug.top_k} · 候选 {retrievalDebug.total_candidates} · 选中 {retrievalDebug.selected_count}
+                  </small>
+                  <p>{retrievalDebug.preferred_card_types.join(" / ")}</p>
+                </div>
+              )}
               <div className="hit-list">
-                {hits.map((hit) => (
-                  <article key={hit.chunk_id}>
-                    <strong>
-                      [{hit.citation_id}] {hit.document_title || hit.original_filename}
-                    </strong>
+                {ragResults.map((hit) => (
+                  <article key={hit.id}>
+                    <strong>{hit.title}</strong>
                     <small>
-                      {knowledgeTypeLabel(hit.knowledge_type)} · {hit.structure_path} · score {hit.score}
+                      {hit.library_type} / {hit.card_type} · score {hit.score}
                     </small>
-                    <p>{hit.text}</p>
+                    {!!hit.tags.length && (
+                      <div className="tag-row">
+                        {hit.tags.slice(0, 6).map((tag) => (
+                          <span key={tag}>{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                    {!!compactSourceRef(hit.source_ref) && <small className="source-ref">{compactSourceRef(hit.source_ref)}</small>}
+                    <p>{hit.content_preview || "本次生成使用了这张知识卡。"}</p>
                   </article>
                 ))}
               </div>
@@ -750,6 +1302,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 补充上下文/已有正文，可选
                 <textarea rows={5} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
               </label>
+              <div className="mode-grid">
+                <label>
+                  目标字数
+                  <input type="number" min={500} max={50000} step={500} value={targetChars} onChange={(event) => setTargetChars(Number(event.target.value) || 3000)} />
+                </label>
+                <label>
+                  RAG top_k
+                  <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                </label>
+              </div>
+              {targetChars > 2500 && <small className="warn-cell">目标字数较长，正文生成会自动分段并合并结果。</small>}
               <div className="mode-grid">
                 <label>
                   模型选择
@@ -829,7 +1392,29 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
                       复制正文
                     </button>
-                    <button type="button" disabled={!selected || !draft || busy === "memory"} onClick={() => saveMemory(`正文片段 ${new Date().toLocaleString()}`, draft, "draft", "generated_draft")}>
+                    <button
+                      type="button"
+                      disabled={!selected || !draft || busy === "memory"}
+                      onClick={async () => {
+                        if (!selected || !draft) return;
+                        setBusy("memory");
+                        setError("");
+                        try {
+                          const saved = await api.confirmDraftMemory(selected.id, {
+                            title: `正文片段 ${new Date().toLocaleString()}`,
+                            content: draft,
+                            tags: ["draft"],
+                          });
+                          setMemories((items) => [saved, ...items]);
+                          await refreshKnowledgeCards(selected.id);
+                          setMessage("正文已写入 Memory。");
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "保存正文 Memory 失败");
+                        } finally {
+                          setBusy("");
+                        }
+                      }}
+                    >
                       存入 Memory
                     </button>
                   </div>

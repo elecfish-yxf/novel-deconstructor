@@ -47,6 +47,7 @@ def public_config():
         "knowledge_chunk_overlap": settings.knowledge_chunk_overlap,
         "retrieval_top_k": settings.retrieval_top_k,
         "max_upload_size_mb": settings.max_upload_size_mb,
+        "auth_required": settings.app_require_auth,
         "privacy_note": "应用和知识库存储在服务器。使用模型调用时，必须由当前使用者在页面填写自己的 API Key；服务器不会默认使用站长的 Key。",
     }
 

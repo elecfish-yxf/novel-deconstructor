@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..database import get_db
 from ..models import AnalysisJob, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from ..schemas import (
@@ -27,6 +26,7 @@ from ..services.knowledge_base import (
     add_document_from_text,
     add_uploaded_document,
     import_deconstruction_job,
+    knowledge_base_storage_dir,
     reindex_document,
     search_knowledge,
 )
@@ -138,7 +138,7 @@ def update_knowledge_base(
 @router.delete("/api/knowledge-bases/{knowledge_base_id}")
 def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _get_kb(db, knowledge_base_id, workspace_id)
-    base_dir = get_settings().knowledge_dir / str(kb.id)
+    base_dir = knowledge_base_storage_dir(kb)
     db.delete(kb)
     db.commit()
     if base_dir.exists():

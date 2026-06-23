@@ -145,6 +145,32 @@ nav button.active {
   width: 100%;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f6f7f9;
+}
+
+.auth-card {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.sidebar-action {
+  margin-top: 8px;
+  color: #e6edf3;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 .page-head {
   display: flex;
   justify-content: space-between;
@@ -750,6 +776,233 @@ th {
   align-items: start;
 }
 
+.knowledge-workbench {
+  padding: 0;
+  overflow: hidden;
+}
+
+.knowledge-workbench-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tab-row button {
+  padding: 7px 10px;
+}
+
+.tab-row .active-tab {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.knowledge-card-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filter-chip-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.filter-chip-row button span {
+  min-width: 22px;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: #e5e7eb;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.filter-chip-row .active-chip {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.knowledge-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.knowledge-card-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  background: #fbfdff;
+}
+
+.knowledge-card-item.selected-card {
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+
+.card-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+}
+
+.knowledge-card-item p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-row span {
+  background: #e0f2fe;
+  color: #075985;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-ref {
+  color: #64748b;
+  overflow-wrap: anywhere;
+}
+
+.card-detail {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.markdown-doc-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+}
+
+.doc-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.doc-list button {
+  text-align: left;
+}
+
+.doc-list button span {
+  display: grid;
+  gap: 4px;
+}
+
+.doc-list small {
+  color: #64748b;
+}
+
+.doc-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.generation-result-panel {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.generation-result-panel pre {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+}
+
+.retrieval-debug {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.retrieval-debug p {
+  margin: 0;
+  color: #1d4ed8;
+  line-height: 1.45;
+}
+
+.section-progress-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.section-progress-list article {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.section-progress-list p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.section-progress-list span,
+.section-progress-list small {
+  color: #64748b;
+  white-space: nowrap;
+}
+
 .writing-flow {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -913,6 +1166,7 @@ th {
   .results-layout,
   .agent-layout,
   .agent-two-col,
+  .markdown-doc-layout,
   .writing-flow,
   .path-picker-row {
     grid-template-columns: 1fr;
