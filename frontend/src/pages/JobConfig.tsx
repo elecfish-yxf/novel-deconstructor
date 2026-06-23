@@ -314,7 +314,7 @@ export default function JobConfig({
             ))}
           </div>
           <small>
-            当前 Skill：{selectedSkill?.name || "默认内置模板"}；每个章节会按勾选模式分别生成 Markdown。知识库、Obsidian、图谱由 Phase 3 导出生成。
+            当前 Skill：{selectedSkill?.name || "默认内置模板"}；每个章节会按勾选模式分别生成 Markdown。知识库、Obsidian、图谱由导出流程生成。
           </small>
         </div>
 
@@ -352,7 +352,7 @@ export default function JobConfig({
           允许极短引用原文
         </label>
         <div className="prompt-note">
-          <strong>Phase 3 导出</strong>
+          <strong>导出产物</strong>
           <div className="mode-grid">
             <label className="check-row">
               <input type="checkbox" checked={generateKb} onChange={(event) => setGenerateKb(event.target.checked)} />
@@ -364,7 +364,7 @@ export default function JobConfig({
             </label>
             <label className="check-row">
               <input type="checkbox" checked={generateGraph} onChange={(event) => setGenerateGraph(event.target.checked)} />
-              轻量 GraphRAG 图谱
+              轻量图谱 JSON
             </label>
           </div>
         </div>

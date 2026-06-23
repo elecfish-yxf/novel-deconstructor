@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     app_knowledge_dir: str = "./storage/knowledge"
     app_database_url: str = "sqlite:///./storage/novel_deconstructor.db"
 
-    max_upload_size_mb: int = 500
+    max_upload_size_mb: int = 20
     max_chapter_chars: int = 12000
     chunk_overlap_chars: int = 800
     knowledge_chunk_size: int = 900

@@ -24,6 +24,16 @@ from .workspace import get_workspace_id
 router = APIRouter(prefix="/api/writing", tags=["writing"])
 
 
+AGENT_RETRIEVAL_PROTOCOL = {
+    "outline": ["structure_pattern", "conflict_pattern", "emotion_module", "worldbuilding", "memory"],
+    "draft": ["style_pattern", "dialogue_rule", "emotion_module", "anti_pattern", "worldbuilding", "memory"],
+    "worldbuilding_draft": ["writing_guide", "structure_pattern", "conflict_pattern", "emotion_module"],
+    "worldbuilding_check": ["worldbuilding", "memory"],
+    "revision": ["language_style", "anti_pattern", "user_preference", "memory"],
+    "continuation": ["memory", "previous_ending", "character_state", "foreshadowing", "writing_guide"],
+}
+
+
 @router.get("/memories", response_model=list[WritingMemoryRead])
 def list_memories(
     knowledge_base_id: int,
@@ -82,7 +92,7 @@ async def generate_outline(
 ):
     settings = get_settings()
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
-    hits = search_knowledge(db, kb_ids, _outline_query(payload), settings.retrieval_top_k) if kb_ids else []
+    hits = _retrieve_for_agent_task(db, kb_ids, "outline", _outline_query(payload), settings.retrieval_top_k) if kb_ids else []
     if payload.knowledge_mode == "strict" and not hits:
         return WritingGenerateResponse(content="现有知识库资料不足，无法在严格知识模式下生成可靠提纲。", citations=[])
     memories = _recent_memories(db, workspace_id, kb_ids)
@@ -116,7 +126,7 @@ async def generate_draft(
 ):
     settings = get_settings()
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
-    hits = search_knowledge(db, kb_ids, _draft_query(payload), settings.retrieval_top_k) if kb_ids else []
+    hits = _retrieve_for_agent_task(db, kb_ids, "draft", _draft_query(payload), settings.retrieval_top_k) if kb_ids else []
     if payload.knowledge_mode == "strict" and not hits:
         return WritingGenerateResponse(content="现有知识库资料不足，无法在严格知识模式下生成可靠正文。", citations=[])
     memories = _recent_memories(db, workspace_id, kb_ids)
@@ -153,7 +163,7 @@ async def generate(payload: WritingGenerateRequest, workspace_id: str = Depends(
 async def worldbuilding_draft(payload: WorldbuildingDraftRequest, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     settings = get_settings()
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
-    hits = search_knowledge(db, kb_ids, payload.story_seed, settings.retrieval_top_k) if kb_ids else []
+    hits = _retrieve_for_agent_task(db, kb_ids, "worldbuilding_draft", payload.story_seed, settings.retrieval_top_k) if kb_ids else []
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WorldbuildingDraftResponse(content=_dry_run_worldbuilding(payload, hits), citations=hits)
@@ -235,9 +245,75 @@ def _recent_memories(db: Session, workspace_id: str, kb_ids: list[int], limit: i
     )
 
 
+def _retrieve_for_agent_task(db: Session, kb_ids: list[int], task_type: str, base_query: str, top_k: int) -> list[dict]:
+    queries = _retrieval_queries(task_type, base_query)
+    if not queries:
+        return search_knowledge(db, kb_ids, base_query, top_k)
+    limit = max(1, top_k)
+    per_query_limit = max(1, min(4, limit // len(queries) + 1))
+    hits: list[dict] = []
+    seen: set[str] = set()
+    for priority, query in enumerate(queries, start=1):
+        for hit in search_knowledge(db, kb_ids, query, per_query_limit):
+            chunk_id = hit.get("chunk_id")
+            if not chunk_id or chunk_id in seen:
+                continue
+            enriched = dict(hit)
+            enriched["retrieval_task"] = task_type
+            enriched["retrieval_priority"] = priority
+            hits.append(enriched)
+            seen.add(chunk_id)
+            if len(hits) >= limit:
+                return hits
+    return hits
+
+
+def _retrieval_queries(task_type: str, base_query: str) -> list[str]:
+    query = (base_query or "").strip()
+    if not query:
+        return []
+    protocol = {
+        "outline": [
+            "章节结构 状态变化 章尾钩子 structure pattern",
+            "冲突推进 冲突升级 conflict pattern",
+            "情绪链 爽点循环 emotion module",
+            "世界观 设定 人物 地点 规则 worldbuilding",
+            "长期 Memory 已确认提纲 人物状态 伏笔",
+        ],
+        "draft": [
+            "语言风格 句式 对话 动作 心理描写 style pattern dialogue rule",
+            "情绪链 爽点循环 可复现模块 emotion module",
+            "不建议模仿 AI味 反模式 anti pattern",
+            "世界观 设定 人物 地点 规则 worldbuilding",
+            "长期 Memory 上一章结尾 人物状态 伏笔",
+        ],
+        "worldbuilding_draft": [
+            "写作技巧指南 黄金三章 结构 规则 writing guide",
+            "冲突推进 信息投放 情绪链 可复现模块",
+            "不建议照搬 专名 世界观 独特设定 反模式",
+        ],
+        "worldbuilding_check": [
+            "世界观 设定 人物 地点 规则 worldbuilding",
+            "长期 Memory 已确认事实 连续性 伏笔",
+        ],
+        "revision": [
+            "语言风格 句式 对话 节奏 润色",
+            "AI味 不建议模仿 反模式 anti pattern",
+            "用户偏好 Memory 已确认要求",
+        ],
+        "continuation": [
+            "长期 Memory 上一章结尾 人物状态 伏笔",
+            "章节结构 章尾牵引 续写",
+            "写作技巧指南 冲突推进 情绪链",
+        ],
+    }
+    suffixes = protocol.get(task_type, [])
+    return [f"{query}\n{suffix}" for suffix in suffixes] or [query]
+
+
 def _oh_story_writing_kernel(db: Session) -> str:
     skill = db.query(DeconstructionSkill).filter(DeconstructionSkill.key == "oh_story_long_analyze_phase2").first()
-    skill_name = skill.name if skill else "oh-story 长篇拆文 Phase 2"
+    skill_name = skill.name if skill else "oh-story 长篇拆文内核"
     skill_description = skill.description if skill else "长篇小说拆书与写作方法内核"
     default_modes = skill.default_modes_json if skill else '["chapter_structure","conflict_analysis","character_growth","information_delivery","language_style","ai_bad_patterns"]'
     skill_prompt_brief = _skill_prompt_brief(skill.prompt_template if skill else None)

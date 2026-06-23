@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 storage/
 backend/storage/
 uploads/*
@@ -14,6 +16,8 @@ node_modules/
 frontend/node_modules/
 dist/
 frontend/dist/
+tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
 .venv/
 backend/.venv/
 work/
@@ -21,5 +25,9 @@ third_party_references/
 tmp_*/
 backend/tmp_*/
 logs/
+*.log
 sample_novel.txt
 *.pyc
+*.db
+*.sqlite
+*.sqlite3

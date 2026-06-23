@@ -37,16 +37,16 @@ export default function SkillImport() {
     <section>
       <div className="page-head">
         <div>
-          <p className="eyebrow">Phase 3 interface</p>
+          <p className="eyebrow">Prompt import</p>
           <h1>Prompt / Skill 导入</h1>
         </div>
-        <p>Phase 2 已支持手动管理 Skill；这里保留本地/远程仓库扫描入口，自动转换将在 Phase 3 完整实现。</p>
+        <p>可以扫描本地 Prompt / Skill 仓库，并把可用的 SKILL.md 转换为项目内可编辑的拆书 Skill。</p>
       </div>
       {error && <div className="alert">{error}</div>}
       <form className="panel config-form" onSubmit={submit}>
         <label>
           GitHub 仓库 URL
-          <input value={githubUrl} onChange={(event) => setGithubUrl(event.target.value)} placeholder="Phase 3 支持拉取" />
+          <input value={githubUrl} onChange={(event) => setGithubUrl(event.target.value)} placeholder="远程拉取预留，可先使用本地路径" />
         </label>
         <label>
           本地仓库路径

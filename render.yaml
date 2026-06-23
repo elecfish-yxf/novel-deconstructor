@@ -24,7 +24,7 @@ services:
       - key: ENABLE_DIRECTORY_PICKER
         value: "false"
       - key: MAX_UPLOAD_SIZE_MB
-        value: "500"
+        value: "20"
       - key: MAX_CHAPTER_CHARS
         value: "12000"
       - key: CHUNK_OVERLAP_CHARS

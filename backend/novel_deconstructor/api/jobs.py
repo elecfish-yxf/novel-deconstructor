@@ -102,7 +102,7 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, work
             JobLog(
                 job_id=job_id,
                 level="warning",
-                message=f"已忽略聚合导出模式: {', '.join(ignored_modes)}；这些内容由 Phase 3 导出生成。",
+                message=f"已忽略聚合导出模式: {', '.join(ignored_modes)}；这些内容由导出流程生成。",
             )
         )
     db.commit()

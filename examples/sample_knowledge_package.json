@@ -1,0 +1,85 @@
+{
+  "package_id": "demo_rain_lamp_street",
+  "source": {
+    "title": "雨灯街的试营业",
+    "type": "copyright_safe_demo",
+    "file": "examples/demo_story.md"
+  },
+  "schema_version": "0.1.0",
+  "chapter_analysis": [
+    {
+      "chapter_id": "chapter_001",
+      "chapter_title": "第一章 雨灯亮起",
+      "summary": "主角进入异常街区寻找父亲遗物，却被欠条和街区规则卷入交易。",
+      "opening_state": "主角带着父亲失踪的疑问进入雨灯街。",
+      "ending_state": "主角获得钥匙和禁令，被迫寻找第三盏灯。",
+      "state_change": "从主动寻找遗物变成被规则追赶。",
+      "chapter_function": "建立主角目标、空间规则、父亲悬念和章尾行动钩子。",
+      "conflict_units": ["私人目标 vs 街区交易规则", "离开意愿 vs 黑暗追赶压力"],
+      "emotion_chain": ["好奇", "不安", "压迫", "发现", "新期待"],
+      "information_delivery": ["雨灯街七点变化", "父亲留下欠条", "木匣中出现钥匙"],
+      "character_changes": ["林澈从试探进入被迫行动"],
+      "ending_hook": "第三盏灯下，不要回头。",
+      "reusable_patterns": ["私人目标进入异常规则空间", "目标物变成下一步线索"],
+      "anti_patterns": ["照搬专名和具体桥段"],
+      "source_ref": {
+        "file": "examples/demo_story.md",
+        "chapter": "第一章 雨灯亮起"
+      }
+    }
+  ],
+  "writing_rules": [
+    {
+      "id": "WR-001",
+      "type": "writing_rule",
+      "title": "用私人目标承载奇观入口",
+      "rule": "先给主角一个具体、私人、可行动的目标，再让异常世界规则阻挡这个目标。",
+      "use_when": ["提纲生成", "正文生成"],
+      "avoid": "不要先铺大段设定，再让主角被动听解释。",
+      "source": {
+        "book": "雨灯街的试营业",
+        "chapter": "chapter_001",
+        "analysis_mode": "chapter_structure"
+      },
+      "confidence": 0.82,
+      "status": "demo_curated",
+      "tags": ["章节结构", "世界观入口"]
+    }
+  ],
+  "emotion_modules": [
+    {
+      "id": "EM-001",
+      "type": "emotion_module",
+      "name": "陌生规则压迫链",
+      "emotion_chain": "好奇 -> 不安 -> 被迫选择 -> 小发现 -> 新禁令",
+      "scene_function": "适合主角第一次进入异常空间或新制度场景。",
+      "reusable_steps": ["展示异常规则", "让规则索取代价", "用小线索奖励行动", "用禁令牵引下一章"],
+      "do_not_copy": ["雨灯街", "赎梦店", "第三盏灯"],
+      "tags": ["情绪链", "章尾钩子"]
+    }
+  ],
+  "conflict_patterns": [
+    {
+      "id": "CP-001",
+      "type": "conflict_pattern",
+      "name": "规则拦路型开篇冲突",
+      "conflict_type": "信息冲突 / 资源冲突",
+      "trigger": "主角带着目标进入陌生场域。",
+      "escalation": "场域规则要求主角付出额外代价。",
+      "payoff": "主角获得线索，但问题扩大。",
+      "next_hook": "新线索附带禁令或时限。",
+      "tags": ["开篇", "规则压力"]
+    }
+  ],
+  "anti_patterns": [
+    {
+      "id": "AP-001",
+      "type": "anti_pattern",
+      "name": "只堆设定名词",
+      "problem": "场景有奇观名词，但主角目标没有被推动或阻挡。",
+      "why_bad": "读者只能看设定，感受不到行动压力。",
+      "fix_strategy": "把设定规则转成交易、时限、禁令或代价。",
+      "tags": ["设定投放", "AI味检查"]
+    }
+  ]
+}

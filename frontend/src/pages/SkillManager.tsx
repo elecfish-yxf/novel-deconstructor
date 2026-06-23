@@ -145,7 +145,7 @@ export default function SkillManager() {
     <section>
       <div className="page-head">
         <div>
-          <p className="eyebrow">Phase 2</p>
+          <p className="eyebrow">Skill</p>
           <h1>Skill 管理</h1>
         </div>
         <p>管理拆书时使用的 Skill。选择 Skill 后，任务页会带出它的默认分析模式和主拆书 Prompt。</p>
@@ -203,7 +203,7 @@ export default function SkillManager() {
                 </label>
               ))}
             </div>
-            <small>知识库、Obsidian、图谱属于 Phase 3 聚合导出，不作为逐章 Skill 模式保存。</small>
+            <small>知识库、Obsidian、图谱属于任务完成后的导出产物，不作为逐章 Skill 模式保存。</small>
           </div>
 
           <label className="full-row">

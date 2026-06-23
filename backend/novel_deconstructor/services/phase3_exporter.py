@@ -20,6 +20,14 @@ MODE_LABELS = {
     "language_style": "语言风格",
     "ai_bad_patterns": "AI 味检查",
 }
+KNOWLEDGE_PACKAGE_SCHEMA_VERSION = "0.1.0"
+AGENT_RETRIEVAL_PROTOCOL = {
+    "outline": ["structure_pattern", "conflict_pattern", "emotion_module"],
+    "draft": ["style_pattern", "dialogue_rule", "emotion_module", "anti_pattern"],
+    "worldbuilding_check": ["worldbuilding", "memory"],
+    "revision": ["language_style", "anti_pattern", "user_preference"],
+    "continuation": ["memory", "previous_ending", "character_state", "foreshadowing", "writing_guide"],
+}
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -156,6 +164,7 @@ def write_knowledge_base(
 | `writing_rules.md` | 可复用写作规则与模块 |
 | `anti_patterns.md` | 不建议模仿、AI 味和风险清单 |
 | `mode_index.md` | 各分析模式与产物索引 |
+| `knowledge_package.json` | Agent 可消费的轻量结构化知识包 |
 
 ## 覆盖范围
 
@@ -180,7 +189,48 @@ def write_knowledge_base(
             mode_index += f"- {Path(item.markdown_path or '').name}\n"
         mode_index += "\n"
     written.append(_write(target_dir / "mode_index.md", mode_index))
+
+    package = build_knowledge_package(project, source_file, chunks, job, results)
+    written.append(_write(target_dir / "knowledge_package.json", json.dumps(package, ensure_ascii=False, indent=2)))
     return written
+
+
+def build_knowledge_package(
+    project: Project,
+    source_file: SourceFile,
+    chunks: list[ChapterChunk],
+    job: AnalysisJob,
+    results: list[AnalysisResult],
+) -> dict:
+    chunks_by_id = {chunk.id: chunk for chunk in chunks}
+    results_by_chunk = _group_results_by_chunk(results)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+    return {
+        "schema_version": KNOWLEDGE_PACKAGE_SCHEMA_VERSION,
+        "package_id": f"{_safe_filename(project.name)}_{job.id}",
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "description": project.description,
+        },
+        "source": {
+            "file_id": source_file.id,
+            "filename": source_file.original_filename,
+            "file_type": source_file.file_type,
+        },
+        "job": {
+            "id": job.id,
+            "dry_run": job.dry_run,
+            "modes": sorted(_group_results_by_mode(results).keys()),
+        },
+        "generated_at": generated_at,
+        "agent_retrieval_protocol": AGENT_RETRIEVAL_PROTOCOL,
+        "chapter_analysis": [_chapter_analysis_card(chunk, results_by_chunk.get(chunk.id, []), source_file) for chunk in chunks],
+        "writing_rules": _writing_rule_cards(results, chunks_by_id, project.name),
+        "emotion_modules": _emotion_module_cards(chunks, results_by_chunk, source_file),
+        "conflict_patterns": _conflict_pattern_cards(chunks, results_by_chunk, source_file),
+        "anti_patterns": _anti_pattern_cards(results, chunks_by_id, project.name),
+    }
 
 
 def write_obsidian_export(
@@ -372,6 +422,241 @@ def _extract_matching_sections(text: str, hints: tuple[str, ...]) -> list[str]:
         return sections
     bullets = [line for line in text.splitlines() if line.strip().startswith(("-", "*", "1.", "2.", "3."))]
     return ["\n".join(bullets[:12])] if bullets else []
+
+
+def _chapter_analysis_card(chunk: ChapterChunk, results: list[AnalysisResult], source_file: SourceFile) -> dict:
+    texts = {result.mode: _read_result_text(result) for result in results}
+    primary = texts.get("chapter_structure") or "\n\n".join(texts.values())
+    conflict_text = _section(primary, ("冲突",)) or texts.get("conflict_analysis", "")
+    emotion_text = _section(primary, ("情绪", "爽点", "可复现模块"))
+    information_text = _section(primary, ("信息投放",)) or texts.get("information_delivery", "")
+    character_text = _section(primary, ("人物", "关系变化")) or texts.get("character_growth", "")
+    return {
+        "chapter_id": chunk.id,
+        "chapter_title": chunk.title,
+        "summary": _first_highlight(primary, fallback=f"{chunk.title} 的逐章拆解结果。"),
+        "opening_state": _compact(_section(primary, ("开头状态",)), 360),
+        "ending_state": _compact(_section(primary, ("结尾状态",)), 360),
+        "state_change": _compact(_section(primary, ("状态变化",)), 360),
+        "chapter_function": _compact(_section(primary, ("一句话结构功能", "结构功能")), 260),
+        "conflict_units": _list_items(conflict_text, 8),
+        "emotion_chain": _list_items(emotion_text, 8),
+        "information_delivery": _list_items(information_text, 8),
+        "character_changes": _list_items(character_text, 8),
+        "ending_hook": _compact(_section(primary, ("章尾钩子", "结尾状态")), 220),
+        "reusable_patterns": _list_items("\n\n".join(_extract_matching_sections(primary, RULE_HINTS)), 8),
+        "anti_patterns": _list_items("\n\n".join(_extract_matching_sections(primary, ANTI_HINTS)), 8),
+        "source_ref": {
+            "source_file": source_file.original_filename,
+            "chapter_index": chunk.chapter_index,
+            "chapter_id": chunk.id,
+            "analysis_modes": sorted(texts.keys()),
+            "markdown_paths": [Path(result.markdown_path or "").name for result in results if result.markdown_path],
+        },
+    }
+
+
+def _writing_rule_cards(results: list[AnalysisResult], chunks_by_id: dict[str, ChapterChunk], project_name: str) -> list[dict]:
+    cards: list[dict] = []
+    for result in results:
+        text = _read_result_text(result)
+        for section in _extract_matching_sections(text, RULE_HINTS)[:3]:
+            index = len(cards) + 1
+            chunk = chunks_by_id.get(result.chunk_id)
+            cards.append(
+                {
+                    "id": f"WR-{index:03d}",
+                    "type": "writing_rule",
+                    "title": _card_title(section, f"{MODE_LABELS.get(result.mode, result.mode)} 写作规则"),
+                    "rule": _compact(section, 900),
+                    "use_when": _use_when_for_mode(result.mode),
+                    "avoid": "不要照搬原文专名、桥段、角色关系或独特设定；只复用结构功能和写作方法。",
+                    "source": _card_source(project_name, result, chunk),
+                    "confidence": 0.72,
+                    "status": "raw_extracted",
+                    "tags": _tags_for_mode(result.mode),
+                }
+            )
+    return cards[:120]
+
+
+def _emotion_module_cards(
+    chunks: list[ChapterChunk],
+    results_by_chunk: dict[str, list[AnalysisResult]],
+    source_file: SourceFile,
+) -> list[dict]:
+    cards: list[dict] = []
+    for chunk in chunks:
+        texts = {result.mode: _read_result_text(result) for result in results_by_chunk.get(chunk.id, [])}
+        primary = texts.get("chapter_structure") or "\n\n".join(texts.values())
+        section = _section(primary, ("情绪触动", "爽点循环", "可复现模块"))
+        if not section:
+            continue
+        index = len(cards) + 1
+        cards.append(
+            {
+                "id": f"EM-{index:03d}",
+                "type": "emotion_module",
+                "name": _card_title(section, f"{chunk.title} 情绪模块"),
+                "emotion_chain": _compact(section, 500),
+                "scene_function": f"来源章节：{chunk.title}；适合复用其情绪推进功能，不复用具体素材。",
+                "reusable_steps": _list_items(section, 6),
+                "do_not_copy": ["原作专名", "原作桥段顺序", "标志性台词", "独特设定"],
+                "tags": ["情绪链", "爽点循环", "可复现模块"],
+                "source_ref": {
+                    "source_file": source_file.original_filename,
+                    "chapter_id": chunk.id,
+                    "chapter_title": chunk.title,
+                },
+            }
+        )
+    return cards[:80]
+
+
+def _conflict_pattern_cards(
+    chunks: list[ChapterChunk],
+    results_by_chunk: dict[str, list[AnalysisResult]],
+    source_file: SourceFile,
+) -> list[dict]:
+    cards: list[dict] = []
+    for chunk in chunks:
+        texts = {result.mode: _read_result_text(result) for result in results_by_chunk.get(chunk.id, [])}
+        section = texts.get("conflict_analysis") or _section(texts.get("chapter_structure", ""), ("冲突",))
+        if not section:
+            continue
+        index = len(cards) + 1
+        cards.append(
+            {
+                "id": f"CP-{index:03d}",
+                "type": "conflict_pattern",
+                "name": _card_title(section, f"{chunk.title} 冲突模式"),
+                "conflict_type": _compact(_first_matching_line(section, ("外部冲突", "内部冲突", "关系冲突", "信息", "资源")), 160),
+                "trigger": _compact(_first_matching_line(section, ("触发", "开端", "目标", "主要冲突")), 220),
+                "escalation": _compact(_first_matching_line(section, ("升级", "推进", "加压")), 220),
+                "payoff": _compact(_first_matching_line(section, ("释放", "结果", "解决")), 220),
+                "next_hook": _compact(_first_matching_line(section, ("钩子", "牵引", "新问题")), 220),
+                "tags": ["冲突推进", "章节结构"],
+                "source_ref": {
+                    "source_file": source_file.original_filename,
+                    "chapter_id": chunk.id,
+                    "chapter_title": chunk.title,
+                },
+            }
+        )
+    return cards[:80]
+
+
+def _anti_pattern_cards(results: list[AnalysisResult], chunks_by_id: dict[str, ChapterChunk], project_name: str) -> list[dict]:
+    cards: list[dict] = []
+    for result in results:
+        text = _read_result_text(result)
+        for section in _extract_matching_sections(text, ANTI_HINTS)[:3]:
+            index = len(cards) + 1
+            chunk = chunks_by_id.get(result.chunk_id)
+            cards.append(
+                {
+                    "id": f"AP-{index:03d}",
+                    "type": "anti_pattern",
+                    "name": _card_title(section, f"{MODE_LABELS.get(result.mode, result.mode)} 反模式"),
+                    "problem": _compact(section, 500),
+                    "why_bad": "机械模仿会削弱原创性，或把拆书结果误用为原作复刻。",
+                    "fix_strategy": "保留功能位、冲突链和情绪链，替换人物、设定、场景、台词和具体桥段。",
+                    "tags": _tags_for_mode(result.mode) + ["反模式"],
+                    "source": _card_source(project_name, result, chunk),
+                }
+            )
+    return cards[:120]
+
+
+def _read_result_text(result: AnalysisResult) -> str:
+    path = Path(result.markdown_path or "")
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _section(text: str, hints: tuple[str, ...]) -> str:
+    sections = _extract_matching_sections(text, hints)
+    return sections[0].strip() if sections else ""
+
+
+def _compact(text: str, max_chars: int = 400) -> str:
+    compact = re.sub(r"\s+", " ", (text or "").strip())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."
+
+
+def _list_items(text: str, limit: int) -> list[str]:
+    items: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("- ", "* ")):
+            value = stripped[2:].strip()
+        elif re.match(r"^\d+[.)]\s+", stripped):
+            value = re.sub(r"^\d+[.)]\s+", "", stripped).strip()
+        elif "|" in stripped or stripped.startswith("#"):
+            continue
+        else:
+            continue
+        if value and value not in items:
+            items.append(_compact(value, 220))
+        if len(items) >= limit:
+            break
+    if items:
+        return items
+    fallback = _compact(text, 260)
+    return [fallback] if fallback else []
+
+
+def _first_highlight(text: str, fallback: str) -> str:
+    highlights = _extract_document_highlights(text)
+    return highlights[0] if highlights else fallback
+
+
+def _card_title(text: str, fallback: str) -> str:
+    for item in _list_items(text, 1):
+        title = re.sub(r"[:：].*$", "", item).strip()
+        if title:
+            return _compact(title, 80)
+    first = _compact(text, 80)
+    return first or fallback
+
+
+def _first_matching_line(text: str, hints: tuple[str, ...]) -> str:
+    for line in (text or "").splitlines():
+        stripped = line.strip(" -|")
+        if any(hint in stripped for hint in hints):
+            return stripped
+    return ""
+
+
+def _use_when_for_mode(mode: str) -> list[str]:
+    mapping = {
+        "chapter_structure": ["提纲生成", "续写章节", "结构检查"],
+        "conflict_analysis": ["提纲生成", "正文生成", "冲突检查"],
+        "character_growth": ["提纲生成", "续写章节", "人物连续性检查"],
+        "information_delivery": ["提纲生成", "正文生成", "设定投放检查"],
+        "language_style": ["正文生成", "润色修改"],
+        "ai_bad_patterns": ["润色修改", "AI 味检查"],
+    }
+    return mapping.get(mode, ["提纲生成", "正文生成"])
+
+
+def _tags_for_mode(mode: str) -> list[str]:
+    label = MODE_LABELS.get(mode, mode)
+    return [label, mode]
+
+
+def _card_source(project_name: str, result: AnalysisResult, chunk: ChapterChunk | None) -> dict:
+    return {
+        "book": project_name,
+        "chapter": chunk.id if chunk else result.chunk_id,
+        "chapter_title": chunk.title if chunk else "",
+        "analysis_mode": result.mode,
+    }
 
 
 def _extract_document_highlights(text: str) -> list[str]:

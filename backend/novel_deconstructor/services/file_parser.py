@@ -20,7 +20,7 @@ def validate_extension(filename: str) -> str:
     if ext == ".doc":
         raise HTTPException(status_code=400, detail="暂不支持旧版 .doc，请另存为 .docx 后上传")
     if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Phase 2 支持 .txt、.md、.docx、.pdf 文件")
+        raise HTTPException(status_code=400, detail="支持 .txt、.md、.docx、.pdf 文件")
     return ext.lstrip(".")
 
 

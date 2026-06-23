@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from novel_deconstructor.models import AnalysisJob, AnalysisResult, ChapterChunk, Project, SourceFile
 from novel_deconstructor.services.phase3_exporter import generate_phase3_outputs
@@ -51,6 +52,7 @@ def test_phase3_exports_kb_obsidian_and_graph(tmp_path: Path):
     assert written
     assert (tmp_path / "final_reports" / "overall_summary.md").exists()
     assert (tmp_path / "knowledge_base" / "writing_rules.md").exists()
+    assert (tmp_path / "knowledge_base" / "knowledge_package.json").exists()
     assert (tmp_path / "knowledge_base_obsidian" / "index.md").exists()
     assert (tmp_path / "graph_outputs" / "entities.json").exists()
     summary = (tmp_path / "final_reports" / "overall_summary.md").read_text(encoding="utf-8")
@@ -58,3 +60,9 @@ def test_phase3_exports_kb_obsidian_and_graph(tmp_path: Path):
     assert "第一章" in summary
     assert "期待缺口" in summary
     assert "期待缺口" in (tmp_path / "knowledge_base" / "writing_rules.md").read_text(encoding="utf-8")
+    package = json.loads((tmp_path / "knowledge_base" / "knowledge_package.json").read_text(encoding="utf-8"))
+    assert package["schema_version"] == "0.1.0"
+    assert package["chapter_analysis"][0]["chapter_title"] == "第一章"
+    assert package["writing_rules"][0]["type"] == "writing_rule"
+    assert package["anti_patterns"][0]["type"] == "anti_pattern"
+    assert package["agent_retrieval_protocol"]["outline"] == ["structure_pattern", "conflict_pattern", "emotion_module"]

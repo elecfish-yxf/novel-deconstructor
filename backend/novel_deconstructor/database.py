@@ -100,8 +100,8 @@ def seed_deconstruction_skills(db: Session) -> None:
         db.add(
             DeconstructionSkill(
                 key=builtin_key,
-                name="oh-story 长篇拆文 Phase 2",
-                description="基于 oh-story-codex 的长篇拆书方法，默认启用六个逐章分析维度，并保留 Phase 3 聚合接口。",
+                name="oh-story 长篇拆文内核",
+                description="基于 oh-story-codex 的长篇拆书方法，默认启用章节结构、冲突推进、人物变化、信息投放、语言风格和 AI 味检查。",
                 source="builtin:oh-story-codex",
                 phase=2,
                 enabled=True,
@@ -121,8 +121,8 @@ def seed_deconstruction_skills(db: Session) -> None:
         db.commit()
         return
     if skill.builtin:
-        skill.name = "oh-story 长篇拆文 Phase 2"
-        skill.description = "基于 oh-story-codex 的长篇拆书方法，默认启用六个逐章分析维度，并保留 Phase 3 聚合接口。"
+        skill.name = "oh-story 长篇拆文内核"
+        skill.description = "基于 oh-story-codex 的长篇拆书方法，默认启用章节结构、冲突推进、人物变化、信息投放、语言风格和 AI 味检查。"
         skill.source = "builtin:oh-story-codex"
         skill.phase = 2
         skill.enabled = True

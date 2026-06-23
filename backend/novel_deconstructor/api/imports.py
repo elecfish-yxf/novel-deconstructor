@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/imports", tags=["imports"])
 @router.post("/scan", response_model=ImportScanResponse)
 def scan_imports(payload: ImportScanRequest):
     if payload.github_url:
-        return ImportScanResponse(files=[], message="Phase 3 将支持 GitHub 拉取；Phase 2 请先提供本地仓库路径。")
+        return ImportScanResponse(files=[], message="远程仓库拉取仍是预留能力；请先提供本地仓库路径。")
     if not payload.local_path:
         raise HTTPException(status_code=400, detail="请提供 local_path")
     files = scan_local_prompt_sources(Path(payload.local_path))
@@ -26,7 +26,7 @@ def scan_imports(payload: ImportScanRequest):
 @router.post("/import-skills")
 def import_skills(payload: ImportScanRequest, db: Session = Depends(get_db)):
     if payload.github_url:
-        raise HTTPException(status_code=400, detail="Phase 3 当前支持导入本地仓库；GitHub 拉取将在后续补全。")
+        raise HTTPException(status_code=400, detail="当前支持导入本地仓库；GitHub 拉取将在后续补全。")
     if not payload.local_path:
         raise HTTPException(status_code=400, detail="请提供 local_path")
     source = Path(payload.local_path)

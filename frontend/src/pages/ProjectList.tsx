@@ -75,10 +75,10 @@ export default function ProjectList({
     <section>
       <div className="page-head">
         <div>
-          <p className="eyebrow">Phase 2</p>
+          <p className="eyebrow">Workspace</p>
           <h1>项目列表</h1>
         </div>
-        <p>新建项目后上传 TXT / MD，系统会解析文本、识别章节并启动拆书任务。</p>
+        <p>新建项目后上传 TXT / MD / DOCX / PDF，系统会解析文本、识别章节并启动拆书任务。</p>
       </div>
 
       {error && <div className="alert">{error}</div>}

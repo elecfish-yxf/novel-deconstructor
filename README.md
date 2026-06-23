@@ -1,40 +1,92 @@
 # Novel Deconstructor
 
-长篇小说拆书与 AI 写作工作台。Phase 3 已实现：项目管理、TXT/MD/DOCX/PDF 上传、大文件保存、文本解析、章节识别/分块、本机文件夹选择器、Skill 管理、OpenAI-compatible 多维逐章分析、oh-story 风格拆文库输出、知识库/Obsidian/轻量图谱导出、AI 写作 Agent、任务进度页面和 Docker 启动。
+Novel Deconstructor is a lightweight tool for extracting reusable writing knowledge from long-form fiction and turning it into knowledge packages for AI writing agents.
 
-## 功能列表
+一个面向 AI 写作 Agent 的长篇小说拆书与知识提取工具。它用于从长文本中提取章节结构、冲突模式、情绪节奏、人物变化、信息投放和语言规则，并导出为可复用的写作知识包。
 
-- Web 项目管理与文件上传
-- TXT / MD 解析，支持 UTF-8、GBK、GB18030 等常见编码
-- DOCX / PDF 文本提取；扫描版 PDF 请先 OCR
-- 章节标题识别：第1章、第一章、卷一、序章、楔子、终章、Chapter 1 等
-- 默认严格按章节标题切分，能跳过轻小说开头目录/版权信息中的重复章节标题
-- 无章节时按最大字符数分块；关闭“严格按章切分”后，超长章节会二次分块并支持 overlap
-- 模型调用支持 DeepSeek Flash / Pro、豆包 Seed 2.0 Pro 和 OpenAI-compatible 服务
-- Skill 管理：可选择内置 oh-story Phase 2 Skill，也可自定义主拆书 Prompt、System Prompt 和默认分析模式
-- Phase 2 多模式逐章分析：章节结构、冲突推进、人物成长、信息投放、语言风格、AI 味检查
-- Phase 3 导出：GPT Builder 知识库、Obsidian Markdown、轻量 GraphRAG JSON/Markdown
-- AI 写作 Agent：创建本地知识库、上传 TXT/MD/DOCX/PDF、检索测试、三对话框写作生成、长期 Memory 承接
-- 写作知识库分为两类：`writing_guide` 写作技巧指南、`worldbuilding` 世界观设定
-- 支持把已完成拆书任务一键导入知识库；默认只导入 `final_reports/` 与 `knowledge_base/` 中的写作技巧指南，不默认沿用原书世界观
-- 支持生成世界观草案，用户确认后才会导入为 `worldbuilding`
-- 浏览器会自动生成工作区 ID；项目、任务进度和知识库按工作区隔离，其他访客默认不会看到你的进程
-- 写作生成会自动启用内置 oh-story Skill 作为写作内核：用户发送请求 -> 生成章节提纲 -> 用户确认 -> 生成小说正文，并给召回片段编号为 `[资料1]`、`[资料2]`
-- 默认输出路径和任务输出路径支持点击按钮打开本机文件夹选择器
-- 内嵌 oh-story-codex 长篇拆文输出协议：`概要.md`、`_progress.md`、`快速预览.md`、`拆文报告.md`、`章节/*.md`
-- dry-run 模式，用于不配置 API Key 时验证完整流程
-- 后台任务、进度轮询、日志查看、Markdown 结果下载
-- Phase 3 已支持本地 Skill 导入转换；Microsoft GraphRAG 等外部重型适配仍保留接口
+## What It Solves
 
-## 技术栈
+直接让大模型总结长篇小说，结果很容易变成剧情复述。写作 Agent 真正需要的是结构化、可检索、可复用的写作知识，例如：
 
-后端：Python 3.11、FastAPI、SQLite、SQLAlchemy、Pydantic、aiofiles、httpx、python-docx、pypdf。
-前端：React、Vite、TypeScript、普通 CSS。
-部署：Dockerfile、docker-compose。
+- 一章如何完成开头状态到结尾状态的变化；
+- 冲突如何触发、升级、释放并牵引下一章；
+- 情绪链如何形成期待、加压、释放和余波；
+- 设定和信息如何分层投放，而不是一次性硬讲；
+- 哪些写法可以迁移，哪些只是原书专属内容，不能照搬。
 
-## 快速开始
+本项目把长文本拆成章节，再提取写作规律。拆书结果用于指导原创写作，不用于复制原书世界观、人物、专名、桥段或表达。
+
+## Core Workflow
+
+```text
+Upload Novel
+  -> Chapter Splitter
+  -> Multi-mode Analysis
+  -> Knowledge Extraction
+  -> writing_guide / worldbuilding / memory
+  -> Lightweight Retrieval
+  -> AI Writing Agent
+  -> Outline / Draft / Revision Suggestions
+```
+
+## Features
+
+- TXT / MD / DOCX / PDF 上传与文本解析，扫描版 PDF 需要先 OCR。
+- 长文本章节识别与切分，支持中文章回标题、卷、序章、终章和 `Chapter 1`。
+- 无章节标题时按字符数分块，超长章节可按配置二次分块。
+- 多维拆书分析：章节结构、冲突推进、人物变化、信息投放、语言风格、AI 味检查。
+- oh-story 风格拆书流程：黄金三章、爽点循环、情绪触动点、可复现模块、章尾牵引。
+- 知识包分层：`writing_guide` 保存写作技巧，`worldbuilding` 保存用户确认的原创设定，`memory` 保存写作连续性。
+- 轻量知识检索：本地 SQLite 文档分块 + 关键词召回，保留后续替换向量检索的服务层位置。
+- AI 写作 Agent：先生成可确认提纲，再基于确认提纲生成正文，并承接长期 Memory。
+- 导出 Markdown / JSON / Obsidian 友好文档和轻量图谱 JSON。
+- Docker 本地启动，支持 dry-run 模式，不配置 API Key 也能验证流程。
+
+## Project Scope
+
+这是一个个人轻量级开源项目和作品集项目，重点是把“长文本拆书 -> 写作知识抽取 -> Agent 调用”做清楚、做扎实、能演示。
+
+当前边界：
+
+- 主要面向本地个人使用、学习和项目演示。
+- 不是企业级 SaaS，也不是多租户商业平台。
+- 浏览器 workspace 只是轻量隔离机制，不是正式账号系统。
+- 当前 RAG 是 SQLite 文档分块 + 本地关键词召回，不是完整向量数据库。
+- 当前图谱导出是轻量 JSON/Markdown，不是生产级 GraphRAG。
+- 拆书输出应抽象写作方法，不应生成可替代原作阅读的大段内容。
+
+## Architecture
+
+```text
+frontend/
+  React + Vite + TypeScript demo UI
+
+backend/
+  FastAPI API
+  SQLite + SQLAlchemy local storage
+  file parser, chapter splitter, prompt workflow
+  knowledge base and writing Agent services
+
+examples/
+  copyright-safe demo text and sample outputs
+
+outputs/ storage/ uploads/
+  local runtime data, ignored by Git
+```
+
+后端关键模块：
+
+- `services/file_parser.py`：TXT / MD / DOCX / PDF 文本归一化。
+- `services/chapter_splitter.py`：章节标题识别与长文本分块。
+- `services/pipeline.py`：拆书任务、Prompt 渲染、LLM 调用和输出落盘。
+- `services/phase3_exporter.py`：知识包、Obsidian 和轻量图谱导出。
+- `services/knowledge_base.py`：本地知识库分块、导入、检索。
+- `api/writing.py`：AI 写作 Agent、提纲、正文、世界观草案和 Memory。
+
+## Quick Start
 
 ```bash
+git clone https://github.com/elecfish-yxf/novel-deconstructor.git
 cd novel-deconstructor
 copy .env.example .env
 docker compose up --build
@@ -42,29 +94,12 @@ docker compose up --build
 
 打开：
 
-- 前端：http://localhost:5173
-- 后端健康检查：http://localhost:8000/health
+- Frontend: http://localhost:5173
+- Backend health: http://localhost:8000/health
 
-## Render 部署
+首次体验建议保持 dry-run 开启，这样不会调用外部模型，也不需要 API Key。
 
-仓库根目录提供了 `Dockerfile` 和 `render.yaml`，Render 会构建一个单 Web Service：FastAPI 后端托管 API 与前端静态页面。云端数据写入 `/data` 持久磁盘：
-
-- `/data/storage`：SQLite 数据库
-- `/data/uploads`：上传文件
-- `/data/outputs`：拆书输出
-
-部署步骤：
-
-1. 把本项目推送到 GitHub。
-2. 打开 Render Dashboard，选择 New -> Blueprint。
-3. 选择该 GitHub 仓库，Render 会读取 `render.yaml`。
-4. 创建服务即可。公开部署不需要配置站长自己的模型 API Key；使用者会在页面里填写自己的 Key。
-5. 创建服务并等待构建完成。
-6. 打开 Render 分配的服务地址，访问 `/health` 应返回 `{"ok":true,...}`。
-
-Render 云端没有桌面文件夹选择器，任务输出路径请留空，系统会自动写入 `/data/outputs`。如果使用 SQLite，请保留持久磁盘；否则重新部署或服务重启后数据可能丢失。
-
-## 本地开发启动
+## Local Development
 
 后端：
 
@@ -84,172 +119,161 @@ npm install
 npm run dev
 ```
 
-## .env 配置
+## Environment
 
-模型配置不写死用户密钥。DeepSeek 可在前端选择 `DeepSeek Flash` 或 `DeepSeek Pro`，base_url 使用 `https://api.deepseek.com`，模型名分别为 `deepseek-v4-flash`、`deepseek-v4-pro`。豆包方舟使用 `DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，`DOUBAO_MODEL=doubao-seed-2-0-pro-260215`。公开部署时，拆书任务和写作 Agent 都要求当前使用者在页面填写自己的 API Key；后端不会自动使用服务器环境变量中的站长 Key。若只想验证流程，前端任务配置或写作 Agent 中保持 `dry-run` 即可。默认输出限制在 `APP_OUTPUT_DIR` 内，避免路径穿越；只有 `ALLOW_ABSOLUTE_OUTPUT_PATH=true` 时才允许绝对路径。本机文件夹选择器会返回绝对路径，因此本地桌面使用建议开启该项。
+复制 `.env.example` 为 `.env` 后按需修改。模型 Key 不应该写入代码或提交到仓库。
 
-知识库相关配置：
+常用配置：
 
-- `APP_KNOWLEDGE_DIR`：知识库文件与解析文本保存目录，默认 `./storage/knowledge`
-- `KNOWLEDGE_CHUNK_SIZE`：知识库分块目标大小，默认 900 字符
-- `KNOWLEDGE_CHUNK_OVERLAP`：知识库分块重叠，默认 120 字符
-- `RETRIEVAL_TOP_K`：检索默认返回数量，默认 6
+- `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `DOUBAO_API_KEY` / `ARK_API_KEY`：模型服务 Key。
+- `APP_DATABASE_URL`：本地 SQLite 数据库地址。
+- `MAX_UPLOAD_SIZE_MB`：上传大小限制，默认示例值适合本地演示。
+- `APP_UPLOAD_DIR` / `APP_OUTPUT_DIR` / `APP_KNOWLEDGE_DIR`：运行时文件目录。
+- `ALLOW_ABSOLUTE_OUTPUT_PATH`：是否允许本机绝对输出路径。
 
-## Web 使用流程
+公开部署时，后端不会默认使用站长自己的 API Key。关闭 dry-run 后，使用者需要在页面中填写自己的 Key；Key 只随本次请求发送给后端，不保存到数据库或浏览器偏好。
+
+## Demo Flow
+
+仓库提供 copyright-safe 示例，位于 `examples/`：
+
+- `demo_story.md`：自写短篇文本；
+- `sample_chapter_analysis.md`：示例章节拆解输出；
+- `sample_knowledge_package.json`：示例 Agent 可消费知识包；
+- `sample_agent_call.md`：示例 Agent 召回与生成过程。
+
+推荐演示路径：
+
+1. 进入“项目”，新建项目。
+2. 进入“上传”，上传 `examples/demo_story.md`。
+3. 进入“章节”，检查切章结果。
+4. 进入“任务”，保持 dry-run，勾选章节结构、冲突推进、信息投放和语言风格。
+5. 查看“结果”中的 Markdown、知识包和轻量图谱输出。
+6. 进入“写作 Agent”，新建作品。
+7. 导入拆书技巧为 `writing_guide`，再上传或确认原创 `worldbuilding`。
+8. 生成提纲，确认后生成正文。
+
+## Knowledge Package
+
+知识包的目标不是保存剧情复述，而是保存 Agent 能消费的写作知识。
+
+当前分层：
+
+- `writing_guide`：拆书沉淀出的结构、节奏、冲突、情绪链、语言规则和反模式。
+- `worldbuilding`：用户上传或确认导入的原创世界观、人物、地点与规则。
+- `memory`：已确认提纲、正文片段、人物状态、伏笔和连续性备注。
+
+建议的知识卡片类型：
+
+- `ChapterAnalysis`：章节结构、状态变化、章节功能、钩子和复用模块。
+- `WritingRule`：可迁移写作规则，包含适用场景、避免事项、来源和置信度。
+- `EmotionModule`：情绪链、释放方式、适用场景和不可照搬内容。
+- `ConflictPattern`：冲突触发、升级、释放和后续牵引。
+- `AntiPattern`：不建议模仿的问题、原因和修复策略。
+
+## Agent Retrieval Protocol
+
+Agent 不应简单读取所有知识，而应按任务类型优先召回不同内容：
+
+| Task | Preferred Knowledge |
+|---|---|
+| 生成大纲 | structure pattern, conflict pattern, emotion module |
+| 生成正文 | style pattern, dialogue rule, emotion module, anti pattern |
+| 检查设定 | worldbuilding, memory |
+| 润色修改 | language style, anti pattern, user preference |
+| 续写章节 | memory, previous ending, character state, foreshadowing, writing guide |
+
+当前实现保留轻量关键词召回；后续可以在 `services/knowledge_base.py` 替换为向量检索，而不改变前端和 Agent 的主要使用方式。
+
+## Web Usage
+
+拆书流程：
 
 1. 新建项目。
-2. 点击“选择文件夹”设置默认输出路径，或留空使用 `outputs/`。
-3. 上传 TXT、MD、DOCX 或 PDF。
-4. 设置每章最大字符数与 overlap，完成解析/切章。
-5. 默认开启“识别到章节标题时严格按章切分”；如果单章太长需要控制模型输入，可关闭它来启用二次分块。
-6. 在章节预览页检查标题、字符数和 token 估算。
-7. 配置任务，选择 Skill、分析模式和 Phase 3 导出项。
-8. 使用 dry-run，或选择 DeepSeek / 豆包 / OpenAI-compatible 并填写你自己的 API Key。
-9. 启动任务，在进度页查看日志。
-10. 到结果页预览或下载 Markdown。
+2. 上传 TXT、MD、DOCX 或 PDF。
+3. 解析并切分章节。
+4. 选择 Skill、分析模式和导出项。
+5. 使用 dry-run 验证流程，或填写自己的 API Key 调用模型。
+6. 在进度页查看日志，在结果页预览或下载 Markdown。
 
-## AI 写作 Agent 使用流程
+写作 Agent 流程：
 
-1. 打开左侧 `写作 Agent`。
-2. 新建一个作品，例如“作品 1”。每个作品拥有独立文件树、Memory 和生成上下文。
-3. 在作品下上传 TXT、MD、DOCX 或 PDF 文件；文件会按 `writing_guide` 写作技巧指南、`worldbuilding` 世界观设定两类管理。
-4. 如果当前已选择一个完成的拆书任务，可以点击“导入当前拆书结果”，系统会导入：
-   - `final_reports/overall_summary.md`
-   - `knowledge_base/*.md`
-5. 拆书导入的内容会标记为 `writing_guide`，只用于指导节奏、冲突、人物弧线、信息投放等写法。
-6. 世界观设定请由用户上传，或在“世界观设定草案”中生成候选稿，确认后导入为 `worldbuilding`。
-7. 在“检索测试”中输入问题，查看召回片段和来源路径。
-8. 在第一个对话框“发送请求”中选择写作模型，并输入写作请求和补充上下文。Agent 会自动调用内置 `oh-story 长篇拆文 Phase 2` Skill 作为写作内核，把黄金三章、冲突推进、爽点循环、信息投放、情绪触动和章尾牵引写进提纲。
-9. 在第二个对话框“生成并确认提纲”中查看和编辑提纲，点击“确认提纲”后，提纲会写入长期 Memory，并解锁正文生成。
-10. 在第三个对话框“生成正文”中点击按钮生成正文。正文阶段会把提纲内化为连续叙事，并明确禁止输出提纲、表格、结构核对或写作说明。
-11. dry-run 可先验证检索与引用；关闭 dry-run 后，按模型选择调用 DeepSeek 或豆包 Seed 2.0 Pro，并使用页面里填写的当前用户 Key。
+1. 新建作品。
+2. 上传写作技巧指南或世界观设定。
+3. 从已完成拆书任务导入 `writing_guide`。
+4. 生成或上传原创 `worldbuilding`。
+5. 先生成并确认提纲。
+6. 基于确认提纲生成正文。
+7. 将确认后的提纲、正文片段、人物状态和伏笔写入 Memory。
 
-写故事时，Agent 会把 `worldbuilding` 当作故事事实基础；`writing_guide` 和 oh-story 内核只作为技巧指南。长期 Memory 用于承接已确认提纲、正文片段、人物状态和伏笔，但不能覆盖世界观硬设定。系统提示会明确禁止默认沿用被拆解作品的世界观、角色、势力、地名、专名或独特设定。
+## Data And Cleanup
 
-## 工作区隔离
+默认运行数据会写入：
 
-公开部署时，不同访客打开同一个网页会各自生成一个浏览器工作区 ID，并通过 `X-Workspace-Id` 发送给后端。后端会按工作区过滤：
+```text
+storage/
+uploads/
+outputs/
+backend/storage/
+backend/uploads/
+backend/outputs/
+```
 
-- 项目列表
-- 上传文件
-- 拆书任务和进度
-- 结果预览与下载
-- 知识库、文档和检索
-- 写作 Agent 生成
+这些目录已被 Git 忽略。需要清理本地演示数据时，可以在停止服务后删除上述目录。请不要删除 `examples/`，它是可提交的演示素材。
 
-这不是账号登录系统，但能解决“别人访问同一个网页看到我的项目和进程”的问题。清空浏览器 LocalStorage 会生成新工作区，旧工作区数据仍保存在服务器数据库中。
+## Render Deployment
 
-隐私说明：应用和知识库存储在服务器。使用模型调用时，检索到的相关知识片段及写作内容会发送给你选择的模型服务处理。API Key 只随本次请求发送给后端，不会写入浏览器 LocalStorage 或数据库。
+仓库根目录提供 `Dockerfile` 和 `render.yaml`，可作为单 Web Service 部署。Render 云端数据写入 `/data` 持久磁盘：
 
-## CLI 使用
+- `/data/storage`：SQLite 数据库；
+- `/data/uploads`：上传文件；
+- `/data/outputs`：拆书输出。
 
-Phase 2 提供章节切分命令：
+如果使用公开部署，请在 README 或页面中明确：应用存储在服务器；模型调用会把相关知识片段和写作请求发送给使用者选择的模型服务；当前 workspace 不是账号系统。
+
+## CLI
+
+当前 CLI 提供章节切分命令：
 
 ```bash
 cd backend
 python -m novel_deconstructor split --input "./novel.txt" --output "./outputs/test"
 ```
 
-`analyze`、`resume`、`export`、`import-skills`、`list-jobs` 命令已预留，将在后续 Phase 补全。
+Web UI 是主要演示入口。
 
-## 输出目录
+## Tests
 
-默认结构：
-
-```text
-outputs/
-  {project_name}/
-    raw/
-    chunks/
-    {job_id}/
-      chapter_analysis/
-      拆文库/
-        {project_name}/
-          概要.md
-          _progress.md
-          快速预览.md
-          拆文报告.md
-          章节/
-          剧情/
-          角色/
-          设定/
-      knowledge_base/
-        README.md
-        writing_rules.md
-        anti_patterns.md
-        mode_index.md
-      knowledge_base_obsidian/
-        index.md
-        写作规则.md
-        风险清单.md
-        章节分析索引/
-      graph_outputs/
-        entities.json
-        relationships.json
-        graph_summary.md
-      logs/
-      metadata/
-        llm_calls/
-storage/
-  knowledge/
-    {knowledge_base_id}/
-      {document_id}/
-        原始文件
-        normalized.txt
-```
-
-每次 LLM 调用都会保存 prompt 与 response。`chapter_analysis/` 保留兼容旧版的逐章 Markdown，`拆文库/` 使用 oh-story-codex 风格目录；Phase 3 导出会额外生成 `knowledge_base/`、`knowledge_base_obsidian/` 和 `graph_outputs/`。
-
-## Prompt 模板
-
-内置模板位于 `backend/novel_deconstructor/prompts/`。Phase 2 可调用 `chapter_structure.md`、`conflict_analysis.md`、`character_growth.md`、`information_delivery.md`、`language_style.md`、`ai_bad_patterns.md`。`system_base.md` 作为系统提示，不作为逐章模式。
-
-## Skill 管理
-
-Web 中的 `Skill 管理` 页面可创建、编辑、禁用 Skill。Skill 用来决定拆书任务的默认模式和主拆书 Prompt：
-
-- `default_modes`：任务页自动带出的分析模式
-- `prompt_template`：覆盖 `chapter_structure` 的主拆书 Prompt
-- `system_prompt`：留空时使用内置 `system_base`
-- `metadata`：保留 Phase 3 扩展信息
-
-内置 Skill：`oh-story 长篇拆文 Phase 2`，默认启用六个逐章分析维度。自定义 Skill 不会影响原始上传文件。
-
-## oh-story-codex 集成
-
-本项目已把 `HeRiki/oh-story-codex` 的长篇拆文思路适配到后端 Phase 2：黄金三章、爽点循环、情绪触动点、可复现模块、进度恢复表和拆文库目录骨架都已内嵌。AI 写作 Agent 也会复用同一个内置 Skill 作为写作内核，负责结构、节奏、情绪和技法；故事事实仍只来自用户确认的 `worldbuilding`。参考仓库存放在：
-
-```text
-third_party_references/oh-story-codex/
-```
-
-当前 Web 中的 Prompt 导入页可扫描本地目录，并把 `skills/*/SKILL.md` 转换为可编辑 Skill。GitHub 在线拉取仍保留到后续增强。使用前请自行确认来源项目 license。
-
-## GraphRAG 预留
-
-`graph_outputs/` 当前生成轻量实体/关系 JSON 与摘要 Markdown；`backend/novel_deconstructor/graph/` 仍保留 Microsoft GraphRAG 或 Neo4j 适配位。
-
-## Obsidian 与 GPT Builder
-
-Phase 3 会在 `knowledge_base/` 与 `knowledge_base_obsidian/` 生成可导入 GPT Builder 和 Obsidian 的规则文档。
-
-## 版权与合规
-
-本工具默认用于结构分析、写作规律归纳、检查清单和方法论生成，不应输出大段原文，也不应生成可替代原作阅读的内容。请只分析你有权处理的文本，或在合理授权范围内使用。不要把本工具当作“文风复刻器”。
-
-## 测试
+后端：
 
 ```bash
 cd backend
-pip install -r requirements.txt
-pytest
+python -m pytest --basetemp .pytest-tmp --cache-clear -o cache_dir=.pytest-cache-local
 ```
 
-## 常见问题
+前端类型检查：
 
-- 没有 API Key 能用吗？可以，任务配置中开启 dry-run。
-- DeepSeek 怎么填？模型服务选 `DeepSeek Flash` 或 `DeepSeek Pro`，API Key 填 DeepSeek 控制台生成的 Key，然后关闭 dry-run。
-- 豆包怎么填？模型服务选 `豆包 Seed 2.0 Pro`，API Key 填火山方舟控制台生成的 Ark API Key，然后关闭 dry-run。
-- 能上传很大的小说吗？后端按块保存上传文件，切章前不会把整本书送入模型；单次模型调用只处理一个章节/分块。
-- 为什么 PDF 解析为空？多半是扫描版 PDF，请先 OCR 成可选中文本后再上传。
-- 写作 Agent 的知识库是向量库吗？当前版本先使用 SQLite 分块 + 本地轻量关键词召回，已保留检索服务层接口；后续可替换为 Chroma / sentence-transformers 而不改前端使用方式。
+```bash
+cd frontend
+npm exec tsc -- --noEmit -p tsconfig.json
+```
+
+在 Windows 上如果默认临时目录权限异常，建议使用上面的 `--basetemp .pytest-tmp`。
+
+## Compliance
+
+请只分析你有权处理的文本，或在合理授权范围内使用。本工具默认用于结构分析、写作规律归纳、检查清单和方法论生成，不应输出大段原文，不应生成可替代原作阅读的内容，也不应当作“文风复刻器”。
+
+## FAQ
+
+**没有 API Key 能用吗？**
+可以。保持 dry-run 开启即可验证上传、切章、任务、导出和 Agent 流程。
+
+**知识库是向量库吗？**
+当前是 SQLite 分块 + 本地关键词召回。项目刻意保持轻量，并保留后续替换向量检索的服务层位置。
+
+**workspace 是账号系统吗？**
+不是。workspace 是浏览器生成的轻量 ID，用来隔离项目、任务、知识库和写作上下文。清空浏览器 LocalStorage 会生成新 workspace。
+
+**拆书结果能直接当世界观用吗？**
+不建议。拆书导入默认应作为 `writing_guide`，只提供写作技巧。新故事事实应来自用户上传或确认导入的 `worldbuilding`。

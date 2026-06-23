@@ -92,7 +92,7 @@ export default function FileUpload({
           <p className="eyebrow">{project.name}</p>
           <h1>文件上传与切章</h1>
         </div>
-        <p>Phase 2 支持 TXT / MD / DOCX / PDF。上传过程直接传文件，不在浏览器读取整本文本，适合大文件输入。</p>
+        <p>支持 TXT / MD / DOCX / PDF。上传过程直接传文件，不在浏览器读取整本文本，适合本地拆书演示。</p>
       </div>
       {error && <div className="alert">{error}</div>}
 

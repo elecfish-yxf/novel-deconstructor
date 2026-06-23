@@ -4,10 +4,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from novel_deconstructor.api.writing import (
+    AGENT_RETRIEVAL_PROTOCOL,
     create_memory,
     _draft_prompt,
     _oh_story_writing_kernel,
     _outline_prompt,
+    _retrieval_queries,
     _resolve_writing_model,
     _system_prompt,
     _user_prompt,
@@ -93,6 +95,19 @@ def test_worldbuilding_draft_prompt_uses_oh_story_as_structure_kernel():
     assert "原创世界观设定草案" in prompt
     assert "支撑黄金三章、冲突推进、信息投放和情绪触动" in prompt
     assert "禁止沿用拆书原作专名和独特设定" in prompt
+
+
+def test_agent_retrieval_queries_are_task_specific():
+    outline_queries = _retrieval_queries("outline", "生成第一章提纲")
+    draft_queries = _retrieval_queries("draft", "生成第一章正文")
+    worldbuilding_queries = _retrieval_queries("worldbuilding_draft", "雨夜异常街区")
+
+    assert AGENT_RETRIEVAL_PROTOCOL["outline"][:3] == ["structure_pattern", "conflict_pattern", "emotion_module"]
+    assert any("冲突推进" in query for query in outline_queries)
+    assert any("世界观" in query for query in outline_queries)
+    assert any("语言风格" in query for query in draft_queries)
+    assert any("AI味" in query for query in draft_queries)
+    assert any("不建议照搬" in query for query in worldbuilding_queries)
 
 
 def test_resolve_writing_model_supports_doubao():
