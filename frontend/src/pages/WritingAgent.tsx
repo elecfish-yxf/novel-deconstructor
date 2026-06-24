@@ -839,40 +839,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function generateDraft(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !confirmedOutline.trim()) return;
-    setBusy("draft");
-    setError("");
-    setDraft("");
-    setCitations([]);
-    setActualChars(null);
-    setLongSections([]);
-    setGenerationWarnings([]);
-    try {
-      const result = await api.generateWorkDraft(selected.id, {
-        task: `请根据用户已确认的章节提纲生成小说正文：${outlineTask}`,
-        confirmed_outline: confirmedOutline,
-        current_content: outlineContext,
-        mode,
-        knowledge_mode: knowledgeMode,
-        ...selectedWritingModelPayload,
-        dry_run: dryRun,
-        top_k: ragTopK,
-        target_chars: targetChars,
-        ...generationRetrievalPayload,
-      });
-      setDraft(result.content);
-      setCitations(result.citations);
-      setUsedKnowledge(result.used_knowledge || []);
-      setRetrievalDebug(result.retrieval_debug || null);
-      setPromptPreview(result.prompt_preview || "");
-      setActualChars(result.actual_chars ?? result.content.length);
-      setLongSections(result.sections || []);
-      setGenerationWarnings(result.warnings || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "生成正文失败");
-    } finally {
-      setBusy("");
-    }
+    await startDraftJob();
   }
 
   async function startDraftJob() {
@@ -1699,13 +1666,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <div className="step-badge">3</div>
               <h2>生成正文</h2>
               <p className="muted">用户确认提纲后，点击这里生成小说正文。这里不会再输出提纲、表格、结构核对或写作说明。</p>
-              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft" || modelCallBlocked}>
+              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked}>
                 根据确认提纲生成正文
               </button>
               <div className="button-row">
-                <button type="button" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked} onClick={startDraftJob}>
-                  后台长文本任务
-                </button>
                 <button type="button" disabled={!draftJob || ["completed", "failed", "cancelled"].includes(draftJob.status) || busy === "draft-job-cancel"} onClick={cancelDraftJob}>
                   取消任务
                 </button>
