@@ -1461,9 +1461,13 @@ def _default_is_canonical(raw: dict[str, Any], status: str) -> bool:
 def _default_retrievable(raw: dict[str, Any], library_type: str, status: str, is_canonical: bool) -> bool:
     if "retrievable" in raw:
         return _bool_value(raw.get("retrievable"), False)
+    if library_type not in {"writing_guide", "worldbuilding", "memory"}:
+        return False
+    if status == "raw_extracted":
+        return library_type in {"writing_guide", "worldbuilding"}
     if not is_canonical or status not in RETRIEVABLE_STATUSES:
         return False
-    return library_type == "writing_guide"
+    return True
 
 
 def _scope_markdown_dir(card: KnowledgeCard) -> Path:

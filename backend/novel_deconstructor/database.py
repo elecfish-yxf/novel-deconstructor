@@ -206,9 +206,14 @@ def ensure_schema_upgrades() -> None:
                 text(
                     "UPDATE knowledge_cards "
                     "SET retrievable = 1 "
-                    "WHERE library_type = 'writing_guide' "
+                    "WHERE ("
+                    "library_type IN ('writing_guide', 'worldbuilding', 'memory') "
                     "AND is_canonical = 1 "
                     "AND status IN ('approved', 'reviewed')"
+                    ") OR ("
+                    "library_type IN ('writing_guide', 'worldbuilding') "
+                    "AND status = 'raw_extracted'"
+                    ")"
                 )
             )
         if settings.app_database_url.startswith("mysql"):

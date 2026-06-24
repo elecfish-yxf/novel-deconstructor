@@ -188,6 +188,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     current_volume_index: currentVolumeIndex || null,
     current_chapter_index: currentChapterIndex || null,
   };
+  const generationRetrievalPayload = {
+    ...currentPositionPayload,
+    include_raw_knowledge: true,
+  };
+  const ragRetrievalPayload = {
+    ...currentPositionPayload,
+    include_raw: true,
+  };
   const modelCallBlocked = !dryRun && !writingApiKey.trim();
 
   function clearTransientWritingState() {
@@ -593,7 +601,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setBusy("rag-search");
     setError("");
     try {
-      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK, ...currentPositionPayload });
+      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK, ...ragRetrievalPayload });
       setRagResults(result.results);
       setRetrievalDebug(result.retrieval_debug);
     } catch (err) {
@@ -778,7 +786,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         ...selectedWritingModelPayload,
         dry_run: dryRun,
         top_k: ragTopK,
-        ...currentPositionPayload,
+        ...generationRetrievalPayload,
       });
       setOutline(result.content);
       setCitations(result.citations);
@@ -850,7 +858,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: targetChars,
-        ...currentPositionPayload,
+        ...generationRetrievalPayload,
       });
       setDraft(result.content);
       setCitations(result.citations);
@@ -886,7 +894,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: targetChars,
-        ...currentPositionPayload,
+        ...generationRetrievalPayload,
       });
       storeDraftJobRef(selected.id, job.job_id);
       applyDraftJob(job);
@@ -929,7 +937,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: actualChars || targetChars,
-        ...currentPositionPayload,
+        ...generationRetrievalPayload,
       });
       setDraft(result.content);
       setCitations(result.citations);
