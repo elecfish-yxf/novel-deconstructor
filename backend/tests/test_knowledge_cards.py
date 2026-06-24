@@ -168,6 +168,48 @@ Build expectation, delay it, then release the emotion through action.
     assert raw_debug["selected_count"] > 0
 
 
+def test_markdown_import_compacts_large_card_groups_for_rag(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    sections = "\n\n".join(
+        f"## Technique {index}\n\nUse pressure rhythm beacon {index} to make the scene specific and searchable."
+        for index in range(1, 10)
+    )
+
+    result = import_markdown_knowledge_source(
+        db,
+        kb,
+        f"# Large Guide\n\n{sections}",
+        source_name="large-guide.md",
+        library_type="writing_guide",
+        status="raw_extracted",
+    )
+
+    compact = db.query(KnowledgeCard).filter(KnowledgeCard.source_kind == "rag_compact").one()
+    merged = db.query(KnowledgeCard).filter(KnowledgeCard.status == "merged").all()
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="draft",
+        query="pressure rhythm beacon",
+        top_k=200,
+        current_volume_index=1,
+        current_chapter_index=1,
+        include_raw=True,
+    )
+
+    assert result["imported_count"] == 9
+    assert result["compacted_card_count"] == 1
+    assert result["compacted_evidence_count"] == 9
+    assert compact.is_canonical is True
+    assert compact.retrievable is True
+    assert compact.evidence_count == 9
+    assert len(merged) == 9
+    assert [item["id"] for item in results] == [compact.card_id]
+    assert debug["top_k"] == 200
+
+
 def test_import_markdown_worldbuilding_is_retrievable_when_approved(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))

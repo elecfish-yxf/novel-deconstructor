@@ -63,6 +63,11 @@ ACTIVE_STATUSES = RETRIEVABLE_STATUSES
 VALID_SCOPE_LEVELS = {"global", "volume", "chapter"}
 AUTO_MERGE_THRESHOLD = 0.88
 REVIEW_MERGE_THRESHOLD = 0.72
+RAG_SEARCH_MAX_TOP_K = 200
+RAG_COMPACT_MIN_GROUP_CARDS = 6
+RAG_COMPACT_GROUP_SIZE = 8
+RAG_COMPACT_ITEM_MAX_CHARS = 220
+RAG_COMPACT_CONTENT_MAX_CHARS = 1800
 SEMANTIC_MERGE_CARD_TYPES = {
     "writing_rule",
     "emotion_module",
@@ -373,6 +378,8 @@ def import_knowledge_package(
 
     merge_preview: dict[str, Any] = {"groups": [], "review_required_count": 0, "exact_duplicate_count": 0}
     merged_count = 0
+    compacted_card_count = 0
+    compacted_evidence_count = 0
     if merge_mode == "safe":
         applied = apply_knowledge_card_merges(
             db,
@@ -382,6 +389,8 @@ def import_knowledge_package(
             review_threshold=review_threshold,
         )
         merged_count = int(applied["merged_card_count"])
+        compacted_card_count = int(applied.get("compacted_card_count", 0))
+        compacted_evidence_count = int(applied.get("compacted_evidence_count", 0))
         generated_markdown += int(applied["generated_markdown_count"])
         merge_preview = preview_knowledge_card_merges(
             db,
@@ -408,6 +417,8 @@ def import_knowledge_package(
         "canonical_card_count": stats["canonical_card_count"],
         "exact_duplicate_count": exact_duplicates + int(merge_preview.get("exact_duplicate_count", 0)),
         "merged_card_count": merged_count,
+        "compacted_card_count": compacted_card_count,
+        "compacted_evidence_count": compacted_evidence_count,
         "review_required_count": int(merge_preview.get("review_required_count", 0)),
         "reduction_rate": stats["reduction_rate"],
         "card_types": dict(card_types),
@@ -518,11 +529,15 @@ def import_markdown_knowledge_source(
         generated_markdown += 1
         card_types[card_type] += 1
 
+    compacted = apply_knowledge_card_merges(db, knowledge_base)
+    generated_markdown += int(compacted.get("generated_markdown_count", 0))
     db.commit()
     return {
         "imported_count": imported,
         "generated_markdown_count": generated_markdown,
         "skipped_count": skipped,
+        "compacted_card_count": int(compacted.get("compacted_card_count", 0)),
+        "compacted_evidence_count": int(compacted.get("compacted_evidence_count", 0)),
         "card_types": dict(card_types),
         "markdown_root": str(knowledge_docs_root(knowledge_base)),
         "source_name": source_name,
@@ -944,12 +959,48 @@ def apply_knowledge_card_merges(
             write_card_markdown(knowledge_base, primary)
             generated_markdown += 1
             applied_groups.append(group)
+    compacted = compact_knowledge_cards_for_rag(db, knowledge_base)
+    generated_markdown += int(compacted["generated_markdown_count"])
     db.commit()
     return {
         "merged_card_count": merged_count,
         "generated_markdown_count": generated_markdown,
+        "compacted_card_count": int(compacted["compacted_card_count"]),
+        "compacted_evidence_count": int(compacted["compacted_evidence_count"]),
         "groups": applied_groups,
         "message": f"已安全合并 {merged_count} 张重复或高度相似知识卡。",
+    }
+
+
+def compact_knowledge_cards_for_rag(
+    db: Session,
+    knowledge_base: KnowledgeBase,
+    *,
+    min_group_cards: int = RAG_COMPACT_MIN_GROUP_CARDS,
+    group_size: int = RAG_COMPACT_GROUP_SIZE,
+) -> dict[str, Any]:
+    candidates = _rag_compact_candidate_cards(db, knowledge_base)
+    buckets: dict[tuple[Any, ...], list[KnowledgeCard]] = {}
+    for card in candidates:
+        buckets.setdefault(_rag_compact_bucket(card), []).append(card)
+
+    compacted_card_count = 0
+    compacted_evidence_count = 0
+    generated_markdown_count = 0
+    for cards in buckets.values():
+        if len(cards) < min_group_cards:
+            continue
+        ordered = sorted(cards, key=_rag_compact_sort_key)
+        for batch in _rag_compact_batches(ordered, min_group_cards=min_group_cards, group_size=group_size):
+            compact = _create_rag_compact_card(db, knowledge_base, batch)
+            write_card_markdown(knowledge_base, compact)
+            compacted_card_count += 1
+            compacted_evidence_count += len(batch)
+            generated_markdown_count += 1
+    return {
+        "compacted_card_count": compacted_card_count,
+        "compacted_evidence_count": compacted_evidence_count,
+        "generated_markdown_count": generated_markdown_count,
     }
 
 
@@ -1025,7 +1076,7 @@ def search_knowledge_cards(
     include_raw: bool = False,
     allowed_scope_levels: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    limit = max(1, min(top_k or 8, 30))
+    limit = max(1, min(top_k or 8, RAG_SEARCH_MAX_TOP_K))
     preferred_card_types = select_preferred_card_types(stage)
     expanded_query = build_expanded_rag_query(stage=stage, query=query, preferred_card_types=preferred_card_types)
     cards_query = db.query(KnowledgeCard)
@@ -1907,6 +1958,160 @@ def _merge_source_refs(left: dict[str, Any], right: dict[str, Any]) -> dict[str,
     if len(unique) == 1:
         return unique[0]
     return {"source_refs": unique}
+
+
+def _rag_compact_candidate_cards(db: Session, knowledge_base: KnowledgeBase) -> list[KnowledgeCard]:
+    return (
+        db.query(KnowledgeCard)
+        .filter(
+            KnowledgeCard.knowledge_base_id == knowledge_base.id,
+            KnowledgeCard.status.in_({"raw_extracted", "reviewed", "approved"}),
+            KnowledgeCard.retrievable.is_(True),
+            KnowledgeCard.library_type != "memory",
+            KnowledgeCard.source_kind != "rag_compact",
+        )
+        .order_by(KnowledgeCard.library_type, KnowledgeCard.card_type, KnowledgeCard.card_id)
+        .all()
+    )
+
+
+def _rag_compact_bucket(card: KnowledgeCard) -> tuple[Any, ...]:
+    scope = normalize_scope_level(card.scope_level, "global")
+    volume = card.volume_index if scope in {"volume", "chapter"} else None
+    chapter = card.chapter_index if scope == "chapter" else None
+    reveal = (card.reveal_at_volume_index, card.reveal_at_chapter_index)
+    valid_from = (card.valid_from_volume_index, card.valid_from_chapter_index)
+    valid_until = (card.valid_until_volume_index, card.valid_until_chapter_index)
+    return (card.library_type, card.card_type, scope, volume, chapter, reveal, valid_from, valid_until)
+
+
+def _rag_compact_sort_key(card: KnowledgeCard) -> tuple[Any, ...]:
+    source_ref = _json_dict(card.source_ref_json)
+    heading = source_ref.get("heading_path")
+    heading_key = " / ".join(str(item) for item in heading) if isinstance(heading, list) else ""
+    return (
+        str(source_ref.get("source") or source_ref.get("source_path") or ""),
+        _int_or_none(source_ref.get("section_index")) or 0,
+        heading_key,
+        card.card_id,
+    )
+
+
+def _rag_compact_batches(
+    cards: list[KnowledgeCard],
+    *,
+    min_group_cards: int,
+    group_size: int,
+) -> list[list[KnowledgeCard]]:
+    batches = [cards[index : index + group_size] for index in range(0, len(cards), group_size)]
+    if len(batches) > 1 and len(batches[-1]) < min_group_cards:
+        batches[-2].extend(batches.pop())
+    return [batch for batch in batches if len(batch) >= min_group_cards]
+
+
+def _create_rag_compact_card(db: Session, knowledge_base: KnowledgeBase, cards: list[KnowledgeCard]) -> KnowledgeCard:
+    first = cards[0]
+    card_ids = [card.card_id for card in cards]
+    digest = hashlib.sha1("|".join(card_ids).encode("utf-8", errors="ignore")).hexdigest()[:10]
+    prefix = CARD_PREFIXES.get(first.card_type, "KC")
+    card_id = _unique_compact_card_id(db, knowledge_base, f"{prefix}-CMP-{digest}")
+    tags = _merge_lists(["rag_compact", first.library_type, first.card_type], [tag for card in cards for tag in _json_list(card.tags_json)])
+    use_when = _merge_lists([], [item for card in cards for item in _json_list(card.use_when_json)])
+    content = _compact_card_content(cards)
+    source_ref = _merge_compact_source_refs(cards)
+    avoid = _compact_avoid_text(cards)
+    compact = KnowledgeCard(
+        knowledge_base_id=knowledge_base.id,
+        card_id=card_id,
+        library_type=first.library_type,
+        card_type=first.card_type,
+        title=f"RAG compact {first.library_type}/{first.card_type} ({len(cards)} items)",
+        content=content,
+        summary=_clip(content, 240),
+        tags_json=_json(tags),
+        source_ref_json=_json(source_ref),
+        use_when_json=_json(use_when),
+        avoid=avoid,
+        confidence=max(card.confidence or 0 for card in cards),
+        status="approved",
+        source_kind="rag_compact",
+        package_id="",
+        is_canonical=True,
+        merged_from_ids_json=_json(card_ids),
+        evidence_count=sum(max(1, card.evidence_count or 1) for card in cards),
+        content_fingerprint=content_fingerprint(card_id, content, avoid, tags),
+        scope_level=first.scope_level,
+        volume_index=first.volume_index,
+        volume_title=first.volume_title,
+        chapter_index=first.chapter_index,
+        chapter_title=first.chapter_title,
+        valid_from_volume_index=first.valid_from_volume_index,
+        valid_from_chapter_index=first.valid_from_chapter_index,
+        valid_until_volume_index=first.valid_until_volume_index,
+        valid_until_chapter_index=first.valid_until_chapter_index,
+        reveal_at_volume_index=first.reveal_at_volume_index,
+        reveal_at_chapter_index=first.reveal_at_chapter_index,
+        retrievable=True,
+        priority=max(card.priority or 0 for card in cards),
+    )
+    compact.markdown_path = str(card_markdown_path(knowledge_base, compact))
+    db.add(compact)
+    db.flush()
+    for card in cards:
+        card.is_canonical = False
+        card.status = "merged"
+        card.retrievable = False
+        card.merged_into_card_id = compact.card_id
+        card.markdown_path = card.markdown_path or str(card_markdown_path(knowledge_base, card))
+    return compact
+
+
+def _unique_compact_card_id(db: Session, knowledge_base: KnowledgeBase, base_id: str) -> str:
+    card_id = base_id[:80]
+    suffix = 2
+    while (
+        db.query(KnowledgeCard)
+        .filter(KnowledgeCard.knowledge_base_id == knowledge_base.id, KnowledgeCard.card_id == card_id)
+        .first()
+    ):
+        tail = f"-{suffix}"
+        card_id = f"{base_id[: 80 - len(tail)]}{tail}"
+        suffix += 1
+    return card_id
+
+
+def _compact_card_content(cards: list[KnowledgeCard]) -> str:
+    lines = [
+        "## RAG Compact Evidence",
+        "",
+        f"Condensed from {len(cards)} imported knowledge cards. Use this card as the retrieval surface; source cards remain linked as evidence.",
+        "",
+        "## Key Items",
+        "",
+    ]
+    for card in cards:
+        lines.append(f"- {card.title}: {_compact_card_excerpt(card)}")
+    return _clip("\n".join(lines), RAG_COMPACT_CONTENT_MAX_CHARS)
+
+
+def _compact_card_excerpt(card: KnowledgeCard) -> str:
+    source = card.summary or card.content or card.avoid
+    cleaned = re.sub(r"#+\s*", "", source)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return _clip(cleaned, RAG_COMPACT_ITEM_MAX_CHARS)
+
+
+def _compact_avoid_text(cards: list[KnowledgeCard]) -> str:
+    avoid_items = [_compact_card_excerpt(card) for card in cards if card.avoid.strip()]
+    return _clip("\n".join(f"- {item}" for item in avoid_items), 1000) if avoid_items else ""
+
+
+def _merge_compact_source_refs(cards: list[KnowledgeCard]) -> dict[str, Any]:
+    refs = [_json_dict(card.source_ref_json) for card in cards]
+    merged = _merge_source_refs({}, {"source_refs": refs})
+    if isinstance(merged, dict):
+        merged["compact_source_card_ids"] = [card.card_id for card in cards]
+    return merged
 
 
 def _frontmatter(values: dict[str, Any]) -> str:

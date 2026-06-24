@@ -87,6 +87,7 @@ DEFAULT_LONG_SECTION_CHARS = 2000
 LONG_GENERATION_TOLERANCE = 0.1
 SECTION_MIN_COMPLETION_RATIO = 0.8
 MAX_SECTION_SUPPLEMENTS = 2
+RAG_PROMPT_CARD_LIMIT = 60
 DRAFT_GENERATION_JOBS: dict[str, dict[str, Any]] = {}
 
 
@@ -895,8 +896,7 @@ async def _generate_with_cards(
             prompt_preview=None,
         )
 
-    cards = _cards_for_search_results(db, knowledge_base.id, results)
-    prompt_results = _results_for_prompt_cards(results, cards)
+    cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
     oh_story_kernel = _oh_story_writing_kernel(db)
     system_prompt = _system_prompt(payload.knowledge_mode, oh_story_kernel, stage=stage)
     user_prompt = _build_card_agent_prompt(stage, payload, cards, confirmed_outline)
@@ -1018,8 +1018,7 @@ async def _generate_long_draft_with_cards(
             include_raw=payload.include_raw_knowledge,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
-        cards = _cards_for_search_results(db, knowledge_base.id, results)
-        prompt_results = _results_for_prompt_cards(results, cards)
+        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
         user_prompt = _long_section_prompt(payload, cards, confirmed_outline, focus, index, len(section_targets), section_target, previous_tail)
@@ -1120,8 +1119,7 @@ async def _generate_long_draft_with_cards(
             include_raw=payload.include_raw_knowledge,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
-        cards = _cards_for_search_results(db, knowledge_base.id, results)
-        prompt_results = _results_for_prompt_cards(results, cards)
+        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
         padding_prompt = _long_padding_prompt(payload, cards, confirmed_outline, content, padding_target)
@@ -1187,6 +1185,16 @@ async def _generate_long_draft_with_cards(
         sections=sections,
         warnings=warnings,
     )
+
+
+def _prompt_cards_for_results(
+    db: Session,
+    knowledge_base_id: int,
+    results: list[dict[str, Any]],
+) -> tuple[list[KnowledgeCard], list[dict[str, Any]]]:
+    prompt_results = results[:RAG_PROMPT_CARD_LIMIT]
+    cards = _cards_for_search_results(db, knowledge_base_id, prompt_results)
+    return cards, _results_for_prompt_cards(prompt_results, cards)
 
 
 def _cards_for_search_results(db: Session, knowledge_base_id: int, results: list[dict[str, Any]]) -> list[KnowledgeCard]:

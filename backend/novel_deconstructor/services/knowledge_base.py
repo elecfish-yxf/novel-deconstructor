@@ -336,7 +336,7 @@ def import_deconstruction_job(
 
 def search_knowledge(db: Session, knowledge_base_ids: list[int], query: str, top_k: int | None = None) -> list[dict]:
     settings = get_settings()
-    limit = max(1, min(top_k or settings.retrieval_top_k, 20))
+    limit = max(1, min(top_k or settings.retrieval_top_k, 100))
     q = (query or "").strip()
     if not q:
         return []

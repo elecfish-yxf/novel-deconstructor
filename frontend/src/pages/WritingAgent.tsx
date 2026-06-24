@@ -1464,7 +1464,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 </label>
                 <label>
                   top_k
-                  <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                  <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
                 </label>
                 <label>
                   Volume
@@ -1585,7 +1585,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 </label>
                 <label>
                   RAG top_k
-                  <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                  <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
                 </label>
                 <label>
                   Volume

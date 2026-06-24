@@ -359,6 +359,8 @@ class KnowledgePackageImportResponse(BaseModel):
     canonical_card_count: int = 0
     exact_duplicate_count: int = 0
     merged_card_count: int = 0
+    compacted_card_count: int = 0
+    compacted_evidence_count: int = 0
     review_required_count: int = 0
     reduction_rate: float = 0
     card_types: dict[str, int] = Field(default_factory=dict)
@@ -480,6 +482,8 @@ class KnowledgeMergePreviewResponse(BaseModel):
 class KnowledgeMergeApplyResponse(BaseModel):
     merged_card_count: int = 0
     generated_markdown_count: int = 0
+    compacted_card_count: int = 0
+    compacted_evidence_count: int = 0
     groups: list[KnowledgeMergeGroup] = Field(default_factory=list)
     message: str
 
