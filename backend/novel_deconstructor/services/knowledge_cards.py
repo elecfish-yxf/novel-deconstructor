@@ -71,6 +71,7 @@ SEMANTIC_MERGE_CARD_TYPES = {
     "style_pattern",
     "information_pattern",
 }
+DEMO_PACKAGE_IDS = {"demo_rain_lamp_street", "demo_rain_lamp_street_canonical_cards"}
 WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9_]+")
 STAGE_QUERY_EXPANSIONS = {
     "outline": [
@@ -268,6 +269,9 @@ def import_knowledge_package(
     normalized_library = normalize_library_type(library_type, "writing_guide")
     normalized_status = normalize_status(status, "approved")
     markdown_root = knowledge_docs_root(knowledge_base)
+    package_id = str(package.get("package_id") or "")
+    if not _is_demo_package_id(package_id):
+        purge_demo_knowledge_cards(db, knowledge_base)
     counters: Counter[str] = Counter()
     card_types: Counter[str] = Counter()
     imported = 0
@@ -285,21 +289,39 @@ def import_knowledge_package(
         is_canonical = _default_is_canonical(raw_card, card_status)
         counters[card_type] += 1
         card_id = _card_id(raw_card, card_type, counters[card_type])
+        explicit_card_id = _has_explicit_card_id(raw_card)
+        title = _card_title(raw_card, card_type, card_id)
+        content = _card_content(raw_card, card_type)
+        tags = _tags(raw_card, card_type)
+        avoid = _avoid_text(raw_card)
+        fingerprint = content_fingerprint(title, content, avoid, tags)
         if card_id in seen_ids:
-            skipped += 1
-            continue
-        seen_ids.add(card_id)
+            if explicit_card_id:
+                skipped += 1
+                continue
+            card_id = _next_available_card_id(db, knowledge_base, card_type, seen_ids)
+            title = _card_title(raw_card, card_type, card_id)
+            fingerprint = content_fingerprint(title, content, avoid, tags)
         exists = (
             db.query(KnowledgeCard)
             .filter(KnowledgeCard.knowledge_base_id == knowledge_base.id, KnowledgeCard.card_id == card_id)
             .first()
         )
         if exists:
-            skipped += 1
-            continue
-        title = _card_title(raw_card, card_type, card_id)
-        content = _card_content(raw_card, card_type)
-        fingerprint = content_fingerprint(title, content, _avoid_text(raw_card), _tags(raw_card, card_type))
+            if (
+                exists.library_type == card_library
+                and exists.card_type == card_type
+                and exists.content_fingerprint == fingerprint
+            ):
+                skipped += 1
+                continue
+            if explicit_card_id:
+                skipped += 1
+                continue
+            card_id = _next_available_card_id(db, knowledge_base, card_type, seen_ids)
+            title = _card_title(raw_card, card_type, card_id)
+            fingerprint = content_fingerprint(title, content, avoid, tags)
+        seen_ids.add(card_id)
         fingerprint_key = (card_library, card_type, fingerprint)
         if fingerprint in {item[2] for item in seen_fingerprints if item[:2] == fingerprint_key[:2]}:
             exact_duplicates += 1
@@ -314,14 +336,14 @@ def import_knowledge_package(
             title=title,
             content=content,
             summary=_summary(raw_card, content),
-            tags_json=_json(_tags(raw_card, card_type)),
+            tags_json=_json(tags),
             source_ref_json=_json(source_ref),
             use_when_json=_json(_as_list(raw_card.get("use_when"))),
-            avoid=_avoid_text(raw_card),
+            avoid=avoid,
             confidence=_confidence(raw_card),
             status=card_status,
             source_kind="knowledge_package",
-            package_id=str(package.get("package_id") or ""),
+            package_id=package_id,
             is_canonical=is_canonical,
             merged_from_ids_json=_json([card_id]),
             evidence_count=1,
@@ -405,6 +427,7 @@ def import_markdown_knowledge_source(
 ) -> dict[str, Any]:
     normalized_library = normalize_library_type(library_type, "writing_guide")
     normalized_status = normalize_status(status, "raw_extracted")
+    purge_demo_knowledge_cards(db, knowledge_base)
     frontmatter, body = parse_frontmatter(markdown)
     source_name = source_name or str(frontmatter.get("source_name") or "external_knowledge.md")
     archived_source = _archive_import_markdown(knowledge_base, source_name, markdown)
@@ -1322,6 +1345,54 @@ def _card_id(raw: dict[str, Any], card_type: str, index: int) -> str:
     if explicit:
         return re.sub(r"[^A-Za-z0-9_-]+", "-", str(explicit)).strip("-_")[:80] or f"{CARD_PREFIXES.get(card_type, 'KC')}-{index:03d}"
     return f"{CARD_PREFIXES.get(card_type, 'KC')}-{index:03d}"
+
+
+def _has_explicit_card_id(raw: dict[str, Any]) -> bool:
+    return bool(str(raw.get("card_id") or raw.get("id") or "").strip())
+
+
+def _next_available_card_id(db: Session, knowledge_base: KnowledgeBase, card_type: str, seen_ids: set[str]) -> str:
+    prefix = CARD_PREFIXES.get(card_type, "KC")
+    existing_ids = {
+        item.card_id
+        for item in db.query(KnowledgeCard.card_id).filter(
+            KnowledgeCard.knowledge_base_id == knowledge_base.id,
+            KnowledgeCard.card_id.like(f"{prefix}-%"),
+        )
+    }
+    index = 1
+    while True:
+        candidate = f"{prefix}-{index:03d}"
+        if candidate not in existing_ids and candidate not in seen_ids:
+            return candidate
+        index += 1
+
+
+def _is_demo_package_id(package_id: str) -> bool:
+    return package_id in DEMO_PACKAGE_IDS
+
+
+def purge_demo_knowledge_cards(db: Session, knowledge_base: KnowledgeBase) -> int:
+    cards = (
+        db.query(KnowledgeCard)
+        .filter(KnowledgeCard.knowledge_base_id == knowledge_base.id, KnowledgeCard.package_id.in_(DEMO_PACKAGE_IDS))
+        .all()
+    )
+    root = knowledge_docs_root(knowledge_base).resolve()
+    removed = 0
+    for card in cards:
+        if card.markdown_path:
+            try:
+                path = Path(card.markdown_path).resolve()
+                if path.is_file() and (path == root or root in path.parents):
+                    path.unlink()
+            except OSError:
+                pass
+        db.delete(card)
+        removed += 1
+    if removed:
+        db.flush()
+    return removed
 
 
 def _card_title(raw: dict[str, Any], card_type: str, card_id: str) -> str:
