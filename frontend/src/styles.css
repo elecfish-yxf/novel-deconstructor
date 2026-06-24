@@ -1661,12 +1661,17 @@ th {
   gap: 4px;
 }
 
-.writing-panel-head button,
 .writing-tree-toggle,
 .writing-file-actions button {
   width: 28px;
   min-height: 28px;
   padding: 0;
+}
+
+.writing-panel-head button {
+  min-width: 38px;
+  min-height: 28px;
+  padding: 0 6px;
 }
 
 .writing-agent-left-scroll,
@@ -1751,6 +1756,78 @@ th {
   display: grid;
   gap: 10px;
   padding: 10px;
+}
+
+.writing-volume-tree {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.writing-volume-node {
+  display: grid;
+  gap: 6px;
+}
+
+.writing-volume-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f3f6fa;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.writing-volume-head small {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.writing-chapter-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 14px;
+}
+
+.writing-chapter-list button {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  text-align: left;
+  border-color: #e5e7eb;
+  background: #fff;
+}
+
+.writing-chapter-list button.active {
+  border-color: #1a73e8;
+  background: #eef5ff;
+  color: #1a73e8;
+  box-shadow: inset 3px 0 0 #1a73e8;
+}
+
+.writing-chapter-list span {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.writing-chapter-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writing-chapter-list small {
+  grid-column: 2;
+  color: #8b95a5;
+  font-weight: 500;
 }
 
 .writing-import-box {

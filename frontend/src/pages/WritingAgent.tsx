@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, PointerEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   getWorkspaceId,
@@ -21,6 +21,7 @@ import {
 } from "../api";
 
 const DRAFT_JOB_KEY = "novel-deconstructor.last-draft-job";
+const CHAPTER_TITLE_KEY = "novel-deconstructor.chapter-titles";
 
 const KNOWLEDGE_GROUPS = [
   {
@@ -36,6 +37,7 @@ const KNOWLEDGE_GROUPS = [
 ] as const;
 
 type PositionValue = number | "";
+type ChapterTitleMap = Record<string, string>;
 
 function parsePositionInput(value: string): PositionValue {
   if (value.trim() === "") return "";
@@ -80,7 +82,37 @@ function readDraftJobRef(): { workId: number; jobId: string } | null {
   }
 }
 
+function readChapterTitles(): ChapterTitleMap {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CHAPTER_TITLE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function chapterTitleKey(workspaceId: string, workId: number, volume: number, chapter: number) {
+  return `${workspaceId}:${workId}:${volume}:${chapter}`;
+}
+
+function parseChapterTitleKey(key: string) {
+  const parts = key.split(":");
+  const chapter = Number(parts.pop());
+  const volume = Number(parts.pop());
+  const workId = Number(parts.pop());
+  const workspaceId = parts.join(":");
+  if (!workspaceId || !Number.isFinite(workId) || !Number.isFinite(volume) || !Number.isFinite(chapter)) return null;
+  return { workspaceId, workId, volume, chapter };
+}
+
+function defaultChapterTitle(chapter: number) {
+  return `第 ${chapter} 章`;
+}
+
 export default function WritingAgent({ job }: { job?: Job | null }) {
+  const workspaceId = useMemo(() => getWorkspaceId(), []);
+  const selectedIdRef = useRef<number | null>(null);
+  const dataLoadSeqRef = useRef(0);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -120,6 +152,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [uploadType, setUploadType] = useState("writing_guide");
   const [storySeed, setStorySeed] = useState("一个普通人在高压规则世界中寻找自我选择权。");
   const [worldbuildingDraft, setWorldbuildingDraft] = useState("");
+  const [chapterTitles, setChapterTitles] = useState<ChapterTitleMap>(() => readChapterTitles());
+  const [chapterTitle, setChapterTitle] = useState(defaultChapterTitle(1));
   const [outlineTask, setOutlineTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说第一章章节提纲。");
   const [outlineContext, setOutlineContext] = useState("");
   const [outline, setOutline] = useState("");
@@ -214,6 +248,54 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const positionMissing = !currentPositionPayload.current_volume_index || !currentPositionPayload.current_chapter_index;
   const draftWordCount = useMemo(() => draft.replace(/\s/g, "").length, [draft]);
   const activeDraftJob = Boolean(draftJob && !["completed", "failed", "cancelled"].includes(draftJob.status));
+  const writingTaskPayload = chapterTitle.trim() ? `${chapterTitle.trim()}\n\n${outlineTask}` : outlineTask;
+  const volumeTree = useMemo(() => {
+    const groups = new Map<number, Map<number, { chapter: number; title: string; memoryCount: number }>>();
+    const ensureChapter = (volume: number, chapter: number, title?: string) => {
+      if (!groups.has(volume)) groups.set(volume, new Map());
+      const chapters = groups.get(volume)!;
+      const key = selected ? chapterTitleKey(workspaceId, selected.id, volume, chapter) : "";
+      const existing = chapters.get(chapter);
+      chapters.set(chapter, {
+        chapter,
+        title: title || chapterTitles[key] || existing?.title || defaultChapterTitle(chapter),
+        memoryCount: existing?.memoryCount || 0,
+      });
+    };
+
+    if (selected) {
+      Object.entries(chapterTitles).forEach(([key, title]) => {
+        const parsed = parseChapterTitleKey(key);
+        if (!parsed || parsed.workspaceId !== workspaceId || parsed.workId !== selected.id) return;
+        ensureChapter(parsed.volume, parsed.chapter, title || undefined);
+      });
+    }
+
+    if (selected && typeof currentVolumeIndex === "number" && typeof currentChapterIndex === "number") {
+      ensureChapter(currentVolumeIndex, currentChapterIndex, chapterTitle || undefined);
+    }
+
+    memories.forEach((memory) => {
+      const volume = memory.volume_index || 1;
+      const chapter = memory.chapter_index || 1;
+      const key = selected ? chapterTitleKey(workspaceId, selected.id, volume, chapter) : "";
+      ensureChapter(volume, chapter, chapterTitles[key]);
+      const chapters = groups.get(volume)!;
+      const item = chapters.get(chapter)!;
+      chapters.set(chapter, { ...item, memoryCount: item.memoryCount + 1 });
+    });
+
+    if (!groups.size && selected) {
+      ensureChapter(1, 1, chapterTitles[chapterTitleKey(workspaceId, selected.id, 1, 1)] || defaultChapterTitle(1));
+    }
+
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([volume, chapters]) => ({
+        volume,
+        chapters: Array.from(chapters.values()).sort((a, b) => a.chapter - b.chapter),
+      }));
+  }, [chapterTitle, chapterTitles, currentChapterIndex, currentVolumeIndex, memories, selected, workspaceId]);
 
   function clearTransientWritingState() {
     setHits([]);
@@ -233,7 +315,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function load(nextSelectedId?: number | null) {
+    const requestSeq = ++dataLoadSeqRef.current;
     const [nextConfig, nextBases] = await Promise.all([api.getPublicConfig(), api.listKnowledgeBases()]);
+    if (requestSeq !== dataLoadSeqRef.current) return;
     setConfig(nextConfig);
     setWritingModelId((current) => {
       const options = nextConfig.writing_models || [];
@@ -246,6 +330,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       preferred = nextBases[0]?.id ?? null;
     }
     const selectedChanged = preferred !== selectedId;
+    selectedIdRef.current = preferred;
     setSelectedId(preferred);
     if (selectedChanged) clearTransientWritingState();
     if (preferred) {
@@ -257,6 +342,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         api.listKnowledgeMarkdownDocs(preferred),
         api.getKnowledgeMergeStats(preferred),
       ]);
+      if (requestSeq !== dataLoadSeqRef.current || selectedIdRef.current !== preferred) return;
       setDocuments(nextDocuments);
       setMemories(nextMemories);
       setCards(nextCards);
@@ -279,7 +365,25 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     load().catch((err) => setError(err instanceof Error ? err.message : "加载写作 Agent 失败"));
   }, []);
 
-  function applyDraftJob(job: WritingDraftJob) {
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAPTER_TITLE_KEY, JSON.stringify(chapterTitles));
+  }, [chapterTitles]);
+
+  useEffect(() => {
+    if (!selected || typeof currentVolumeIndex !== "number" || typeof currentChapterIndex !== "number") {
+      setChapterTitle(defaultChapterTitle(1));
+      return;
+    }
+    const key = chapterTitleKey(workspaceId, selected.id, currentVolumeIndex, currentChapterIndex);
+    setChapterTitle(chapterTitles[key] || defaultChapterTitle(currentChapterIndex));
+  }, [chapterTitles, currentChapterIndex, currentVolumeIndex, selected, workspaceId]);
+
+  function applyDraftJob(job: WritingDraftJob, expectedWorkId = job.work_id) {
+    if (job.work_id !== expectedWorkId || selectedIdRef.current !== expectedWorkId) return;
     setDraftJob(job);
     setDraft(job.content || "");
     setUsedKnowledge(job.used_knowledge || []);
@@ -292,11 +396,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   useEffect(() => {
     if (!selected || !draftJob || ["completed", "failed", "cancelled"].includes(draftJob.status)) return;
+    const targetWorkId = selected.id;
     const timer = window.setTimeout(() => {
       api
-        .getWorkDraftJob(selected.id, draftJob.job_id)
-        .then(applyDraftJob)
-        .catch((err) => setError(err instanceof Error ? err.message : "查询长文本任务失败"));
+        .getWorkDraftJob(targetWorkId, draftJob.job_id)
+        .then((job) => applyDraftJob(job, targetWorkId))
+        .catch((err) => {
+          if (selectedIdRef.current === targetWorkId) setError(err instanceof Error ? err.message : "查询长文本任务失败");
+        });
     }, 1200);
     return () => window.clearTimeout(timer);
   }, [selected, draftJob]);
@@ -305,7 +412,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     if (!selected || draftJob) return;
     const ref = readDraftJobRef();
     if (!ref || ref.workId !== selected.id) return;
-    api.getWorkDraftJob(selected.id, ref.jobId).then(applyDraftJob).catch(() => undefined);
+    api
+      .getWorkDraftJob(selected.id, ref.jobId)
+      .then((job) => applyDraftJob(job, ref.workId))
+      .catch(() => undefined);
   }, [selected, draftJob]);
 
   async function createKnowledgeBase(event: FormEvent) {
@@ -326,7 +436,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function chooseKnowledgeBase(id: number) {
+    const requestSeq = ++dataLoadSeqRef.current;
     const selectedChanged = id !== selectedId;
+    selectedIdRef.current = id;
     setSelectedId(id);
     setSelectedDocumentIds([]);
     if (selectedChanged) clearTransientWritingState();
@@ -339,6 +451,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       api.listKnowledgeMarkdownDocs(id),
       api.getKnowledgeMergeStats(id),
     ]);
+    if (requestSeq !== dataLoadSeqRef.current || selectedIdRef.current !== id) return;
     setDocuments(nextDocuments);
     setMemories(nextMemories);
     setCards(nextCards);
@@ -375,16 +488,79 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setSelectedDocumentIds(documents.map((document) => document.id));
   }
 
+  function updateChapterTitle(value: string) {
+    setChapterTitle(value);
+    if (!selected || typeof currentVolumeIndex !== "number" || typeof currentChapterIndex !== "number") return;
+    const key = chapterTitleKey(workspaceId, selected.id, currentVolumeIndex, currentChapterIndex);
+    setChapterTitles((items) => ({ ...items, [key]: value }));
+  }
+
+  function rememberChapterPosition(workId: number, volume: number, chapter: number, title?: string) {
+    const key = chapterTitleKey(workspaceId, workId, volume, chapter);
+    setChapterTitles((items) => {
+      if (Object.prototype.hasOwnProperty.call(items, key)) return items;
+      return { ...items, [key]: title || defaultChapterTitle(chapter) };
+    });
+  }
+
+  function selectWritingPosition(volume: number, chapter: number) {
+    const changed = currentPositionPayload.current_volume_index !== volume || currentPositionPayload.current_chapter_index !== chapter;
+    setCurrentVolumeIndex(volume);
+    setCurrentChapterIndex(chapter);
+    if (selected) {
+      const key = chapterTitleKey(workspaceId, selected.id, volume, chapter);
+      const nextTitle = chapterTitles[key] || defaultChapterTitle(chapter);
+      setChapterTitle(nextTitle);
+      rememberChapterPosition(selected.id, volume, chapter, nextTitle);
+    }
+    if (changed) {
+      clearTransientWritingState();
+      setOutlineContext("");
+    }
+  }
+
+  function addChapter() {
+    if (!selected) return;
+    const volume = typeof currentVolumeIndex === "number" ? currentVolumeIndex : 1;
+    if (typeof currentChapterIndex === "number") {
+      rememberChapterPosition(selected.id, volume, currentChapterIndex, chapterTitle || undefined);
+    }
+    const currentVolume = volumeTree.find((item) => item.volume === volume);
+    const nextChapter = Math.max(currentChapterPayloadFallback(), ...(currentVolume?.chapters.map((item) => item.chapter) || [0])) + 1;
+    selectWritingPosition(volume, nextChapter);
+  }
+
+  function addVolume() {
+    if (!selected) return;
+    if (typeof currentVolumeIndex === "number" && typeof currentChapterIndex === "number") {
+      rememberChapterPosition(selected.id, currentVolumeIndex, currentChapterIndex, chapterTitle || undefined);
+    }
+    const nextVolume = Math.max(0, ...volumeTree.map((item) => item.volume), typeof currentVolumeIndex === "number" ? currentVolumeIndex : 0) + 1;
+    selectWritingPosition(nextVolume, 1);
+  }
+
+  function currentChapterPayloadFallback() {
+    return typeof currentChapterIndex === "number" ? currentChapterIndex : 0;
+  }
+
+  async function reloadWorkIfStillActive(workId: number) {
+    if (selectedIdRef.current === workId) {
+      await load(workId);
+    }
+  }
+
   async function uploadFilesTo(event: ChangeEvent<HTMLInputElement>, knowledgeType = uploadType) {
     const files = event.target.files;
     if (!selected || !files?.length) return;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("upload");
     setError("");
     setMessage("");
     try {
-      const result = await api.uploadKnowledgeDocumentsAs(selected.id, files, knowledgeType);
-      setMessage(`${knowledgeTypeLabel(knowledgeType)}已上传：${result.message}`);
-      await load(selected.id);
+      const result = await api.uploadKnowledgeDocumentsAs(targetWorkId, files, knowledgeType);
+      setMessage(`「${targetWorkName}」${knowledgeTypeLabel(knowledgeType)}已上传：${result.message}`);
+      await reloadWorkIfStillActive(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "上传作品文件失败");
     } finally {
@@ -399,13 +575,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function importCurrentJob() {
     if (!selected || !job) return;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("import");
     setError("");
     setMessage("");
     try {
-      const result = await api.importJobToKnowledgeBase(selected.id, job.id);
-      setMessage(result.message);
-      await load(selected.id);
+      const result = await api.importJobToKnowledgeBase(targetWorkId, job.id);
+      setMessage(`「${targetWorkName}」已导入拆书结果：${result.message}`);
+      await reloadWorkIfStillActive(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入拆书结果失败");
     } finally {
@@ -416,6 +594,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function refreshKnowledgeCards(workId = selected?.id) {
     if (!workId) return;
     const [nextCards, nextDocs, nextStats] = await Promise.all([api.listKnowledgeCards(workId), api.listKnowledgeMarkdownDocs(workId), api.getKnowledgeMergeStats(workId)]);
+    if (selectedIdRef.current !== workId) return;
     setCards(nextCards);
     setMarkdownDocs(nextDocs);
     setMergeStats(nextStats);
@@ -423,20 +602,22 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function importKnowledgePackage() {
     if (!selected || !packagePath.trim()) return;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("import-package");
     setError("");
     setMessage("");
     try {
-      const result = await api.importKnowledgePackage(selected.id, {
+      const result = await api.importKnowledgePackage(targetWorkId, {
         package_path: packagePath,
         library_type: uploadType,
         status: "approved",
         merge_mode: "safe",
         markdown_scope: "canonical_only",
       });
-      setMessage(result.message);
-      await refreshKnowledgeCards(selected.id);
-      setActiveKnowledgeTab("cards");
+      setMessage(`「${targetWorkName}」知识包已导入：${result.message}`);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setActiveKnowledgeTab("cards");
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入知识包失败");
     } finally {
@@ -462,18 +643,20 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function importMarkdownPath() {
     if (!selected || !markdownSourcePath.trim()) return;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("import-md-path");
     setError("");
     setMessage("");
     try {
-      const result = await api.importKnowledgeMarkdown(selected.id, {
+      const result = await api.importKnowledgeMarkdown(targetWorkId, {
         source_path: markdownSourcePath,
         library_type: uploadType,
         status: "raw_extracted",
       });
-      setMessage(summarizeImportResults([result]));
-      await refreshKnowledgeCards(selected.id);
-      setActiveKnowledgeTab("cards");
+      setMessage(`「${targetWorkName}」Markdown 已拆卡：${summarizeImportResults([result])}`);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setActiveKnowledgeTab("cards");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Markdown 拆卡失败");
     } finally {
@@ -484,14 +667,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function importMarkdownFiles(event: ChangeEvent<HTMLInputElement>) {
     if (!selected || !event.target.files?.length) return;
     const files = event.target.files;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("import-md-files");
     setError("");
     setMessage("");
     try {
-      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, files, uploadType, "raw_extracted");
-      setMessage(summarizeImportResults(results));
-      await refreshKnowledgeCards(selected.id);
-      setActiveKnowledgeTab("cards");
+      const results = await api.uploadKnowledgeMarkdownFiles(targetWorkId, files, uploadType, "raw_extracted");
+      setMessage(`「${targetWorkName}」Markdown 文件已拆卡：${summarizeImportResults(results)}`);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setActiveKnowledgeTab("cards");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Markdown 文件导入失败");
     } finally {
@@ -502,6 +687,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function bulkDeleteDocuments(knowledgeType?: string, deleteAll = false) {
     if (!selected) return;
+    const targetWorkId = selected.id;
     const typeDocuments = knowledgeType ? documentsByType[knowledgeType] || [] : documents;
     const selectedIds = typeDocuments.filter((document) => selectedDocumentSet.has(document.id)).map((document) => document.id);
     if (!deleteAll && !selectedIds.length) return;
@@ -516,14 +702,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setError("");
     setMessage("");
     try {
-      const result = await api.bulkDeleteKnowledgeDocuments(selected.id, {
+      const result = await api.bulkDeleteKnowledgeDocuments(targetWorkId, {
         document_ids: selectedIds,
         knowledge_type: knowledgeType,
         delete_all: deleteAll,
       });
-      setSelectedDocumentIds([]);
-      setMessage(result.message);
-      await load(selected.id);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocumentIds([]);
+        setMessage(result.message);
+        await load(targetWorkId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "批量删除文件失败");
     } finally {
@@ -533,19 +721,22 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function generateWorldbuildingDraft() {
     if (!selected || !storySeed.trim()) return;
+    const targetWorkId = selected.id;
     setBusy("worldbuilding");
     setError("");
     setMessage("");
     try {
       const result = await api.generateWorldbuildingDraft({
-        knowledge_base_ids: [selected.id],
+        knowledge_base_ids: [targetWorkId],
         story_seed: storySeed,
         requirements: "生成原创世界观。可以参考写作技巧指南，但不要沿用拆书原作的世界观、角色、势力、地名和独特设定。",
         ...selectedWritingModelPayload,
         dry_run: dryRun,
       });
-      setWorldbuildingDraft(result.content);
-      setCitations(result.citations);
+      if (selectedIdRef.current === targetWorkId) {
+        setWorldbuildingDraft(result.content);
+        setCitations(result.citations);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成世界观草案失败");
     } finally {
@@ -555,17 +746,19 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function confirmWorldbuildingImport() {
     if (!selected || !worldbuildingDraft.trim()) return;
+    const targetWorkId = selected.id;
+    const targetWorkName = selected.name;
     setBusy("confirm-worldbuilding");
     setError("");
     setMessage("");
     try {
-      const result = await api.createKnowledgeTextDocument(selected.id, {
+      const result = await api.createKnowledgeTextDocument(targetWorkId, {
         filename: "worldbuilding_confirmed.md",
         content: worldbuildingDraft,
         knowledge_type: "worldbuilding",
       });
-      setMessage(result.message);
-      await load(selected.id);
+      setMessage(`「${targetWorkName}」世界观设定已导入：${result.message}`);
+      await reloadWorkIfStillActive(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "导入世界观设定失败");
     } finally {
@@ -574,13 +767,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function deleteDocument(documentId: number) {
+    if (!selected) return;
+    const targetWorkId = selected.id;
     if (!window.confirm("确定删除这个文件和对应分块吗？")) return;
     setBusy(`delete-${documentId}`);
     setError("");
     try {
       await api.deleteKnowledgeDocument(documentId);
-      setSelectedDocumentIds((items) => items.filter((id) => id !== documentId));
-      if (selected) await load(selected.id);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocumentIds((items) => items.filter((id) => id !== documentId));
+        await load(targetWorkId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除文件失败");
     } finally {
@@ -589,11 +786,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function reindexDocument(documentId: number) {
+    if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy(`reindex-${documentId}`);
     setError("");
     try {
       await api.reindexKnowledgeDocument(documentId);
-      if (selected) await load(selected.id);
+      await reloadWorkIfStillActive(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "重新索引失败");
     } finally {
@@ -604,11 +803,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function search(event: FormEvent) {
     event.preventDefault();
     if (!selected || !query.trim()) return;
+    const targetWorkId = selected.id;
     setBusy("search");
     setError("");
     try {
-      const result = await api.searchKnowledge({ knowledge_base_ids: [selected.id], query });
-      setHits(result.hits);
+      const result = await api.searchKnowledge({ knowledge_base_ids: [targetWorkId], query });
+      if (selectedIdRef.current === targetWorkId) setHits(result.hits);
     } catch (err) {
       setError(err instanceof Error ? err.message : "检索失败");
     } finally {
@@ -623,12 +823,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setError("请先填写当前 Volume 和 Chapter，再进行写作检索。");
       return;
     }
+    const targetWorkId = selected.id;
     setBusy("rag-search");
     setError("");
     try {
-      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK, ...ragRetrievalPayload });
-      setRagResults(result.results);
-      setRetrievalDebug(result.retrieval_debug);
+      const result = await api.searchWorkRAG(targetWorkId, { stage: ragStage, query, top_k: ragTopK, ...ragRetrievalPayload });
+      if (selectedIdRef.current === targetWorkId) {
+        setRagResults(result.results);
+        setRetrievalDebug(result.retrieval_debug);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "RAG 召回失败");
     } finally {
@@ -638,11 +841,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function updateCardStatus(card: KnowledgeCard, status: string) {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy(`card-${card.card_id}`);
     setError("");
     try {
-      await api.updateKnowledgeCard(selected.id, card.card_id, { status });
-      await refreshKnowledgeCards(selected.id);
+      await api.updateKnowledgeCard(targetWorkId, card.card_id, { status });
+      await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新知识卡失败");
     } finally {
@@ -652,13 +856,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function previewMerges() {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy("merge-preview");
     setError("");
     try {
-      const result = await api.previewKnowledgeMerges(selected.id, { merge_mode: "preview" });
-      setMergeGroups(result.groups);
-      setMessage(`发现 ${result.auto_merge_count} 张可安全合并卡片，${result.review_required_count} 组需要人工确认。`);
-      await refreshKnowledgeCards(selected.id);
+      const result = await api.previewKnowledgeMerges(targetWorkId, { merge_mode: "preview" });
+      if (selectedIdRef.current === targetWorkId) {
+        setMergeGroups(result.groups);
+        setMessage(`发现 ${result.auto_merge_count} 张可安全合并卡片，${result.review_required_count} 组需要人工确认。`);
+      }
+      await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "合并预览失败");
     } finally {
@@ -668,13 +875,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function applySafeMerges() {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy("merge-apply");
     setError("");
     try {
-      const result = await api.applyKnowledgeMerges(selected.id, { merge_mode: "safe" });
-      setMergeGroups(result.groups);
-      setMessage(result.message);
-      await refreshKnowledgeCards(selected.id);
+      const result = await api.applyKnowledgeMerges(targetWorkId, { merge_mode: "safe" });
+      if (selectedIdRef.current === targetWorkId) {
+        setMergeGroups(result.groups);
+        setMessage(result.message);
+      }
+      await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "执行安全合并失败");
     } finally {
@@ -684,12 +894,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function unmergeCard(card: KnowledgeCard) {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy(`unmerge-${card.card_id}`);
     setError("");
     try {
-      await api.unmergeKnowledgeCard(selected.id, card.card_id);
-      await refreshKnowledgeCards(selected.id);
-      setMessage(`已恢复知识卡：${card.title}`);
+      await api.unmergeKnowledgeCard(targetWorkId, card.card_id);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage(`已恢复知识卡：${card.title}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "恢复知识卡失败");
     } finally {
@@ -699,11 +910,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function deleteKnowledgeCard(card: KnowledgeCard) {
     if (!selected || !window.confirm(`确定软删除知识卡「${card.title}」吗？`)) return;
+    const targetWorkId = selected.id;
     setBusy(`card-${card.card_id}`);
     setError("");
     try {
-      await api.deleteKnowledgeCard(selected.id, card.card_id);
-      await refreshKnowledgeCards(selected.id);
+      await api.deleteKnowledgeCard(targetWorkId, card.card_id);
+      await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除知识卡失败");
     } finally {
@@ -713,13 +925,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function openMarkdownDoc(docId: string) {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy(`doc-${docId}`);
     setError("");
     try {
-      const doc = await api.readKnowledgeMarkdownDoc(selected.id, docId);
-      setSelectedDocId(doc.doc_id);
-      setMarkdownContent(doc.content);
-      setActiveKnowledgeTab("docs");
+      const doc = await api.readKnowledgeMarkdownDoc(targetWorkId, docId);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocId(doc.doc_id);
+        setMarkdownContent(doc.content);
+        setActiveKnowledgeTab("docs");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "读取 Markdown 失败");
     } finally {
@@ -729,12 +944,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function saveMarkdownDoc() {
     if (!selected || !selectedDocId || !markdownContent.trim()) return;
+    const targetWorkId = selected.id;
     setBusy(`doc-save-${selectedDocId}`);
     setError("");
     try {
-      await api.saveKnowledgeMarkdownDoc(selected.id, selectedDocId, markdownContent);
-      await refreshKnowledgeCards(selected.id);
-      setMessage("Markdown 已保存");
+      await api.saveKnowledgeMarkdownDoc(targetWorkId, selectedDocId, markdownContent);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage("Markdown 已保存");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存 Markdown 失败");
     } finally {
@@ -744,12 +960,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function syncMarkdownDoc() {
     if (!selected || !selectedDocId) return;
+    const targetWorkId = selected.id;
     setBusy(`doc-sync-${selectedDocId}`);
     setError("");
     try {
-      const result = await api.syncKnowledgeMarkdownDoc(selected.id, selectedDocId);
-      await refreshKnowledgeCards(selected.id);
-      setMessage(`已同步到知识卡：${result.updated_fields.join("、") || "无字段变化"}`);
+      const result = await api.syncKnowledgeMarkdownDoc(targetWorkId, selectedDocId);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage(`已同步到知识卡：${result.updated_fields.join("、") || "无字段变化"}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "同步 Markdown 失败");
     } finally {
@@ -759,14 +976,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function deleteMarkdownDoc() {
     if (!selected || !selectedDocId || !window.confirm("确定删除这个 Markdown 文档并软删除对应知识卡吗？")) return;
+    const targetWorkId = selected.id;
     setBusy(`doc-delete-${selectedDocId}`);
     setError("");
     try {
-      await api.deleteKnowledgeMarkdownDoc(selected.id, selectedDocId);
-      setSelectedDocId("");
-      setMarkdownContent("");
-      await refreshKnowledgeCards(selected.id);
-      setMessage("Markdown 已删除，对应知识卡已标记为 deleted。");
+      await api.deleteKnowledgeMarkdownDoc(targetWorkId, selectedDocId);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocId("");
+        setMarkdownContent("");
+      }
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage("Markdown 已删除，对应知识卡已标记为 deleted。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Markdown 失败");
     } finally {
@@ -776,14 +996,17 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function regenerateMarkdown(card: KnowledgeCard) {
     if (!selected) return;
+    const targetWorkId = selected.id;
     setBusy(`export-${card.card_id}`);
     setError("");
     try {
-      const doc = await api.exportKnowledgeCardMarkdown(selected.id, card.card_id);
-      setSelectedDocId(doc.doc_id);
-      setMarkdownContent(doc.content);
-      await refreshKnowledgeCards(selected.id);
-      setActiveKnowledgeTab("docs");
+      const doc = await api.exportKnowledgeCardMarkdown(targetWorkId, card.card_id);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocId(doc.doc_id);
+        setMarkdownContent(doc.content);
+        setActiveKnowledgeTab("docs");
+      }
+      await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "重新生成 Markdown 失败");
     } finally {
@@ -793,11 +1016,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function generateOutline(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !outlineTask.trim()) return;
+    if (!selected || !writingTaskPayload.trim()) return;
     if (positionMissing) {
       setError("请先填写当前 Volume 和 Chapter，避免写作位置与检索位置不同步。");
       return;
     }
+    const targetWorkId = selected.id;
     setBusy("outline");
     setError("");
     setOutline("");
@@ -807,8 +1031,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setLongSections([]);
     setGenerationWarnings([]);
     try {
-      const result = await api.generateWorkOutline(selected.id, {
-        task: outlineTask,
+      const result = await api.generateWorkOutline(targetWorkId, {
+        task: writingTaskPayload,
         current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
@@ -817,21 +1041,23 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         top_k: ragTopK,
         ...generationRetrievalPayload,
       });
-      setOutline(result.content);
-      setCitations(result.citations);
-      setUsedKnowledge(result.used_knowledge || []);
-      setRetrievalDebug(result.retrieval_debug || null);
-      setPromptPreview(result.prompt_preview || "");
-      setActualChars(result.actual_chars ?? result.content.length);
-      setGenerationWarnings(result.warnings || []);
-      setRagResults(
-        (result.used_knowledge || []).map((item) => ({
-          ...item,
-          content_preview: item.content_preview || "",
-          tags: item.tags || [],
-          status: item.status || "used",
-        })),
-      );
+      if (selectedIdRef.current === targetWorkId) {
+        setOutline(result.content);
+        setCitations(result.citations);
+        setUsedKnowledge(result.used_knowledge || []);
+        setRetrievalDebug(result.retrieval_debug || null);
+        setPromptPreview(result.prompt_preview || "");
+        setActualChars(result.actual_chars ?? result.content.length);
+        setGenerationWarnings(result.warnings || []);
+        setRagResults(
+          (result.used_knowledge || []).map((item) => ({
+            ...item,
+            content_preview: item.content_preview || "",
+            tags: item.tags || [],
+            status: item.status || "used",
+          })),
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成提纲失败");
     } finally {
@@ -850,19 +1076,22 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setMessage("");
     try {
       setConfirmedOutline(outline);
-      const saved = await api.confirmOutlineMemory(selected.id, {
-        title: `已确认提纲 ${new Date().toLocaleString()}`,
+      const targetWorkId = selected.id;
+      const saved = await api.confirmOutlineMemory(targetWorkId, {
+        title: `${chapterTitle || "已确认提纲"} · 提纲`,
         content: outline,
         tags: ["outline"],
         scope_level: "chapter",
         volume_index: currentPositionPayload.current_volume_index,
         chapter_index: currentPositionPayload.current_chapter_index,
       });
-      setMemories((items) => [saved, ...items]);
-      await refreshKnowledgeCards(selected.id);
-      setMemoryTitle("");
-      setMemoryContent("");
-      setMessage("提纲已确认，并写入长期 Memory。现在可以生成正文。");
+      if (selectedIdRef.current === targetWorkId) {
+        setMemories((items) => [saved, ...items]);
+        await refreshKnowledgeCards(targetWorkId);
+        setMemoryTitle("");
+        setMemoryContent("");
+        setMessage("提纲已确认，并写入长期 Memory。现在可以生成正文。");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "确认提纲失败");
     } finally {
@@ -881,6 +1110,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setError("请先填写当前 Volume 和 Chapter，再生成正文。");
       return;
     }
+    const targetWorkId = selected.id;
     setBusy("draft-job");
     setError("");
     setDraftJob(null);
@@ -888,8 +1118,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setLongSections([]);
     setGenerationWarnings([]);
     try {
-      const job = await api.createWorkDraftJob(selected.id, {
-        task: `请根据用户已确认的章节提纲生成小说正文：${outlineTask}`,
+      const job = await api.createWorkDraftJob(targetWorkId, {
+        task: `请根据用户已确认的章节提纲生成小说正文：${writingTaskPayload}`,
         confirmed_outline: confirmedOutline,
         current_content: outlineContext,
         mode,
@@ -900,9 +1130,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         target_chars: targetChars,
         ...generationRetrievalPayload,
       });
-      storeDraftJobRef(selected.id, job.job_id);
-      applyDraftJob(job);
-      setActiveKnowledgeTab("result");
+      storeDraftJobRef(targetWorkId, job.job_id);
+      if (selectedIdRef.current === targetWorkId) {
+        applyDraftJob(job);
+        setActiveKnowledgeTab("result");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建长文本任务失败");
     } finally {
@@ -912,11 +1144,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function cancelDraftJob() {
     if (!selected || !draftJob) return;
+    const targetWorkId = selected.id;
     setBusy("draft-job-cancel");
     setError("");
     try {
-      const job = await api.cancelWorkDraftJob(selected.id, draftJob.job_id);
-      applyDraftJob(job);
+      const job = await api.cancelWorkDraftJob(targetWorkId, draftJob.job_id);
+      applyDraftJob(job, targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "取消长文本任务失败");
     } finally {
@@ -930,13 +1163,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setError("请先填写当前 Volume 和 Chapter，再润色正文。");
       return;
     }
+    const targetWorkId = selected.id;
     setBusy("revision");
     setError("");
     setCitations([]);
     setGenerationWarnings([]);
     try {
-      const result = await api.generateWorkRevision(selected.id, {
-        task: `请在不改变已确认世界观和人物连续性的前提下润色/改写当前正文：${outlineTask}`,
+      const result = await api.generateWorkRevision(targetWorkId, {
+        task: `请在不改变已确认世界观和人物连续性的前提下润色/改写当前正文：${writingTaskPayload}`,
         confirmed_outline: confirmedOutline,
         current_content: draft,
         mode,
@@ -947,14 +1181,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         target_chars: actualChars || targetChars,
         ...generationRetrievalPayload,
       });
-      setDraft(result.content);
-      setCitations(result.citations);
-      setUsedKnowledge(result.used_knowledge || []);
-      setRetrievalDebug(result.retrieval_debug || null);
-      setPromptPreview(result.prompt_preview || "");
-      setActualChars(result.actual_chars ?? result.content.length);
-      setLongSections(result.sections || []);
-      setGenerationWarnings(result.warnings || []);
+      if (selectedIdRef.current === targetWorkId) {
+        setDraft(result.content);
+        setCitations(result.citations);
+        setUsedKnowledge(result.used_knowledge || []);
+        setRetrievalDebug(result.retrieval_debug || null);
+        setPromptPreview(result.prompt_preview || "");
+        setActualChars(result.actual_chars ?? result.content.length);
+        setLongSections(result.sections || []);
+        setGenerationWarnings(result.warnings || []);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "润色正文失败");
     } finally {
@@ -964,12 +1200,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function saveMemory(title: string, content: string, type = memoryType, source = "manual") {
     if (!selected || !title.trim() || !content.trim()) return;
+    const targetWorkId = selected.id;
     setBusy("memory");
     setError("");
     setMessage("");
     try {
       const saved = await api.createWritingMemory({
-        knowledge_base_id: selected.id,
+        knowledge_base_id: targetWorkId,
         memory_type: type,
         title,
         content,
@@ -979,11 +1216,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         volume_index: currentPositionPayload.current_volume_index,
         chapter_index: currentPositionPayload.current_chapter_index,
       });
-      setMemories((items) => [saved, ...items]);
-      await refreshKnowledgeCards(selected.id);
-      setMemoryTitle("");
-      setMemoryContent("");
-      setMessage("Memory 已保存，后续提纲和正文生成都会自动参考。");
+      if (selectedIdRef.current === targetWorkId) {
+        setMemories((items) => [saved, ...items]);
+        await refreshKnowledgeCards(targetWorkId);
+        setMemoryTitle("");
+        setMemoryContent("");
+        setMessage("Memory 已保存，后续提纲和正文生成都会自动参考。");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存 Memory 失败");
     } finally {
@@ -992,12 +1231,16 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function deleteMemory(id: number) {
+    if (!selected) return;
+    const targetWorkId = selected.id;
     if (!window.confirm("确定删除这条 Memory 吗？")) return;
     setBusy(`memory-${id}`);
     setError("");
     try {
       await api.deleteWritingMemory(id);
-      setMemories((items) => items.filter((item) => item.id !== id));
+      if (selectedIdRef.current === targetWorkId) {
+        setMemories((items) => items.filter((item) => item.id !== id));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Memory 失败");
     } finally {
@@ -1056,21 +1299,24 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       setError("请先填写当前 Volume 和 Chapter，再保存正文 Memory。");
       return;
     }
+    const targetWorkId = selected.id;
     setBusy("memory");
     setError("");
     setMessage("");
     try {
-      const saved = await api.confirmDraftMemory(selected.id, {
-        title: `正文片段 ${new Date().toLocaleString()}`,
+      const saved = await api.confirmDraftMemory(targetWorkId, {
+        title: `${chapterTitle || "正文片段"} · 正文`,
         content: draft,
         tags: ["draft"],
         scope_level: "chapter",
         volume_index: currentPositionPayload.current_volume_index,
         chapter_index: currentPositionPayload.current_chapter_index,
       });
-      setMemories((items) => [saved, ...items]);
-      await refreshKnowledgeCards(selected.id);
-      setMessage("正文已写入 Memory。");
+      if (selectedIdRef.current === targetWorkId) {
+        setMemories((items) => [saved, ...items]);
+        await refreshKnowledgeCards(targetWorkId);
+        setMessage("正文已写入 Memory。");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存正文 Memory 失败");
     } finally {
@@ -1148,7 +1394,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       {(config || error || message) && (
         <div className="writing-agent-status-strip">
           {config && <span>{config.privacy_note} API Key 只用于本次请求，不会保存。</span>}
-          <span>工作区：{getWorkspaceId()}</span>
+          <span>工作区：{workspaceId}</span>
           {message && <strong>{message}</strong>}
           {error && <strong className="is-error">{error}</strong>}
         </div>
@@ -1159,11 +1405,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
           <div className="writing-panel-head">
             <span>章节管理</span>
             <div>
-              <button type="button" title="新建作品" onClick={() => setName(`作品 ${knowledgeBases.length + 1}`)}>
-                +
+              <button type="button" title="新建卷" onClick={addVolume} disabled={!selected}>
+                卷+
               </button>
-              <button type="button" title="全选文件" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
-                ⇅
+              <button type="button" title="新建章" onClick={addChapter} disabled={!selected}>
+                章+
               </button>
             </div>
           </div>
@@ -1195,130 +1441,32 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                       </button>
                       <button type="button" className="writing-work-title" onClick={() => chooseKnowledgeBase(kb.id)}>
                         <strong>{kb.name}</strong>
-                        <small>
-                          {kb.document_count} 文件 · {kb.chunk_count} 分块
-                        </small>
+                        <small>{active ? `${volumeTree.length} 卷 · ${volumeTree.reduce((total, volume) => total + volume.chapters.length, 0)} 章` : "点击查看卷章目录"}</small>
                       </button>
                     </div>
 
                     {expanded && active && (
-                      <div className="writing-work-files">
-                        <div className="writing-import-box">
-                          <label>
-                            导入到
-                            <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
-                              {KNOWLEDGE_GROUPS.map((group) => (
-                                <option key={group.key} value={group.key}>
-                                  {group.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <div className="writing-compact-actions">
-                            <label className="button-link compact-action">
-                              上传{knowledgeTypeLabel(uploadType)}
-                              <input
-                                className="hidden-input"
-                                type="file"
-                                multiple
-                                accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                                onChange={uploadFiles}
-                                disabled={!selected || busy === "upload"}
-                              />
-                            </label>
-                            <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
-                              导入拆书技巧
-                            </button>
-                          </div>
-                          <label>
-                            知识包路径
-                            <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="knowledge_package.json" />
-                          </label>
-                          <button type="button" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
-                            导入知识包
-                          </button>
-                          <label>
-                            Markdown 路径
-                            <input value={markdownSourcePath} onChange={(event) => setMarkdownSourcePath(event.target.value)} placeholder="examples/my_knowledge.md" />
-                          </label>
-                          <div className="writing-compact-actions">
-                            <button type="button" onClick={importMarkdownPath} disabled={!selected || busy === "import-md-path" || !markdownSourcePath.trim()}>
-                              自动拆卡
-                            </button>
-                            <label className="button-link compact-action">
-                              上传 MD
-                              <input className="hidden-input" type="file" multiple accept=".md,.markdown,text/markdown,text/plain" onChange={importMarkdownFiles} disabled={!selected || busy === "import-md-files"} />
-                            </label>
-                          </div>
-                        </div>
-
-                        <div className="writing-file-toolbar">
-                          <button type="button" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
-                            全选
-                          </button>
-                          <button type="button" onClick={() => setSelectedDocumentIds([])} disabled={!selectedDocumentIds.length}>
-                            取消
-                          </button>
-                          <button type="button" className="danger" onClick={() => bulkDeleteDocuments()} disabled={!selectedDocumentsInWork.length}>
-                            删除
-                          </button>
-                          <button type="button" className="danger" onClick={() => bulkDeleteDocuments(undefined, true)} disabled={!documents.length}>
-                            清空
-                          </button>
-                        </div>
-
-                        {KNOWLEDGE_GROUPS.map((group) => {
-                          const groupDocuments = documentsByType[group.key] || [];
-                          const groupSelected = groupDocuments.filter((document) => selectedDocumentSet.has(document.id)).length;
-                          const allGroupSelected = groupDocuments.length > 0 && groupSelected === groupDocuments.length;
-                          return (
-                            <div key={group.key} className="writing-file-group">
-                              <div className="writing-file-group-head">
-                                <button type="button" className="writing-tree-toggle" onClick={() => toggleKnowledgeType(group.key)}>
-                                  {expandedTypes[group.key] ? "⌄" : "›"}
-                                </button>
-                                <input
-                                  type="checkbox"
-                                  checked={allGroupSelected}
-                                  disabled={!groupDocuments.length}
-                                  onChange={(event) => setGroupSelection(group.key, event.target.checked)}
-                                  aria-label={`选择${group.label}`}
-                                />
-                                <button type="button" className="writing-file-group-title" onClick={() => toggleKnowledgeType(group.key)}>
-                                  <strong>{group.label}</strong>
-                                  <small>
-                                    {groupDocuments.length} 文件{groupSelected ? ` · 已选 ${groupSelected}` : ""}
-                                  </small>
-                                </button>
-                              </div>
-                              {expandedTypes[group.key] && (
-                                <div className="writing-file-list">
-                                  {!groupDocuments.length && <p className="muted file-empty">{group.hint}</p>}
-                                  {groupDocuments.map((document) => (
-                                    <div key={document.id} className={`writing-file-row ${selectedDocumentSet.has(document.id) ? "selected" : ""}`}>
-                                      <input type="checkbox" checked={selectedDocumentSet.has(document.id)} onChange={() => toggleDocumentSelection(document.id)} aria-label={`选择${documentTitle(document)}`} />
-                                      <div>
-                                        <strong title={documentTitle(document)}>{documentTitle(document)}</strong>
-                                        <small>
-                                          {document.chunk_count} 分块 · {formatSize(document.size_bytes)} · {document.status}
-                                        </small>
-                                        {document.error_message && <small className="warn-cell">{document.error_message}</small>}
-                                      </div>
-                                      <div className="writing-file-actions">
-                                        <button type="button" onClick={() => reindexDocument(document.id)} disabled={busy === `reindex-${document.id}`}>
-                                          重建
-                                        </button>
-                                        <button type="button" className="danger" onClick={() => deleteDocument(document.id)} disabled={busy === `delete-${document.id}`}>
-                                          删
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                      <div className="writing-volume-tree">
+                        {volumeTree.map((volume) => (
+                          <section key={volume.volume} className="writing-volume-node">
+                            <div className="writing-volume-head">
+                              <span>卷 {volume.volume}</span>
+                              <small>{volume.chapters.length} 章</small>
                             </div>
-                          );
-                        })}
+                            <div className="writing-chapter-list">
+                              {volume.chapters.map((chapter) => {
+                                const activeChapter = currentPositionPayload.current_volume_index === volume.volume && currentPositionPayload.current_chapter_index === chapter.chapter;
+                                return (
+                                  <button key={chapter.chapter} type="button" className={activeChapter ? "active" : ""} onClick={() => selectWritingPosition(volume.volume, chapter.chapter)}>
+                                    <span>第 {chapter.chapter} 章</span>
+                                    <strong>{chapter.title}</strong>
+                                    <small>{chapter.memoryCount ? `${chapter.memoryCount} 条 Memory` : "未写入 Memory"}</small>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        ))}
                       </div>
                     )}
                   </section>
@@ -1333,15 +1481,33 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
         <main className="writing-agent-editor">
           <div className="writing-editor-titlebar">
-            <input value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} placeholder="请输入章节标题或本次写作请求" />
+            <input value={chapterTitle} onChange={(event) => updateChapterTitle(event.target.value)} placeholder="请输入章节标题" />
             <div className="writing-editor-position">
               <label>
                 V
-                <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(parsePositionInput(event.target.value))} />
+                <input
+                  type="number"
+                  min={1}
+                  value={currentVolumeIndex}
+                  onChange={(event) => {
+                    const nextVolume = parsePositionInput(event.target.value);
+                    if (typeof nextVolume === "number") selectWritingPosition(nextVolume, typeof currentChapterIndex === "number" ? currentChapterIndex : 1);
+                    else setCurrentVolumeIndex(nextVolume);
+                  }}
+                />
               </label>
               <label>
                 C
-                <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(parsePositionInput(event.target.value))} />
+                <input
+                  type="number"
+                  min={1}
+                  value={currentChapterIndex}
+                  onChange={(event) => {
+                    const nextChapter = parsePositionInput(event.target.value);
+                    if (typeof nextChapter === "number") selectWritingPosition(typeof currentVolumeIndex === "number" ? currentVolumeIndex : 1, nextChapter);
+                    else setCurrentChapterIndex(nextChapter);
+                  }}
+                />
               </label>
             </div>
           </div>
