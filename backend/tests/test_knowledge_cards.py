@@ -450,7 +450,7 @@ Updated body
     assert card.content == "Updated body"
 
 
-def test_delete_markdown_doc_removes_file_and_soft_deletes_card(tmp_path, monkeypatch):
+def test_delete_markdown_doc_removes_file_and_physically_deletes_card(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
     db, kb = _session()
@@ -462,9 +462,8 @@ def test_delete_markdown_doc_removes_file_and_soft_deletes_card(tmp_path, monkey
 
     result = delete_markdown_doc(db, kb, "WR-001")
 
-    db.refresh(card)
     assert result["status"] == "deleted"
-    assert card.status == "deleted"
+    assert db.query(KnowledgeCard).filter(KnowledgeCard.card_id == "WR-001").first() is None
     assert not path.exists()
 
 

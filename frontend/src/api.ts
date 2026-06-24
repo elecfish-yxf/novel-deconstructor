@@ -561,6 +561,11 @@ export const api = {
   updateKnowledgeBase: (id: number, payload: { name?: string; description?: string }) =>
     request<KnowledgeBase>(`/api/knowledge-bases/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteKnowledgeBase: (id: number) => request<{ ok: boolean }>(`/api/knowledge-bases/${id}`, { method: "DELETE" }),
+  bulkDeleteKnowledgeBases: (ids: number[]) =>
+    request<{ deleted: number; message: string }>("/api/knowledge-bases/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ knowledge_base_ids: ids }),
+    }),
   listKnowledgeDocuments: (id: number) => request<KnowledgeDocument[]>(`/api/knowledge-bases/${id}/documents`),
   uploadKnowledgeDocuments: (id: number, files: FileList | File[]) => {
     const data = new FormData();
@@ -646,6 +651,11 @@ export const api = {
     }),
   deleteKnowledgeCard: (workId: number, cardId: string) =>
     request<KnowledgeCard>(`/api/writing/works/${workId}/knowledge/cards/${encodeURIComponent(cardId)}`, { method: "DELETE" }),
+  bulkDeleteKnowledgeCards: (workId: number, cardIds: string[]) =>
+    request<{ deleted: number; message: string }>(`/api/writing/works/${workId}/knowledge/cards/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify({ card_ids: cardIds }),
+    }),
   previewKnowledgeMerges: (workId: number, payload: { merge_mode?: string; auto_merge_threshold?: number; review_threshold?: number } = {}) =>
     request<KnowledgeMergePreview>(`/api/writing/works/${workId}/knowledge/merge/preview`, {
       method: "POST",
@@ -674,6 +684,11 @@ export const api = {
   deleteKnowledgeMarkdownDoc: (workId: number, docId: string) =>
     request<{ card_id: string; status: string; updated_fields: string[] }>(`/api/writing/works/${workId}/knowledge/docs/${encodeURIComponent(docId)}`, {
       method: "DELETE",
+    }),
+  bulkDeleteKnowledgeMarkdownDocs: (workId: number, docIds: string[]) =>
+    request<{ deleted: number; message: string }>(`/api/writing/works/${workId}/knowledge/docs/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify({ doc_ids: docIds }),
     }),
   exportKnowledgeCardMarkdown: (workId: number, cardId: string) =>
     request<{ doc_id: string; card_id: string; content: string; path: string }>(
@@ -738,6 +753,22 @@ export const api = {
   ) =>
     request<WritingMemory>(`/api/writing/works/${workId}/memory/confirm-draft`, { method: "POST", body: JSON.stringify(payload) }),
   deleteWritingMemory: (id: number) => request<{ ok: boolean }>(`/api/writing/memories/${id}`, { method: "DELETE" }),
+  bulkDeleteWritingMemories: (ids: number[]) =>
+    request<{ deleted: number; message: string }>("/api/writing/memories/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ memory_ids: ids }),
+    }),
+  bulkDeleteWritingScope: (
+    workId: number,
+    payload: { volume_indices?: number[]; chapters?: { volume_index: number; chapter_index: number }[] },
+  ) =>
+    request<{ deleted_volumes: number; deleted_chapters: number; deleted_memories: number; deleted_cards: number; deleted_markdown_files: number; message: string }>(
+      `/api/writing/works/${workId}/chapters/bulk-delete`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
   generateOutline: (payload: {
     knowledge_base_ids: number[];
     task: string;

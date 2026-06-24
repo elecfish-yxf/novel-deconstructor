@@ -17,14 +17,15 @@ from novel_deconstructor.api.writing import (
     _plan_section_targets,
     _prompt_card_filter_reason,
     _tail_clip,
+    bulk_delete_writing_scope,
     confirm_draft_memory,
     confirm_outline_memory,
     count_cjk_chars,
     count_non_space_chars,
 )
 from novel_deconstructor.config import get_settings
-from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, UserAPIKey
-from novel_deconstructor.schemas import WritingDraftRequest, WritingMemoryConfirmRequest, WritingRevisionRequest
+from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, UserAPIKey, WritingMemory
+from novel_deconstructor.schemas import WritingChapterRef, WritingDraftRequest, WritingMemoryConfirmRequest, WritingRevisionRequest, WritingScopeBulkDeleteRequest
 from novel_deconstructor.services.knowledge_cards import import_knowledge_package
 
 
@@ -374,6 +375,40 @@ def test_confirm_outline_writes_chapter_outline_memory_and_card(tmp_path, monkey
     assert card.card_type == "ChapterOutline"
     assert card.retrievable is True
     assert card.status == "approved"
+
+
+def test_bulk_delete_writing_scope_physically_deletes_chapter_memory_and_cards(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    memory = confirm_outline_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Approved outline",
+            content="Goal: enter the archive.\nConflict: the gate rejects the key.",
+            volume_index=1,
+            chapter_index=2,
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+    _add_card(db, kb, "CH-KEEP", title="Keep", scope_level="chapter", volume_index=1, chapter_index=3)
+    _add_card(db, kb, "CH-DELETE", title="Delete", scope_level="chapter", volume_index=1, chapter_index=2)
+
+    result = bulk_delete_writing_scope(
+        1,
+        WritingScopeBulkDeleteRequest(chapters=[WritingChapterRef(volume_index=1, chapter_index=2)]),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    assert result.deleted_chapters == 1
+    assert result.deleted_memories == 1
+    assert result.deleted_cards == 2
+    assert db.get(WritingMemory, memory.id) is None
+    assert db.query(KnowledgeCard).filter(KnowledgeCard.card_id == f"MEM-{memory.id:03d}").first() is None
+    assert db.query(KnowledgeCard).filter(KnowledgeCard.card_id == "CH-DELETE").first() is None
+    assert db.query(KnowledgeCard).filter(KnowledgeCard.card_id == "CH-KEEP").one()
 
 
 def test_confirm_draft_writes_handoff_visible_next_chapter(tmp_path, monkeypatch):

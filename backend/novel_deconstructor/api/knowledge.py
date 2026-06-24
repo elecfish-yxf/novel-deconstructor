@@ -11,6 +11,8 @@ from ..database import get_db
 from ..models import AnalysisJob, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from ..schemas import (
     KnowledgeBaseCreate,
+    KnowledgeBaseBulkDeleteRequest,
+    KnowledgeBaseBulkDeleteResponse,
     KnowledgeBaseRead,
     KnowledgeBaseUpdate,
     KnowledgeDocumentBulkDeleteRequest,
@@ -144,6 +146,30 @@ def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(ge
     if base_dir.exists():
         shutil.rmtree(base_dir, ignore_errors=True)
     return {"ok": True}
+
+
+@router.post("/api/knowledge-bases/bulk-delete", response_model=KnowledgeBaseBulkDeleteResponse)
+def bulk_delete_knowledge_bases(
+    payload: KnowledgeBaseBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    unique_ids = list(dict.fromkeys(payload.knowledge_base_ids))
+    if not unique_ids:
+        return KnowledgeBaseBulkDeleteResponse(deleted=0, message="没有选择要删除的作品")
+    items = (
+        db.query(KnowledgeBase)
+        .filter(KnowledgeBase.workspace_id == workspace_id, KnowledgeBase.id.in_(unique_ids))
+        .all()
+    )
+    base_dirs = [knowledge_base_storage_dir(kb) for kb in items]
+    for kb in items:
+        db.delete(kb)
+    db.commit()
+    for base_dir in base_dirs:
+        if base_dir.exists():
+            shutil.rmtree(base_dir, ignore_errors=True)
+    return KnowledgeBaseBulkDeleteResponse(deleted=len(items), message=f"已删除 {len(items)} 个作品")
 
 
 @router.get("/api/knowledge-bases/{knowledge_base_id}/documents", response_model=list[KnowledgeDocumentRead])

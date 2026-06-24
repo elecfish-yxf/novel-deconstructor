@@ -39,6 +39,8 @@ const KNOWLEDGE_GROUPS = [
 type PositionValue = number | "";
 type ChapterTitleMap = Record<string, string>;
 
+type ChapterRef = { volume_index: number; chapter_index: number };
+
 function parsePositionInput(value: string): PositionValue {
   if (value.trim() === "") return "";
   const parsed = Number(value);
@@ -95,6 +97,16 @@ function chapterTitleKey(workspaceId: string, workId: number, volume: number, ch
   return `${workspaceId}:${workId}:${volume}:${chapter}`;
 }
 
+function chapterSelectionKey(volume: number, chapter: number) {
+  return `${volume}:${chapter}`;
+}
+
+function parseChapterSelectionKey(key: string): ChapterRef | null {
+  const [volume, chapter] = key.split(":").map(Number);
+  if (!Number.isFinite(volume) || !Number.isFinite(chapter) || volume < 1 || chapter < 1) return null;
+  return { volume_index: volume, chapter_index: chapter };
+}
+
 function parseChapterTitleKey(key: string) {
   const parts = key.split(":");
   const chapter = Number(parts.pop());
@@ -129,7 +141,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     writing_guide: true,
     worldbuilding: true,
   });
+  const [selectedWorkIds, setSelectedWorkIds] = useState<number[]>([]);
+  const [selectedVolumeKeys, setSelectedVolumeKeys] = useState<number[]>([]);
+  const [selectedChapterKeys, setSelectedChapterKeys] = useState<string[]>([]);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
+  const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [selectedMemoryIds, setSelectedMemoryIds] = useState<number[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<RetrievalHit[]>([]);
   const [ragStage, setRagStage] = useState("draft");
@@ -182,7 +200,13 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [error, setError] = useState("");
 
   const selected = useMemo(() => knowledgeBases.find((item) => item.id === selectedId) || null, [knowledgeBases, selectedId]);
+  const selectedWorkSet = useMemo(() => new Set(selectedWorkIds), [selectedWorkIds]);
+  const selectedVolumeSet = useMemo(() => new Set(selectedVolumeKeys), [selectedVolumeKeys]);
+  const selectedChapterSet = useMemo(() => new Set(selectedChapterKeys), [selectedChapterKeys]);
   const selectedDocumentSet = useMemo(() => new Set(selectedDocumentIds), [selectedDocumentIds]);
+  const selectedCardSet = useMemo(() => new Set(selectedCardIds), [selectedCardIds]);
+  const selectedDocSet = useMemo(() => new Set(selectedDocIds), [selectedDocIds]);
+  const selectedMemorySet = useMemo(() => new Set(selectedMemoryIds), [selectedMemoryIds]);
   const documentsByType = useMemo(() => {
     return documents.reduce<Record<string, KnowledgeDocument[]>>(
       (groups, document) => {
@@ -370,6 +394,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }, [selectedId]);
 
   useEffect(() => {
+    setSelectedVolumeKeys([]);
+    setSelectedChapterKeys([]);
+    setSelectedDocumentIds([]);
+    setSelectedCardIds([]);
+    setSelectedDocIds([]);
+    setSelectedMemoryIds([]);
+  }, [selectedId]);
+
+  useEffect(() => {
     window.localStorage.setItem(CHAPTER_TITLE_KEY, JSON.stringify(chapterTitles));
   }, [chapterTitles]);
 
@@ -476,6 +509,31 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setSelectedDocumentIds((items) => (items.includes(documentId) ? items.filter((id) => id !== documentId) : [...items, documentId]));
   }
 
+  function toggleWorkSelection(workId: number) {
+    setSelectedWorkIds((items) => (items.includes(workId) ? items.filter((id) => id !== workId) : [...items, workId]));
+  }
+
+  function toggleVolumeSelection(volume: number) {
+    setSelectedVolumeKeys((items) => (items.includes(volume) ? items.filter((id) => id !== volume) : [...items, volume]));
+  }
+
+  function toggleChapterSelection(volume: number, chapter: number) {
+    const key = chapterSelectionKey(volume, chapter);
+    setSelectedChapterKeys((items) => (items.includes(key) ? items.filter((id) => id !== key) : [...items, key]));
+  }
+
+  function toggleCardSelection(cardId: string) {
+    setSelectedCardIds((items) => (items.includes(cardId) ? items.filter((id) => id !== cardId) : [...items, cardId]));
+  }
+
+  function toggleDocSelection(docId: string) {
+    setSelectedDocIds((items) => (items.includes(docId) ? items.filter((id) => id !== docId) : [...items, docId]));
+  }
+
+  function toggleMemorySelection(memoryId: number) {
+    setSelectedMemoryIds((items) => (items.includes(memoryId) ? items.filter((id) => id !== memoryId) : [...items, memoryId]));
+  }
+
   function setGroupSelection(type: string, checked: boolean) {
     const groupIds = (documentsByType[type] || []).map((document) => document.id);
     setSelectedDocumentIds((items) => {
@@ -486,6 +544,24 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   function selectAllCurrentDocuments() {
     setSelectedDocumentIds(documents.map((document) => document.id));
+  }
+
+  async function copyText(text: string, label: string) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage(`${label}已复制`);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      setMessage(`${label}已复制`);
+    }
   }
 
   function updateChapterTitle(value: string) {
@@ -541,6 +617,113 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   function currentChapterPayloadFallback() {
     return typeof currentChapterIndex === "number" ? currentChapterIndex : 0;
+  }
+
+  function removeChapterTitleScopes(workId: number, volumes: number[], chapters: ChapterRef[]) {
+    const volumeSet = new Set(volumes);
+    const chapterSet = new Set(chapters.map((item) => chapterSelectionKey(item.volume_index, item.chapter_index)));
+    setChapterTitles((items) => {
+      const next = { ...items };
+      Object.keys(next).forEach((key) => {
+        const parsed = parseChapterTitleKey(key);
+        if (!parsed || parsed.workspaceId !== workspaceId || parsed.workId !== workId) return;
+        if (volumeSet.has(parsed.volume) || chapterSet.has(chapterSelectionKey(parsed.volume, parsed.chapter))) {
+          delete next[key];
+        }
+      });
+      return next;
+    });
+  }
+
+  function removeAllChapterTitlesForWorks(workIds: number[]) {
+    const workSet = new Set(workIds);
+    setChapterTitles((items) => {
+      const next = { ...items };
+      Object.keys(next).forEach((key) => {
+        const parsed = parseChapterTitleKey(key);
+        if (parsed && parsed.workspaceId === workspaceId && workSet.has(parsed.workId)) {
+          delete next[key];
+        }
+      });
+      return next;
+    });
+  }
+
+  async function deleteSelectedWorks() {
+    const ids = selectedWorkIds.filter((id) => knowledgeBases.some((work) => work.id === id));
+    if (!ids.length) return;
+    if (!window.confirm(`确定彻底删除选中的 ${ids.length} 个作品吗？作品下的设定、拆卡、Memory 和文件都会一起删除。`)) return;
+    setBusy("delete-works");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.bulkDeleteKnowledgeBases(ids);
+      removeAllChapterTitlesForWorks(ids);
+      setSelectedWorkIds([]);
+      await load(selectedId && !ids.includes(selectedId) ? selectedId : null);
+      setMessage(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除作品失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteSelectedWritingScopes() {
+    if (!selected) return;
+    const volumes = selectedVolumeKeys.filter((volume) => volumeTree.some((item) => item.volume === volume));
+    const chapters = selectedChapterKeys
+      .map(parseChapterSelectionKey)
+      .filter((item): item is ChapterRef => Boolean(item))
+      .filter((chapter) => volumeTree.some((volume) => volume.volume === chapter.volume_index && volume.chapters.some((item) => item.chapter === chapter.chapter_index)));
+    if (!volumes.length && !chapters.length) return;
+    if (!window.confirm(`确定彻底删除选中的 ${volumes.length} 个卷、${chapters.length} 个章节吗？对应 Memory、知识卡和 Markdown 文件都会一起删除。`)) return;
+    const targetWorkId = selected.id;
+    setBusy("delete-scopes");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.bulkDeleteWritingScope(targetWorkId, { volume_indices: volumes, chapters });
+      removeChapterTitleScopes(targetWorkId, volumes, chapters);
+      setSelectedVolumeKeys([]);
+      setSelectedChapterKeys([]);
+      if (selectedIdRef.current === targetWorkId) {
+        await load(targetWorkId);
+        setCurrentVolumeIndex(1);
+        setCurrentChapterIndex(1);
+        setChapterTitle(defaultChapterTitle(1));
+      }
+      setMessage(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除卷章失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteCurrentChapter() {
+    if (!selected || typeof currentVolumeIndex !== "number" || typeof currentChapterIndex !== "number") return;
+    if (!window.confirm(`确定彻底删除当前第 ${currentVolumeIndex} 卷第 ${currentChapterIndex} 章吗？对应 Memory、知识卡和 Markdown 文件都会一起删除。`)) return;
+    const targetWorkId = selected.id;
+    const chapter = { volume_index: currentVolumeIndex, chapter_index: currentChapterIndex };
+    setBusy("delete-current-chapter");
+    setError("");
+    setMessage("");
+    try {
+      const result = await api.bulkDeleteWritingScope(targetWorkId, { chapters: [chapter] });
+      removeChapterTitleScopes(targetWorkId, [], [chapter]);
+      if (selectedIdRef.current === targetWorkId) {
+        await load(targetWorkId);
+        setCurrentChapterIndex(1);
+        setChapterTitle(defaultChapterTitle(1));
+        clearTransientWritingState();
+      }
+      setMessage(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除当前章节失败");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function reloadWorkIfStillActive(workId: number) {
@@ -909,15 +1092,36 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function deleteKnowledgeCard(card: KnowledgeCard) {
-    if (!selected || !window.confirm(`确定软删除知识卡「${card.title}」吗？`)) return;
+    if (!selected || !window.confirm(`确定彻底删除知识卡「${card.title}」吗？对应 Markdown 文件也会一起删除。`)) return;
     const targetWorkId = selected.id;
     setBusy(`card-${card.card_id}`);
     setError("");
     try {
       await api.deleteKnowledgeCard(targetWorkId, card.card_id);
+      setSelectedCardIds((items) => items.filter((id) => id !== card.card_id));
       await refreshKnowledgeCards(targetWorkId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除知识卡失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteSelectedCards() {
+    if (!selected || !selectedCardIds.length) return;
+    const targetWorkId = selected.id;
+    const ids = selectedCardIds.filter((id) => cards.some((card) => card.card_id === id));
+    if (!ids.length) return;
+    if (!window.confirm(`确定彻底删除选中的 ${ids.length} 张知识卡吗？对应 Markdown 文件也会一起删除。`)) return;
+    setBusy("delete-cards");
+    setError("");
+    try {
+      const result = await api.bulkDeleteKnowledgeCards(targetWorkId, ids);
+      setSelectedCardIds([]);
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除知识卡失败");
     } finally {
       setBusy("");
     }
@@ -975,20 +1179,47 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   }
 
   async function deleteMarkdownDoc() {
-    if (!selected || !selectedDocId || !window.confirm("确定删除这个 Markdown 文档并软删除对应知识卡吗？")) return;
+    if (!selected || !selectedDocId || !window.confirm("确定彻底删除这个 Markdown 文档和对应知识卡吗？")) return;
     const targetWorkId = selected.id;
     setBusy(`doc-delete-${selectedDocId}`);
     setError("");
     try {
       await api.deleteKnowledgeMarkdownDoc(targetWorkId, selectedDocId);
       if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocIds((items) => items.filter((id) => id !== selectedDocId));
         setSelectedDocId("");
         setMarkdownContent("");
       }
       await refreshKnowledgeCards(targetWorkId);
-      if (selectedIdRef.current === targetWorkId) setMessage("Markdown 已删除，对应知识卡已标记为 deleted。");
+      if (selectedIdRef.current === targetWorkId) setMessage("Markdown 和对应知识卡已彻底删除。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Markdown 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteSelectedMarkdownDocs() {
+    if (!selected || !selectedDocIds.length) return;
+    const targetWorkId = selected.id;
+    const ids = selectedDocIds.filter((id) => markdownDocs.some((doc) => doc.doc_id === id));
+    if (!ids.length) return;
+    if (!window.confirm(`确定彻底删除选中的 ${ids.length} 个 Markdown 文档和对应知识卡吗？`)) return;
+    setBusy("delete-docs");
+    setError("");
+    try {
+      const result = await api.bulkDeleteKnowledgeMarkdownDocs(targetWorkId, ids);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedDocIds([]);
+        if (selectedDocId && ids.includes(selectedDocId)) {
+          setSelectedDocId("");
+          setMarkdownContent("");
+        }
+      }
+      await refreshKnowledgeCards(targetWorkId);
+      if (selectedIdRef.current === targetWorkId) setMessage(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除 Markdown 失败");
     } finally {
       setBusy("");
     }
@@ -1233,16 +1464,41 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function deleteMemory(id: number) {
     if (!selected) return;
     const targetWorkId = selected.id;
-    if (!window.confirm("确定删除这条 Memory 吗？")) return;
+    if (!window.confirm("确定彻底删除这条 Memory 和对应知识卡吗？")) return;
     setBusy(`memory-${id}`);
     setError("");
     try {
       await api.deleteWritingMemory(id);
       if (selectedIdRef.current === targetWorkId) {
         setMemories((items) => items.filter((item) => item.id !== id));
+        setSelectedMemoryIds((items) => items.filter((item) => item !== id));
+        await refreshKnowledgeCards(targetWorkId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Memory 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteSelectedMemories() {
+    if (!selected || !selectedMemoryIds.length) return;
+    const targetWorkId = selected.id;
+    const ids = selectedMemoryIds.filter((id) => memories.some((memory) => memory.id === id));
+    if (!ids.length) return;
+    if (!window.confirm(`确定彻底删除选中的 ${ids.length} 条 Memory 和对应知识卡吗？`)) return;
+    setBusy("delete-memories");
+    setError("");
+    try {
+      const result = await api.bulkDeleteWritingMemories(ids);
+      if (selectedIdRef.current === targetWorkId) {
+        setSelectedMemoryIds([]);
+        setMemories((items) => items.filter((item) => !ids.includes(item.id)));
+        await refreshKnowledgeCards(targetWorkId);
+        setMessage(result.message);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "批量删除 Memory 失败");
     } finally {
       setBusy("");
     }
@@ -1411,6 +1667,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <button type="button" title="新建章" onClick={addChapter} disabled={!selected}>
                 章+
               </button>
+              <button type="button" title="删除选中作品" onClick={deleteSelectedWorks} disabled={!selectedWorkIds.length || busy === "delete-works"}>
+                删作品
+              </button>
             </div>
           </div>
 
@@ -1436,6 +1695,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 return (
                   <section key={kb.id} className={`writing-work-node ${active ? "active" : ""}`}>
                     <div className="writing-work-node-head">
+                      <input type="checkbox" checked={selectedWorkSet.has(kb.id)} onChange={() => toggleWorkSelection(kb.id)} aria-label={`选择作品${kb.name}`} />
                       <button type="button" className="writing-tree-toggle" onClick={() => toggleWork(kb.id)} aria-label={expanded ? "收起作品" : "展开作品"}>
                         {expanded ? "⌄" : "›"}
                       </button>
@@ -1447,21 +1707,47 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
                     {expanded && active && (
                       <div className="writing-volume-tree">
+                        <div className="writing-scope-toolbar">
+                          <button type="button" onClick={deleteSelectedWritingScopes} disabled={(!selectedVolumeKeys.length && !selectedChapterKeys.length) || busy === "delete-scopes"}>
+                            删除所选卷章
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedVolumeKeys([]);
+                              setSelectedChapterKeys([]);
+                            }}
+                            disabled={!selectedVolumeKeys.length && !selectedChapterKeys.length}
+                          >
+                            取消选择
+                          </button>
+                        </div>
                         {volumeTree.map((volume) => (
                           <section key={volume.volume} className="writing-volume-node">
                             <div className="writing-volume-head">
-                              <span>卷 {volume.volume}</span>
+                              <label>
+                                <input type="checkbox" checked={selectedVolumeSet.has(volume.volume)} onChange={() => toggleVolumeSelection(volume.volume)} />
+                                <span>卷 {volume.volume}</span>
+                              </label>
                               <small>{volume.chapters.length} 章</small>
                             </div>
                             <div className="writing-chapter-list">
                               {volume.chapters.map((chapter) => {
                                 const activeChapter = currentPositionPayload.current_volume_index === volume.volume && currentPositionPayload.current_chapter_index === chapter.chapter;
                                 return (
-                                  <button key={chapter.chapter} type="button" className={activeChapter ? "active" : ""} onClick={() => selectWritingPosition(volume.volume, chapter.chapter)}>
-                                    <span>第 {chapter.chapter} 章</span>
-                                    <strong>{chapter.title}</strong>
-                                    <small>{chapter.memoryCount ? `${chapter.memoryCount} 条 Memory` : "未写入 Memory"}</small>
-                                  </button>
+                                  <div key={chapter.chapter} className="writing-chapter-row">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedChapterSet.has(chapterSelectionKey(volume.volume, chapter.chapter))}
+                                      onChange={() => toggleChapterSelection(volume.volume, chapter.chapter)}
+                                      aria-label={`选择第 ${chapter.chapter} 章`}
+                                    />
+                                    <button type="button" className={activeChapter ? "active" : ""} onClick={() => selectWritingPosition(volume.volume, chapter.chapter)}>
+                                      <span>第 {chapter.chapter} 章</span>
+                                      <strong>{chapter.title}</strong>
+                                      <small>{chapter.memoryCount ? `${chapter.memoryCount} 条 Memory` : "未写入 Memory"}</small>
+                                    </button>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -1523,11 +1809,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               润色
             </button>
             <span className="writing-toolbar-divider" />
-            <button type="button" title="复制正文" onClick={() => navigator.clipboard.writeText(draft)} disabled={!draft}>
+            <button type="button" title="复制正文" onClick={() => void copyText(draft, "正文")} disabled={!draft}>
               复制
             </button>
-            <button type="button" title="清空正文" onClick={() => setDraft("")} disabled={!draft}>
+            <button type="button" title="清空正文" onClick={() => window.confirm("确定清空当前正文编辑区吗？") && setDraft("")} disabled={!draft}>
               清空
+            </button>
+            <button type="button" title="删除当前章节" onClick={deleteCurrentChapter} disabled={!selected || positionMissing || busy === "delete-current-chapter"}>
+              删章
             </button>
             <button
               type="button"
@@ -1686,7 +1975,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   </div>
                   <textarea rows={14} value={outline} onChange={(event) => setOutline(event.target.value)} placeholder="提纲会显示在这里。" />
                   <div className="writing-compact-actions">
-                    <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
+                    <button type="button" disabled={!outline} onClick={() => void copyText(outline, "提纲")}>
                       复制提纲
                     </button>
                     <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline" || positionMissing} onClick={confirmOutline}>
@@ -1704,7 +1993,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     根据确认提纲生成正文
                   </button>
                   <div className="writing-compact-actions">
-                    <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
+                    <button type="button" disabled={!draft} onClick={() => void copyText(draft, "正文")}>
                       复制正文
                     </button>
                     <button type="button" disabled={!selected || !draft || busy === "revision" || modelCallBlocked || positionMissing} onClick={generateRevision}>
@@ -1791,10 +2080,26 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   <button type="button" className="primary" disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim() || positionMissing} onClick={() => saveMemory(memoryTitle, memoryContent)}>
                     保存 Memory
                   </button>
+                  <div className="writing-compact-actions">
+                    <button type="button" onClick={() => setSelectedMemoryIds(memories.map((memory) => memory.id))} disabled={!memories.length}>
+                      全选
+                    </button>
+                    <button type="button" onClick={() => setSelectedMemoryIds([])} disabled={!selectedMemoryIds.length}>
+                      取消
+                    </button>
+                    <button type="button" className="danger" onClick={deleteSelectedMemories} disabled={!selectedMemoryIds.length || busy === "delete-memories"}>
+                      删除所选
+                    </button>
+                  </div>
                   <div className="hit-list memory-list">
                     {memories.map((memory) => (
                       <article key={memory.id}>
-                        <strong>{memory.title}</strong>
+                        <div className="card-title-row">
+                          <label>
+                            <input type="checkbox" checked={selectedMemorySet.has(memory.id)} onChange={() => toggleMemorySelection(memory.id)} />
+                            <strong>{memory.title}</strong>
+                          </label>
+                        </div>
                         <small>
                           {memory.memory_type} · {memory.source}
                           {mainNavTab === "history" && memory.created_at ? ` · ${new Date(memory.created_at).toLocaleString()}` : ""}
@@ -1945,6 +2250,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                       <button type="button" onClick={() => setShowRawCards((value) => !value)}>
                         {showRawCards ? "隐藏 Raw" : "显示 Raw"}
                       </button>
+                      <button type="button" onClick={() => setSelectedCardIds(filteredCards.map((card) => card.card_id))} disabled={!filteredCards.length}>
+                        全选当前
+                      </button>
+                      <button type="button" onClick={() => setSelectedCardIds([])} disabled={!selectedCardIds.length}>
+                        取消
+                      </button>
+                      <button type="button" className="danger" onClick={deleteSelectedCards} disabled={!selectedCardIds.length || busy === "delete-cards"}>
+                        删除所选
+                      </button>
                       <button type="button" onClick={previewMerges} disabled={!selected || busy === "merge-preview"}>
                         预览合并
                       </button>
@@ -1964,7 +2278,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                       {filteredCards.map((card) => (
                         <article key={card.card_id} className={`knowledge-card-item ${selectedCardId === card.card_id ? "selected-card" : ""}`}>
                           <div className="card-title-row">
-                            <strong>{card.title}</strong>
+                            <label>
+                              <input type="checkbox" checked={selectedCardSet.has(card.card_id)} onChange={() => toggleCardSelection(card.card_id)} />
+                              <strong>{card.title}</strong>
+                            </label>
                             <span className={`status-pill status-${card.status}`}>{card.status}</span>
                           </div>
                           <small>
@@ -2008,16 +2325,30 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
                 {activeKnowledgeTab === "docs" && (
                   <div className="writing-resource-pane">
+                    <div className="writing-compact-actions">
+                      <button type="button" onClick={() => setSelectedDocIds(markdownDocs.map((doc) => doc.doc_id))} disabled={!markdownDocs.length}>
+                        全选
+                      </button>
+                      <button type="button" onClick={() => setSelectedDocIds([])} disabled={!selectedDocIds.length}>
+                        取消
+                      </button>
+                      <button type="button" className="danger" onClick={deleteSelectedMarkdownDocs} disabled={!selectedDocIds.length || busy === "delete-docs"}>
+                        删除所选
+                      </button>
+                    </div>
                     <div className="doc-list">
                       {markdownDocs.map((doc) => (
-                        <button key={doc.doc_id} type="button" className={selectedDocId === doc.doc_id ? "active-file" : ""} onClick={() => openMarkdownDoc(doc.doc_id)}>
-                          <span>
-                            <strong>{doc.title}</strong>
-                            <small>
-                              {doc.library_type}/{doc.card_type} · {doc.exists ? doc.status : "missing"}
-                            </small>
-                          </span>
-                        </button>
+                        <div key={doc.doc_id} className="doc-row">
+                          <input type="checkbox" checked={selectedDocSet.has(doc.doc_id)} onChange={() => toggleDocSelection(doc.doc_id)} aria-label={`选择${doc.title}`} />
+                          <button type="button" className={selectedDocId === doc.doc_id ? "active-file" : ""} onClick={() => openMarkdownDoc(doc.doc_id)}>
+                            <span>
+                              <strong>{doc.title}</strong>
+                              <small>
+                                {doc.library_type}/{doc.card_type} · {doc.exists ? doc.status : "missing"}
+                              </small>
+                            </span>
+                          </button>
+                        </div>
                       ))}
                       {!markdownDocs.length && <p className="muted">暂无 Markdown 文档。</p>}
                     </div>

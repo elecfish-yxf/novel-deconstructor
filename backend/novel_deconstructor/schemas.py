@@ -323,6 +323,15 @@ class KnowledgeDocumentBulkDeleteResponse(BaseModel):
     message: str
 
 
+class KnowledgeBaseBulkDeleteRequest(BaseModel):
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+
+
+class KnowledgeBaseBulkDeleteResponse(BaseModel):
+    deleted: int
+    message: str
+
+
 class KnowledgeImportJobRequest(BaseModel):
     job_id: str
     include_chapter_analysis: bool = False
@@ -446,6 +455,14 @@ class KnowledgeCardUpdate(BaseModel):
     priority: int | None = None
 
 
+class KnowledgeCardBulkDeleteRequest(BaseModel):
+    card_ids: list[str] = Field(default_factory=list)
+
+
+class KnowledgeMarkdownDocBulkDeleteRequest(BaseModel):
+    doc_ids: list[str] = Field(default_factory=list)
+
+
 class KnowledgeMergeRequest(BaseModel):
     merge_mode: str = "safe"
     auto_merge_threshold: float = 0.88
@@ -525,6 +542,25 @@ class KnowledgeMarkdownSyncResponse(BaseModel):
     card_id: str
     status: str
     updated_fields: list[str] = Field(default_factory=list)
+
+
+class WritingChapterRef(BaseModel):
+    volume_index: int = Field(ge=1)
+    chapter_index: int = Field(ge=1)
+
+
+class WritingScopeBulkDeleteRequest(BaseModel):
+    volume_indices: list[int] = Field(default_factory=list)
+    chapters: list[WritingChapterRef] = Field(default_factory=list)
+
+
+class WritingScopeBulkDeleteResponse(BaseModel):
+    deleted_volumes: int = 0
+    deleted_chapters: int = 0
+    deleted_memories: int = 0
+    deleted_cards: int = 0
+    deleted_markdown_files: int = 0
+    message: str
 
 
 class RetrievalSearchRequest(BaseModel):
@@ -669,6 +705,10 @@ class WritingMemoryCreate(BaseModel):
     reveal_at_chapter_index: int | None = None
     retrievable: bool = True
     priority: int = 0
+
+
+class WritingMemoryBulkDeleteRequest(BaseModel):
+    memory_ids: list[int] = Field(default_factory=list)
 
 
 class WritingMemoryConfirmRequest(BaseModel):

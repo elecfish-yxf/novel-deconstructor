@@ -16,12 +16,15 @@ from ..config import get_settings
 from ..database import SessionLocal, get_db
 from ..models import DeconstructionSkill, KnowledgeBase, KnowledgeCard, WritingMemory
 from ..schemas import (
+    KnowledgeCardBulkDeleteRequest,
     KnowledgeCardRead,
     KnowledgeCardUpdate,
+    KnowledgeDocumentBulkDeleteResponse,
     KnowledgeMergeApplyResponse,
     KnowledgeMergePreviewResponse,
     KnowledgeMergeRequest,
     KnowledgeMergeStatsResponse,
+    KnowledgeMarkdownDocBulkDeleteRequest,
     KnowledgeMarkdownImportRequest,
     KnowledgeMarkdownImportResponse,
     KnowledgeMarkdownDocContent,
@@ -38,16 +41,20 @@ from ..schemas import (
     WritingDraftJobRead,
     WritingGenerateRequest,
     WritingGenerateResponse,
+    WritingMemoryBulkDeleteRequest,
     WritingMemoryConfirmRequest,
     WritingMemoryCreate,
     WritingMemoryRead,
     WritingOutlineRequest,
     WritingRevisionRequest,
+    WritingScopeBulkDeleteRequest,
+    WritingScopeBulkDeleteResponse,
 )
 from ..services.knowledge_cards import (
     BLOCKED_STATUSES,
     RETRIEVABLE_STATUSES,
     card_to_read,
+    delete_card_physical,
     delete_markdown_doc,
     export_card_markdown,
     get_card_or_404,
@@ -158,16 +165,36 @@ def delete_memory(memory_id: int, workspace_id: str = Depends(get_workspace_id),
     )
     if not memory:
         raise HTTPException(status_code=404, detail="Memory 不存在")
+    kb = _ensure_workspace_kb(db, workspace_id, memory.knowledge_base_id)
     card = (
         db.query(KnowledgeCard)
         .filter(KnowledgeCard.knowledge_base_id == memory.knowledge_base_id, KnowledgeCard.card_id == f"MEM-{memory.id:03d}")
         .first()
     )
     if card:
-        card.status = "deleted"
+        delete_card_physical(db, kb, card)
     db.delete(memory)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/memories/bulk-delete", response_model=KnowledgeDocumentBulkDeleteResponse)
+def bulk_delete_memories(
+    payload: WritingMemoryBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    unique_ids = list(dict.fromkeys(payload.memory_ids))
+    if not unique_ids:
+        return KnowledgeDocumentBulkDeleteResponse(deleted=0, message="没有选择要删除的 Memory")
+    memories = (
+        db.query(WritingMemory)
+        .filter(WritingMemory.workspace_id == workspace_id, WritingMemory.id.in_(unique_ids))
+        .all()
+    )
+    deleted = _delete_memories_and_cards(db, workspace_id, memories)
+    db.commit()
+    return KnowledgeDocumentBulkDeleteResponse(deleted=deleted["memories"], message=f"已删除 {deleted['memories']} 条 Memory")
 
 
 @router.post("/works/{work_id}/memory/confirm-outline", response_model=WritingMemoryRead)
@@ -433,10 +460,31 @@ def update_card(
 def delete_card(work_id: int, card_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     card = get_card_or_404(db, kb, card_id)
-    card.status = "deleted"
+    result = card_to_read(card)
+    delete_card_physical(db, kb, card)
     db.commit()
-    db.refresh(card)
-    return KnowledgeCardRead.model_validate(card_to_read(card))
+    return KnowledgeCardRead.model_validate(result)
+
+
+@router.post("/works/{work_id}/knowledge/cards/bulk-delete", response_model=KnowledgeDocumentBulkDeleteResponse)
+def bulk_delete_cards(
+    work_id: int,
+    payload: KnowledgeCardBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    unique_ids = [item for item in dict.fromkeys(payload.card_ids) if item]
+    if not unique_ids:
+        return KnowledgeDocumentBulkDeleteResponse(deleted=0, message="没有选择要删除的知识卡")
+    cards = (
+        db.query(KnowledgeCard)
+        .filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id.in_(unique_ids))
+        .all()
+    )
+    deleted_files = sum(1 for card in cards if delete_card_physical(db, kb, card))
+    db.commit()
+    return KnowledgeDocumentBulkDeleteResponse(deleted=len(cards), message=f"已删除 {len(cards)} 张知识卡，清理 {deleted_files} 个 Markdown 文件")
 
 
 @router.post("/works/{work_id}/knowledge/cards/{card_id}/unmerge", response_model=KnowledgeCardRead)
@@ -475,6 +523,27 @@ def delete_doc(work_id: int, doc_id: str, workspace_id: str = Depends(get_worksp
     return KnowledgeMarkdownSyncResponse.model_validate(delete_markdown_doc(db, kb, doc_id))
 
 
+@router.post("/works/{work_id}/knowledge/docs/bulk-delete", response_model=KnowledgeDocumentBulkDeleteResponse)
+def bulk_delete_docs(
+    work_id: int,
+    payload: KnowledgeMarkdownDocBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    unique_ids = [item for item in dict.fromkeys(payload.doc_ids) if item]
+    if not unique_ids:
+        return KnowledgeDocumentBulkDeleteResponse(deleted=0, message="没有选择要删除的 Markdown 文档")
+    cards = (
+        db.query(KnowledgeCard)
+        .filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id.in_(unique_ids))
+        .all()
+    )
+    deleted_files = sum(1 for card in cards if delete_card_physical(db, kb, card))
+    db.commit()
+    return KnowledgeDocumentBulkDeleteResponse(deleted=len(cards), message=f"已删除 {len(cards)} 个 Markdown 文档，清理 {deleted_files} 个文件")
+
+
 @router.post("/works/{work_id}/knowledge/docs/{doc_id}/sync", response_model=KnowledgeMarkdownSyncResponse)
 def sync_doc_to_card(work_id: int, doc_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
@@ -491,6 +560,57 @@ def export_card_to_doc(work_id: int, card_id: str, workspace_id: str = Depends(g
 def sync_deleted_docs(work_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     return KnowledgeMarkdownSyncResponse.model_validate(sync_deleted_markdown(db, kb))
+
+
+@router.post("/works/{work_id}/chapters/bulk-delete", response_model=WritingScopeBulkDeleteResponse)
+def bulk_delete_writing_scope(
+    work_id: int,
+    payload: WritingScopeBulkDeleteRequest,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    volume_indices = {int(item) for item in payload.volume_indices if int(item) > 0}
+    chapter_refs = {(item.volume_index, item.chapter_index) for item in payload.chapters}
+    if not volume_indices and not chapter_refs:
+        return WritingScopeBulkDeleteResponse(message="没有选择要删除的卷或章")
+
+    memories = (
+        db.query(WritingMemory)
+        .filter(WritingMemory.workspace_id == workspace_id, WritingMemory.knowledge_base_id == kb.id)
+        .all()
+    )
+    scoped_memories = [
+        memory
+        for memory in memories
+        if _matches_writing_scope(memory.volume_index, memory.chapter_index, volume_indices, chapter_refs)
+    ]
+    memory_card_ids = {f"MEM-{memory.id:03d}" for memory in scoped_memories}
+
+    cards = db.query(KnowledgeCard).filter(KnowledgeCard.knowledge_base_id == kb.id).all()
+    scoped_cards = {
+        card.card_id: card
+        for card in cards
+        if card.card_id in memory_card_ids
+        or _matches_writing_scope(card.volume_index, card.chapter_index, volume_indices, chapter_refs)
+    }
+
+    deleted_files = 0
+    for card in scoped_cards.values():
+        if delete_card_physical(db, kb, card):
+            deleted_files += 1
+    for memory in scoped_memories:
+        db.delete(memory)
+    db.commit()
+
+    return WritingScopeBulkDeleteResponse(
+        deleted_volumes=len(volume_indices),
+        deleted_chapters=len(chapter_refs),
+        deleted_memories=len(scoped_memories),
+        deleted_cards=len(scoped_cards),
+        deleted_markdown_files=deleted_files,
+        message=f"已删除 {len(volume_indices)} 卷、{len(chapter_refs)} 章，清理 {len(scoped_memories)} 条 Memory 和 {len(scoped_cards)} 张知识卡",
+    )
 
 
 @router.post("/works/{work_id}/rag/search", response_model=RAGSearchResponse)
@@ -2319,6 +2439,45 @@ def _decode_markdown_bytes(data: bytes, source_name: str) -> str:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"Markdown 文件不是有效 UTF-8：{source_name}") from exc
+
+
+def _matches_writing_scope(
+    volume_index: int | None,
+    chapter_index: int | None,
+    volume_indices: set[int],
+    chapter_refs: set[tuple[int, int]],
+) -> bool:
+    if volume_index is None:
+        return False
+    if volume_index in volume_indices:
+        return True
+    if chapter_index is None:
+        return False
+    return (volume_index, chapter_index) in chapter_refs
+
+
+def _delete_memories_and_cards(db: Session, workspace_id: str, memories: list[WritingMemory]) -> dict[str, int]:
+    deleted_memories = 0
+    deleted_cards = 0
+    deleted_files = 0
+    kb_cache: dict[int, KnowledgeBase] = {}
+    for memory in memories:
+        kb = kb_cache.get(memory.knowledge_base_id)
+        if not kb:
+            kb = _ensure_workspace_kb(db, workspace_id, memory.knowledge_base_id)
+            kb_cache[memory.knowledge_base_id] = kb
+        card = (
+            db.query(KnowledgeCard)
+            .filter(KnowledgeCard.knowledge_base_id == memory.knowledge_base_id, KnowledgeCard.card_id == f"MEM-{memory.id:03d}")
+            .first()
+        )
+        if card:
+            if delete_card_physical(db, kb, card):
+                deleted_files += 1
+            deleted_cards += 1
+        db.delete(memory)
+        deleted_memories += 1
+    return {"memories": deleted_memories, "cards": deleted_cards, "files": deleted_files}
 
 
 def _ensure_workspace_kb(db: Session, workspace_id: str, knowledge_base_id: int) -> KnowledgeBase:

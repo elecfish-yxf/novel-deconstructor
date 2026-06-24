@@ -658,6 +658,20 @@ def write_card_markdown(knowledge_base: KnowledgeBase, card: KnowledgeCard) -> P
     return path
 
 
+def delete_card_physical(db: Session, knowledge_base: KnowledgeBase, card: KnowledgeCard) -> bool:
+    paths = []
+    if card.markdown_path:
+        paths.append(Path(card.markdown_path))
+    paths.append(card_markdown_path(knowledge_base, card))
+    deleted_file = False
+    for path in dict.fromkeys(paths):
+        if path.exists() and path.is_file():
+            path.unlink()
+            deleted_file = True
+    db.delete(card)
+    return deleted_file
+
+
 def render_card_markdown(card: KnowledgeCard) -> str:
     tags = _json_list(card.tags_json)
     use_when = _json_list(card.use_when_json)
@@ -759,13 +773,13 @@ def save_markdown_doc(db: Session, knowledge_base: KnowledgeBase, doc_id: str, c
 
 def delete_markdown_doc(db: Session, knowledge_base: KnowledgeBase, doc_id: str) -> dict[str, Any]:
     card = get_card_or_404(db, knowledge_base, doc_id)
-    path = Path(card.markdown_path or "")
-    if path.exists() and path.is_file():
-        path.unlink()
-    card.status = "deleted"
+    deleted_file = delete_card_physical(db, knowledge_base, card)
     db.commit()
-    db.refresh(card)
-    return {"card_id": card.card_id, "status": "deleted", "updated_fields": ["markdown_path", "status"]}
+    return {
+        "card_id": doc_id,
+        "status": "deleted",
+        "updated_fields": ["markdown_path", "status", "physical_delete", f"files:{1 if deleted_file else 0}"],
+    }
 
 
 def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: str) -> dict[str, Any]:
@@ -896,12 +910,14 @@ def export_card_markdown(db: Session, knowledge_base: KnowledgeBase, card_id: st
 def sync_deleted_markdown(db: Session, knowledge_base: KnowledgeBase) -> dict[str, Any]:
     cards = db.query(KnowledgeCard).filter(KnowledgeCard.knowledge_base_id == knowledge_base.id).all()
     deleted = 0
+    deleted_files = 0
     for card in cards:
-        if card.markdown_path and not Path(card.markdown_path).exists() and card.status != "deleted":
-            card.status = "deleted"
+        if card.markdown_path and not Path(card.markdown_path).exists():
+            if delete_card_physical(db, knowledge_base, card):
+                deleted_files += 1
             deleted += 1
     db.commit()
-    return {"card_id": "*", "status": "updated", "updated_fields": [f"deleted:{deleted}"]}
+    return {"card_id": "*", "status": "updated", "updated_fields": [f"deleted:{deleted}", f"files:{deleted_files}"]}
 
 
 def preview_knowledge_card_merges(

@@ -1017,6 +1017,13 @@ th {
   align-items: start;
 }
 
+.card-title-row label strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .knowledge-card-item p {
   margin: 0;
   color: #334155;
@@ -1659,6 +1666,8 @@ th {
 .writing-panel-head div {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .writing-tree-toggle,
@@ -1719,6 +1728,13 @@ th {
   background: #f8fafc;
 }
 
+.writing-work-node-head > input,
+.writing-chapter-row > input,
+.doc-row > input,
+.card-title-row input {
+  flex-shrink: 0;
+}
+
 .writing-tree-toggle {
   border: 0;
   background: transparent;
@@ -1764,6 +1780,17 @@ th {
   padding: 10px;
 }
 
+.writing-scope-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.writing-scope-toolbar button {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .writing-volume-node {
   display: grid;
   gap: 6px;
@@ -1782,6 +1809,14 @@ th {
   font-weight: 800;
 }
 
+.writing-volume-head label,
+.card-title-row label {
+  min-width: 0;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
 .writing-volume-head small {
   color: #64748b;
   font-weight: 600;
@@ -1791,6 +1826,13 @@ th {
   display: grid;
   gap: 6px;
   padding-left: 14px;
+}
+
+.writing-chapter-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
 }
 
 .writing-chapter-list button {
@@ -2222,6 +2264,13 @@ th {
 .writing-agent-platform .doc-list {
   display: grid;
   gap: 7px;
+}
+
+.writing-agent-platform .doc-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
 }
 
 .writing-agent-platform .doc-list button {
