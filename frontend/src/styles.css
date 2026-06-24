@@ -1380,3 +1380,856 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+.writing-agent-platform {
+  height: 100vh;
+  margin: -28px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #f5f6f8;
+  color: #27313f;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.writing-agent-platform *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.writing-agent-platform *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.writing-agent-platform *::-webkit-scrollbar-thumb {
+  background: #d0d3d9;
+  border-radius: 3px;
+}
+
+.writing-agent-platform *::-webkit-scrollbar-thumb:hover {
+  background: #a8adb8;
+}
+
+.writing-agent-platform button,
+.writing-agent-platform .button-link {
+  min-height: 30px;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  border-color: #d7dce5;
+  background: #fff;
+  color: #4b5563;
+  box-shadow: none;
+}
+
+.writing-agent-platform button:hover:not(:disabled),
+.writing-agent-platform .button-link:hover {
+  border-color: #9bbcf8;
+  color: #1a73e8;
+  background: #f3f7ff;
+}
+
+.writing-agent-platform button.primary {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}
+
+.writing-agent-platform button.primary:hover:not(:disabled) {
+  background: #155fc0;
+  color: #fff;
+}
+
+.writing-agent-platform button.publish {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+.writing-agent-platform button.danger {
+  color: #b91c1c;
+}
+
+.writing-agent-platform input,
+.writing-agent-platform select,
+.writing-agent-platform textarea {
+  border-radius: 6px;
+  border-color: #d7dce5;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.writing-agent-platform textarea {
+  resize: vertical;
+}
+
+.writing-agent-platform label {
+  gap: 6px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.writing-agent-header {
+  height: 56px;
+  flex-shrink: 0;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  position: relative;
+  z-index: 2;
+}
+
+.writing-agent-header-left,
+.writing-agent-header-right,
+.writing-agent-logo,
+.writing-agent-user,
+.writing-agent-top-nav,
+.writing-agent-search,
+.writing-compact-actions,
+.writing-panel-head,
+.writing-work-node-head,
+.writing-file-group-head,
+.writing-file-row,
+.writing-editor-toolbar,
+.writing-editor-footer,
+.writing-assistant-tabs,
+.writing-side-card-head {
+  display: flex;
+  align-items: center;
+}
+
+.writing-agent-header-left {
+  min-width: 0;
+  gap: 18px;
+}
+
+.writing-agent-header-right {
+  gap: 10px;
+}
+
+.writing-agent-logo {
+  flex-shrink: 0;
+  gap: 8px;
+  color: #1f2937;
+}
+
+.writing-agent-logo span {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  color: #fff;
+  font-weight: 900;
+}
+
+.writing-agent-work-switcher select {
+  width: 150px;
+  background: #f8fafc;
+}
+
+.writing-agent-top-nav {
+  gap: 4px;
+}
+
+.writing-agent-top-nav button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 10px 7px;
+}
+
+.writing-agent-top-nav button.active {
+  color: #1a73e8;
+  border-bottom-color: #1a73e8;
+  font-weight: 800;
+}
+
+.writing-agent-search {
+  width: 220px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #d7dce5;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.writing-agent-search span {
+  color: #9aa3b2;
+}
+
+.writing-agent-search input {
+  border: 0;
+  padding: 7px 0;
+  outline: none;
+  width: 100%;
+}
+
+.writing-icon-button {
+  width: 36px;
+  padding: 0;
+}
+
+.writing-agent-user {
+  gap: 7px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.writing-agent-user span {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  background: linear-gradient(135deg, #38bdf8, #8b5cf6);
+}
+
+.writing-agent-status-strip {
+  min-height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e9edf3;
+  background: #fbfdff;
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.writing-agent-status-strip strong {
+  color: #166534;
+}
+
+.writing-agent-status-strip .is-error,
+.writing-editor-inline-status .is-error {
+  color: #b91c1c;
+}
+
+.writing-agent-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.writing-agent-left-panel,
+.writing-agent-right-panel {
+  flex-shrink: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.writing-agent-left-panel {
+  border-right: 1px solid #e4e7ed;
+}
+
+.writing-agent-right-panel {
+  border-left: 1px solid #e4e7ed;
+}
+
+.writing-panel-head {
+  height: 47px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef1f5;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.writing-panel-head div {
+  display: flex;
+  gap: 4px;
+}
+
+.writing-panel-head button,
+.writing-tree-toggle,
+.writing-file-actions button {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.writing-agent-left-scroll,
+.writing-assistant-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.writing-work-create,
+.writing-import-box,
+.writing-side-card,
+.writing-resource-pane {
+  display: grid;
+  gap: 10px;
+}
+
+.writing-work-create {
+  padding: 12px;
+  border-bottom: 1px solid #eef1f5;
+  background: #fbfdff;
+}
+
+.writing-work-tree {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.writing-work-node {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.writing-work-node.active {
+  border-color: #9bbcf8;
+  box-shadow: 0 0 0 1px #dbeafe;
+}
+
+.writing-work-node-head {
+  gap: 6px;
+  padding: 7px;
+  background: #f8fafc;
+}
+
+.writing-tree-toggle {
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+}
+
+.writing-work-title,
+.writing-file-group-title {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 5px 6px;
+}
+
+.writing-work-title strong,
+.writing-file-group-title strong,
+.writing-file-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writing-work-title small,
+.writing-file-group-title small,
+.writing-file-row small {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.writing-work-files {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.writing-import-box {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.writing-compact-actions,
+.writing-file-toolbar {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.writing-file-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.writing-file-toolbar button,
+.writing-compact-actions button,
+.writing-compact-actions .button-link {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.writing-file-group {
+  display: grid;
+  gap: 6px;
+}
+
+.writing-file-group-head {
+  gap: 6px;
+  padding: 7px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.writing-file-group-head input,
+.writing-file-row input {
+  width: auto;
+}
+
+.writing-file-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+}
+
+.writing-file-row {
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
+.writing-file-row.selected {
+  border-color: #1a73e8;
+  background: #eef5ff;
+}
+
+.writing-file-row > div:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.writing-file-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.writing-agent-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.writing-agent-resizer:hover {
+  background: #1a73e8;
+}
+
+.writing-agent-editor {
+  flex: 1;
+  min-width: 340px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+}
+
+.writing-editor-titlebar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 22px 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.writing-editor-titlebar > input {
+  border: 0;
+  outline: none;
+  padding: 0;
+  color: #1f2937;
+  font-size: 20px;
+  font-weight: 800;
+  background: transparent;
+}
+
+.writing-editor-position {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.writing-editor-position label {
+  display: grid;
+  grid-template-columns: auto 58px;
+  align-items: center;
+  gap: 5px;
+}
+
+.writing-editor-position input {
+  min-width: 0;
+  padding: 6px 7px;
+}
+
+.writing-editor-toolbar {
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.writing-editor-toolbar button {
+  min-height: 29px;
+  padding: 5px 9px;
+}
+
+.writing-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: #e4e7ed;
+}
+
+.writing-word-count {
+  margin-left: auto;
+  color: #8b95a5;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.writing-editor-surface {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 24px;
+}
+
+.writing-editor-surface textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  color: #303640;
+  font-size: 16px;
+  line-height: 1.8;
+  background: #fff;
+}
+
+.writing-editor-inline-status {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 22px;
+  border-top: 1px solid #eef1f5;
+  color: #b45309;
+  background: #fffbeb;
+  font-size: 12px;
+}
+
+.writing-editor-footer {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 22px;
+  border-top: 1px solid #e4e7ed;
+  background: #f8fafc;
+}
+
+.writing-editor-footer > div {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.writing-assistant-tabs {
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.writing-assistant-tabs button {
+  flex: 1;
+  min-width: 64px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #606b7a;
+  padding: 10px 12px 8px;
+}
+
+.writing-assistant-tabs button.active {
+  color: #1a73e8;
+  border-bottom-color: #1a73e8;
+  font-weight: 800;
+}
+
+.writing-assistant-content {
+  padding: 12px;
+  background: #fff;
+}
+
+.writing-side-card {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.writing-side-card + .writing-side-card,
+.writing-resource-pane {
+  margin-top: 10px;
+}
+
+.writing-side-card-head {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.writing-side-card-head strong {
+  color: #27313f;
+}
+
+.writing-side-card-head span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.writing-card-import {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.writing-card-import-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 160px);
+  gap: 10px;
+  align-items: end;
+}
+
+.writing-card-import-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.writing-card-import small {
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.writing-setting-upload {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px dashed #93c5fd;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.writing-setting-upload > div,
+.writing-setting-list,
+.writing-setting-list div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.writing-setting-upload small,
+.writing-setting-list small {
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.writing-setting-list {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.writing-setting-list div {
+  padding: 7px 0;
+  border-top: 1px solid #eef1f5;
+}
+
+.writing-setting-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #334155;
+  font-weight: 700;
+}
+
+.writing-agent-platform .mode-grid {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 0;
+}
+
+.writing-agent-platform .check-row {
+  min-height: 26px;
+}
+
+.writing-agent-platform .metric-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.writing-agent-platform .metric-grid div {
+  padding: 8px;
+}
+
+.writing-agent-platform .metric-grid strong {
+  font-size: 17px;
+}
+
+.writing-agent-platform .tab-row {
+  gap: 6px;
+}
+
+.writing-agent-platform .tab-row button {
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.writing-agent-platform .filter-chip-row {
+  gap: 6px;
+}
+
+.writing-agent-platform .filter-chip-row button {
+  min-height: 30px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.writing-agent-platform .knowledge-card-grid {
+  grid-template-columns: 1fr;
+  min-height: 0;
+  max-height: none;
+  gap: 10px;
+}
+
+.writing-agent-platform .knowledge-card-item {
+  padding: 10px;
+}
+
+.writing-agent-platform .hit-list,
+.writing-agent-platform .doc-list {
+  max-height: none;
+  min-height: 0;
+}
+
+.writing-agent-platform .doc-list {
+  display: grid;
+  gap: 7px;
+}
+
+.writing-agent-platform .doc-list button {
+  width: 100%;
+  text-align: left;
+}
+
+.writing-resource-pane pre,
+.writing-agent-platform .card-detail {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 8px;
+}
+
+.writing-resource-pane > pre {
+  margin: 0;
+  padding: 12px;
+  color: #27313f;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.55;
+}
+
+.writing-agent-platform .section-progress-list {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1100px) {
+  .writing-agent-header {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+
+  .writing-agent-header-left,
+  .writing-agent-header-right {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .writing-agent-search {
+    flex: 1;
+    min-width: 220px;
+  }
+}
+
+@media (max-width: 900px) {
+  .writing-agent-platform {
+    height: auto;
+    min-height: 100vh;
+    margin: 0;
+    overflow: visible;
+  }
+
+  .writing-agent-shell {
+    display: grid;
+    overflow: visible;
+  }
+
+  .writing-agent-left-panel,
+  .writing-agent-right-panel {
+    width: auto !important;
+    min-height: 420px;
+    border: 0;
+  }
+
+  .writing-agent-resizer {
+    display: none;
+  }
+
+  .writing-agent-editor {
+    min-width: 0;
+    min-height: 620px;
+  }
+
+  .writing-editor-titlebar {
+    grid-template-columns: 1fr;
+  }
+
+  .writing-editor-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, PointerEvent, useEffect, useMemo, useState } from "react";
 import {
   api,
   getWorkspaceId,
@@ -140,6 +140,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [writingApiKey, setWritingApiKey] = useState("");
   const [citations, setCitations] = useState<RetrievalHit[]>([]);
   const [mainNavTab, setMainNavTab] = useState<"memory" | "writing_guide" | "worldbuilding" | "history">("memory");
+  const [assistantTab, setAssistantTab] = useState<"outline" | "memory" | "worldbuilding" | "resources">("outline");
+  const [leftPanelWidth, setLeftPanelWidth] = useState(276);
+  const [rightPanelWidth, setRightPanelWidth] = useState(340);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -209,6 +212,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   };
   const modelCallBlocked = !dryRun && !writingApiKey.trim();
   const positionMissing = !currentPositionPayload.current_volume_index || !currentPositionPayload.current_chapter_index;
+  const draftWordCount = useMemo(() => draft.replace(/\s/g, "").length, [draft]);
+  const activeDraftJob = Boolean(draftJob && !["completed", "failed", "cancelled"].includes(draftJob.status));
 
   function clearTransientWritingState() {
     setHits([]);
@@ -370,15 +375,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setSelectedDocumentIds(documents.map((document) => document.id));
   }
 
-  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadFilesTo(event: ChangeEvent<HTMLInputElement>, knowledgeType = uploadType) {
     const files = event.target.files;
     if (!selected || !files?.length) return;
     setBusy("upload");
     setError("");
     setMessage("");
     try {
-      const result = await api.uploadKnowledgeDocumentsAs(selected.id, files, uploadType);
-      setMessage(result.message);
+      const result = await api.uploadKnowledgeDocumentsAs(selected.id, files, knowledgeType);
+      setMessage(`${knowledgeTypeLabel(knowledgeType)}已上传：${result.message}`);
       await load(selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "上传作品文件失败");
@@ -386,6 +391,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       event.target.value = "";
       setBusy("");
     }
+  }
+
+  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
+    await uploadFilesTo(event, uploadType);
   }
 
   async function importCurrentJob() {
@@ -996,861 +1005,947 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     }
   }
 
-  return (
-    <section>
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Writing Agent</p>
-          <h1>AI 写作 Agent</h1>
-        </div>
-        <p>每个作品都是独立空间：写作技巧指南用于提升写法，世界观设定用于约束故事事实，作品之间互不共享文件和 Memory。</p>
-      </div>
+  function beginLeftPanelResize(event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = leftPanelWidth;
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      setLeftPanelWidth(Math.min(500, Math.max(220, startWidth + moveEvent.clientX - startX)));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
 
-      {config && (
-        <div className="notice panel">
-          {config.privacy_note} 当前写作模型：{selectedWritingModel?.label || config.deepseek_model}。API Key 只用于本次请求，不会保存。
+  function beginRightPanelResize(event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = rightPanelWidth;
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      setRightPanelWidth(Math.min(520, Math.max(260, startWidth - (moveEvent.clientX - startX))));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function openAgentTab(tab: "memory" | "writing_guide" | "worldbuilding" | "history") {
+    setMainNavTab(tab);
+    if (tab === "memory" || tab === "history") setAssistantTab("memory");
+    if (tab === "writing_guide") setAssistantTab("outline");
+    if (tab === "worldbuilding") setAssistantTab("worldbuilding");
+  }
+
+  async function saveDraftToMemory() {
+    if (!selected || !draft.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，再保存正文 Memory。");
+      return;
+    }
+    setBusy("memory");
+    setError("");
+    setMessage("");
+    try {
+      const saved = await api.confirmDraftMemory(selected.id, {
+        title: `正文片段 ${new Date().toLocaleString()}`,
+        content: draft,
+        tags: ["draft"],
+        scope_level: "chapter",
+        volume_index: currentPositionPayload.current_volume_index,
+        chapter_index: currentPositionPayload.current_chapter_index,
+      });
+      setMemories((items) => [saved, ...items]);
+      await refreshKnowledgeCards(selected.id);
+      setMessage("正文已写入 Memory。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存正文 Memory 失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <section className="writing-agent-platform">
+      <header className="writing-agent-header">
+        <div className="writing-agent-header-left">
+          <div className="writing-agent-logo">
+            <span>写</span>
+            <strong>写作平台</strong>
+          </div>
+
+          <div className="writing-agent-work-switcher">
+            <select
+              value={selectedId ?? ""}
+              onChange={(event) => {
+                const nextId = Number(event.target.value);
+                if (nextId) chooseKnowledgeBase(nextId).catch((err) => setError(err instanceof Error ? err.message : "切换作品失败"));
+              }}
+            >
+              <option value="">选择作品</option>
+              {knowledgeBases.map((kb) => (
+                <option key={kb.id} value={kb.id}>
+                  {kb.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <nav className="writing-agent-top-nav" aria-label="写作 Agent 导航">
+            <button type="button" className={assistantTab === "outline" ? "active" : ""} onClick={() => openAgentTab("writing_guide")}>
+              写作
+            </button>
+            <button type="button" className={assistantTab === "memory" ? "active" : ""} onClick={() => openAgentTab("memory")}>
+              Memory
+            </button>
+            <button type="button" className={assistantTab === "worldbuilding" ? "active" : ""} onClick={() => openAgentTab("worldbuilding")}>
+              世界观
+            </button>
+            <button
+              type="button"
+              className={assistantTab === "resources" ? "active" : ""}
+              onClick={() => {
+                setMainNavTab("writing_guide");
+                setAssistantTab("resources");
+              }}
+            >
+              拆卡/资料
+            </button>
+            <button type="button" className={mainNavTab === "history" ? "active" : ""} onClick={() => openAgentTab("history")}>
+              历史
+            </button>
+          </nav>
+        </div>
+
+        <div className="writing-agent-header-right">
+          <form className="writing-agent-search" onSubmit={searchRAG}>
+            <span>⌕</span>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="全文搜索 / RAG 召回" />
+          </form>
+          <button type="button" className="writing-icon-button" title="测试召回" onClick={() => void searchRAG()} disabled={!selected || !query.trim() || busy === "rag-search" || positionMissing}>
+            查
+          </button>
+          <div className="writing-agent-user">
+            <span>AI</span>
+            <strong>{selectedWritingModel?.label || "写作模型"}</strong>
+          </div>
+        </div>
+      </header>
+
+      {(config || error || message) && (
+        <div className="writing-agent-status-strip">
+          {config && <span>{config.privacy_note} API Key 只用于本次请求，不会保存。</span>}
+          <span>工作区：{getWorkspaceId()}</span>
+          {message && <strong>{message}</strong>}
+          {error && <strong className="is-error">{error}</strong>}
         </div>
       )}
-      <div className="notice panel">
-        当前浏览器工作区：{getWorkspaceId()}。项目、进度、作品和文件会按这个工作区隔离，其他访客默认看不到你的进程。
-      </div>
-      {error && <div className="alert">{error}</div>}
-            {message && <div className="panel notice">{message}</div>}
 
-      <nav className="tab-row agent-nav-bar">
-        <button type="button" className={mainNavTab === "memory" ? "active-tab" : ""} onClick={() => setMainNavTab("memory")}>
-          历史 / Memory
-        </button>
-        <button type="button" className={mainNavTab === "writing_guide" ? "active-tab" : ""} onClick={() => setMainNavTab("writing_guide")}>
-          写作指南
-        </button>
-        <button type="button" className={mainNavTab === "worldbuilding" ? "active-tab" : ""} onClick={() => setMainNavTab("worldbuilding")}>
-          世界观
-        </button>
-        <button type="button" className={mainNavTab === "history" ? "active-tab" : ""} onClick={() => setMainNavTab("history")}>
-          历史记录
-        </button>
-      </nav>
-
-      <div className="agent-layout">
-        <aside className="panel agent-sidebar work-sidebar">
-          <form className="compact-form work-create-form" onSubmit={createKnowledgeBase}>
+      <div className="writing-agent-shell">
+        <aside className="writing-agent-left-panel" style={{ width: leftPanelWidth }}>
+          <div className="writing-panel-head">
+            <span>章节管理</span>
             <div>
-              <p className="eyebrow">Agent 写作</p>
-              <h2>作品管理</h2>
+              <button type="button" title="新建作品" onClick={() => setName(`作品 ${knowledgeBases.length + 1}`)}>
+                +
+              </button>
+              <button type="button" title="全选文件" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
+                ⇅
+              </button>
             </div>
-            <label>
-              作品名
-              <input value={name} onChange={(event) => setName(event.target.value)} />
-            </label>
-            <label>
-              作品备注
-              <textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
-            </label>
-            <button className="primary" disabled={busy === "create"}>
-              新建作品
-            </button>
-          </form>
+          </div>
 
-          <div className="work-tree">
-            <div className="work-tree-title">
-              <strong>作品文件树</strong>
-              <small>{knowledgeBases.length} 个作品</small>
-            </div>
-            {knowledgeBases.map((kb) => {
-              const expanded = expandedWorkIds.includes(kb.id);
-              const active = selectedId === kb.id;
-              return (
-                <section key={kb.id} className={`work-node ${active ? "active-work" : ""}`}>
-                  <div className="work-node-head">
-                    <button type="button" className="tree-toggle" onClick={() => toggleWork(kb.id)} aria-label={expanded ? "收起作品" : "展开作品"}>
-                      {expanded ? "⌄" : "›"}
-                    </button>
-                    <button type="button" className="work-title-button" onClick={() => chooseKnowledgeBase(kb.id)}>
-                      <strong>{kb.name}</strong>
-                      <small>
-                        {kb.document_count} 文件 · {kb.chunk_count} 分块
-                      </small>
-                    </button>
-                  </div>
+          <div className="writing-agent-left-scroll">
+            <form className="writing-work-create" onSubmit={createKnowledgeBase}>
+              <label>
+                作品名
+                <input value={name} onChange={(event) => setName(event.target.value)} />
+              </label>
+              <label>
+                作品备注
+                <textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} />
+              </label>
+              <button className="primary" disabled={busy === "create"}>
+                新建作品
+              </button>
+            </form>
 
-                  {expanded && active && (
-                    <div className="work-files">
-                      <div className="file-manager-controls">
-                        <label>
-                          导入到
-                          <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
-                            {KNOWLEDGE_GROUPS.map((group) => (
-                              <option key={group.key} value={group.key}>
-                                {group.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="button-row tight-row">
-                          <label className="button-link compact-action">
-                            上传
-                            <input
-                              className="hidden-input"
-                              type="file"
-                              multiple
-                              accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                              onChange={uploadFiles}
-                              disabled={!selected || busy === "upload"}
-                            />
-                          </label>
-                          <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
-                            导入拆书技巧
-                          </button>
-                        </div>
-                        <label>
-                          知识包路径
-                          <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="输入知识包 JSON 路径" />
-                        </label>
-                        <button type="button" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
-                          导入 knowledge_package
-                        </button>
-                        <label>
-                          Markdown 知识文档路径
-                          <input value={markdownSourcePath} onChange={(event) => setMarkdownSourcePath(event.target.value)} placeholder="examples/my_knowledge.md" />
-                        </label>
-                        <div className="button-row tight-row">
-                          <button type="button" onClick={importMarkdownPath} disabled={!selected || busy === "import-md-path" || !markdownSourcePath.trim()}>
-                            自动拆卡
-                          </button>
-                          <label className="button-link compact-action">
-                            上传 MD 拆卡
-                            <input
-                              className="hidden-input"
-                              type="file"
-                              multiple
-                              accept=".md,.markdown,text/markdown,text/plain"
-                              onChange={importMarkdownFiles}
-                              disabled={!selected || busy === "import-md-files"}
-                            />
-                          </label>
-                        </div>
-                      </div>
-
-                      <div className="file-bulk-toolbar">
-                        <button type="button" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
-                          全选
-                        </button>
-                        <button type="button" onClick={() => setSelectedDocumentIds([])} disabled={!selectedDocumentIds.length}>
-                          取消
-                        </button>
-                        <button type="button" className="danger" onClick={() => bulkDeleteDocuments()} disabled={!selectedDocumentsInWork.length}>
-                          删除选中
-                        </button>
-                        <button type="button" className="danger" onClick={() => bulkDeleteDocuments(undefined, true)} disabled={!documents.length}>
-                          全部删除
-                        </button>
-                      </div>
-
-                      {KNOWLEDGE_GROUPS.map((group) => {
-                        const groupDocuments = documentsByType[group.key] || [];
-                        const groupSelected = groupDocuments.filter((document) => selectedDocumentSet.has(document.id)).length;
-                        const allGroupSelected = groupDocuments.length > 0 && groupSelected === groupDocuments.length;
-                        return (
-                          <div key={group.key} className="knowledge-tree-group">
-                            <div className="knowledge-tree-head">
-                              <button type="button" className="tree-toggle" onClick={() => toggleKnowledgeType(group.key)}>
-                                {expandedTypes[group.key] ? "⌄" : "›"}
-                              </button>
-                              <input
-                                type="checkbox"
-                                checked={allGroupSelected}
-                                disabled={!groupDocuments.length}
-                                onChange={(event) => setGroupSelection(group.key, event.target.checked)}
-                                aria-label={`选择${group.label}`}
-                              />
-                              <button type="button" className="knowledge-title-button" onClick={() => toggleKnowledgeType(group.key)}>
-                                <strong>{group.label}</strong>
-                                <small>
-                                  {groupDocuments.length} 文件
-                                  {groupSelected ? ` · 已选 ${groupSelected}` : ""}
-                                </small>
-                              </button>
-                              <button
-                                type="button"
-                                className="danger compact-action"
-                                onClick={() => bulkDeleteDocuments(group.key, true)}
-                                disabled={!groupDocuments.length || busy === `bulk-delete-${group.key}`}
-                              >
-                                清空
-                              </button>
-                            </div>
-                            {expandedTypes[group.key] && (
-                              <div className="file-row-list">
-                                {!groupDocuments.length && <p className="muted file-empty">{group.hint}</p>}
-                                {groupDocuments.map((document) => (
-                                  <div key={document.id} className={`file-row-item ${selectedDocumentSet.has(document.id) ? "selected-file" : ""}`}>
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedDocumentSet.has(document.id)}
-                                      onChange={() => toggleDocumentSelection(document.id)}
-                                      aria-label={`选择${documentTitle(document)}`}
-                                    />
-                                    <div className="file-row-main">
-                                      <strong title={documentTitle(document)}>{documentTitle(document)}</strong>
-                                      <small>
-                                        {document.chunk_count} 分块 · {formatSize(document.size_bytes)} · {document.status}
-                                      </small>
-                                      {document.error_message && <small className="warn-cell">{document.error_message}</small>}
-                                    </div>
-                                    <div className="file-row-actions">
-                                      <button type="button" onClick={() => reindexDocument(document.id)} disabled={busy === `reindex-${document.id}`}>
-                                        重建
-                                      </button>
-                                      <button type="button" className="danger" onClick={() => deleteDocument(document.id)} disabled={busy === `delete-${document.id}`}>
-                                        删
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+            <div className="writing-work-tree">
+              {knowledgeBases.map((kb) => {
+                const expanded = expandedWorkIds.includes(kb.id);
+                const active = selectedId === kb.id;
+                return (
+                  <section key={kb.id} className={`writing-work-node ${active ? "active" : ""}`}>
+                    <div className="writing-work-node-head">
+                      <button type="button" className="writing-tree-toggle" onClick={() => toggleWork(kb.id)} aria-label={expanded ? "收起作品" : "展开作品"}>
+                        {expanded ? "⌄" : "›"}
+                      </button>
+                      <button type="button" className="writing-work-title" onClick={() => chooseKnowledgeBase(kb.id)}>
+                        <strong>{kb.name}</strong>
+                        <small>
+                          {kb.document_count} 文件 · {kb.chunk_count} 分块
+                        </small>
+                      </button>
                     </div>
-                  )}
-                </section>
-              );
-            })}
-            {!knowledgeBases.length && <p className="muted file-empty">还没有作品。先新建一个作品，再上传知识文件。</p>}
+
+                    {expanded && active && (
+                      <div className="writing-work-files">
+                        <div className="writing-import-box">
+                          <label>
+                            导入到
+                            <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
+                              {KNOWLEDGE_GROUPS.map((group) => (
+                                <option key={group.key} value={group.key}>
+                                  {group.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="writing-compact-actions">
+                            <label className="button-link compact-action">
+                              上传{knowledgeTypeLabel(uploadType)}
+                              <input
+                                className="hidden-input"
+                                type="file"
+                                multiple
+                                accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                onChange={uploadFiles}
+                                disabled={!selected || busy === "upload"}
+                              />
+                            </label>
+                            <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
+                              导入拆书技巧
+                            </button>
+                          </div>
+                          <label>
+                            知识包路径
+                            <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="knowledge_package.json" />
+                          </label>
+                          <button type="button" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
+                            导入知识包
+                          </button>
+                          <label>
+                            Markdown 路径
+                            <input value={markdownSourcePath} onChange={(event) => setMarkdownSourcePath(event.target.value)} placeholder="examples/my_knowledge.md" />
+                          </label>
+                          <div className="writing-compact-actions">
+                            <button type="button" onClick={importMarkdownPath} disabled={!selected || busy === "import-md-path" || !markdownSourcePath.trim()}>
+                              自动拆卡
+                            </button>
+                            <label className="button-link compact-action">
+                              上传 MD
+                              <input className="hidden-input" type="file" multiple accept=".md,.markdown,text/markdown,text/plain" onChange={importMarkdownFiles} disabled={!selected || busy === "import-md-files"} />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="writing-file-toolbar">
+                          <button type="button" onClick={selectAllCurrentDocuments} disabled={!documents.length}>
+                            全选
+                          </button>
+                          <button type="button" onClick={() => setSelectedDocumentIds([])} disabled={!selectedDocumentIds.length}>
+                            取消
+                          </button>
+                          <button type="button" className="danger" onClick={() => bulkDeleteDocuments()} disabled={!selectedDocumentsInWork.length}>
+                            删除
+                          </button>
+                          <button type="button" className="danger" onClick={() => bulkDeleteDocuments(undefined, true)} disabled={!documents.length}>
+                            清空
+                          </button>
+                        </div>
+
+                        {KNOWLEDGE_GROUPS.map((group) => {
+                          const groupDocuments = documentsByType[group.key] || [];
+                          const groupSelected = groupDocuments.filter((document) => selectedDocumentSet.has(document.id)).length;
+                          const allGroupSelected = groupDocuments.length > 0 && groupSelected === groupDocuments.length;
+                          return (
+                            <div key={group.key} className="writing-file-group">
+                              <div className="writing-file-group-head">
+                                <button type="button" className="writing-tree-toggle" onClick={() => toggleKnowledgeType(group.key)}>
+                                  {expandedTypes[group.key] ? "⌄" : "›"}
+                                </button>
+                                <input
+                                  type="checkbox"
+                                  checked={allGroupSelected}
+                                  disabled={!groupDocuments.length}
+                                  onChange={(event) => setGroupSelection(group.key, event.target.checked)}
+                                  aria-label={`选择${group.label}`}
+                                />
+                                <button type="button" className="writing-file-group-title" onClick={() => toggleKnowledgeType(group.key)}>
+                                  <strong>{group.label}</strong>
+                                  <small>
+                                    {groupDocuments.length} 文件{groupSelected ? ` · 已选 ${groupSelected}` : ""}
+                                  </small>
+                                </button>
+                              </div>
+                              {expandedTypes[group.key] && (
+                                <div className="writing-file-list">
+                                  {!groupDocuments.length && <p className="muted file-empty">{group.hint}</p>}
+                                  {groupDocuments.map((document) => (
+                                    <div key={document.id} className={`writing-file-row ${selectedDocumentSet.has(document.id) ? "selected" : ""}`}>
+                                      <input type="checkbox" checked={selectedDocumentSet.has(document.id)} onChange={() => toggleDocumentSelection(document.id)} aria-label={`选择${documentTitle(document)}`} />
+                                      <div>
+                                        <strong title={documentTitle(document)}>{documentTitle(document)}</strong>
+                                        <small>
+                                          {document.chunk_count} 分块 · {formatSize(document.size_bytes)} · {document.status}
+                                        </small>
+                                        {document.error_message && <small className="warn-cell">{document.error_message}</small>}
+                                      </div>
+                                      <div className="writing-file-actions">
+                                        <button type="button" onClick={() => reindexDocument(document.id)} disabled={busy === `reindex-${document.id}`}>
+                                          重建
+                                        </button>
+                                        <button type="button" className="danger" onClick={() => deleteDocument(document.id)} disabled={busy === `delete-${document.id}`}>
+                                          删
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+              {!knowledgeBases.length && <p className="muted file-empty">还没有作品。先新建一个作品，再上传知识文件。</p>}
+            </div>
           </div>
         </aside>
 
-        <div className="agent-main">
-          <div className="panel compact-form selected-work-card">
-            <div>
-              <p className="eyebrow">Current Work</p>
-              <h2>{selected?.name || "请选择或新建作品"}</h2>
-            </div>
-            <p className="muted">
-              {selected
-                ? `${selected.name} 内共有 ${documents.length} 个文件、${cards.length} 张知识卡、${markdownDocs.length} 个 Markdown 文档。`
-                : "每个作品有独立文件树、Memory 和生成上下文。"}
-            </p>
-          </div>
+        <div className="writing-agent-resizer" onPointerDown={beginLeftPanelResize} />
 
-          <div className="panel position-command-panel">
-            <div>
-              <p className="eyebrow">Current Writing Position</p>
-              <h2>
-                V{currentPositionPayload.current_volume_index ?? "-"} / C{currentPositionPayload.current_chapter_index ?? "-"}
-              </h2>
-              <p className="muted">所有提纲、正文、RAG 预览和 Memory 确认都会使用这个卷章位置。</p>
-            </div>
-            <div className="position-grid">
+        <main className="writing-agent-editor">
+          <div className="writing-editor-titlebar">
+            <input value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} placeholder="请输入章节标题或本次写作请求" />
+            <div className="writing-editor-position">
               <label>
-                Volume
+                V
                 <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(parsePositionInput(event.target.value))} />
               </label>
               <label>
-                Chapter
+                C
                 <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(parsePositionInput(event.target.value))} />
               </label>
-              <label className="check-row debug-toggle">
-                <input type="checkbox" checked={debugRawKnowledge} onChange={(event) => setDebugRawKnowledge(event.target.checked)} />
-                调试 Raw Evidence
-              </label>
             </div>
           </div>
-          {positionMissing && <div className="alert compact-alert">请填写当前 Volume 和 Chapter，避免 future knowledge 或错误章节进入本次生成。</div>}
 
-          
-          {mainNavTab === "writing_guide" && (
-          <div className="knowledge-workbench panel">
-            <div className="knowledge-workbench-head">
-              <div>
-                <p className="eyebrow">Knowledge Cards</p>
-                <h2>知识卡与 Markdown</h2>
-              </div>
-              <div className="tab-row">
-                <button type="button" className={activeKnowledgeTab === "cards" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("cards")}>
-                  知识卡
-                </button>
-                <button type="button" className={activeKnowledgeTab === "docs" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("docs")}>
-                  Markdown 文档
-                </button>
-                <button type="button" className={activeKnowledgeTab === "result" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("result")}>
-                  生成结果
-                </button>
-              </div>
-            </div>
-
-            {activeKnowledgeTab === "cards" && (
-              <div className="knowledge-card-panel">
-                <div className="metric-grid">
-                  <div>
-                    <strong>{mergeStats?.raw_card_count ?? 0}</strong>
-                    <span>Raw Cards</span>
-                  </div>
-                  <div>
-                    <strong>{mergeStats?.canonical_card_count ?? cards.filter((card) => card.is_canonical).length}</strong>
-                    <span>Canonical Cards</span>
-                  </div>
-                  <div>
-                    <strong>{mergeStats?.merged_card_count ?? cards.filter((card) => card.status === "merged").length}</strong>
-                    <span>已合并</span>
-                  </div>
-                  <div>
-                    <strong>{mergeStats?.review_required_count ?? 0}</strong>
-                    <span>待确认组</span>
-                  </div>
-                  <div>
-                    <strong>{Math.round((mergeStats?.reduction_rate ?? 0) * 100)}%</strong>
-                    <span>精简比例</span>
-                  </div>
-                </div>
-                <div className="button-row">
-                  <button type="button" onClick={() => setShowRawCards((value) => !value)}>
-                    {showRawCards ? "隐藏 Raw Evidence" : "显示 Raw Evidence"}
-                  </button>
-                  <button type="button" onClick={previewMerges} disabled={!selected || busy === "merge-preview"}>
-                    预览安全合并
-                  </button>
-                  <button type="button" className="primary" onClick={applySafeMerges} disabled={!selected || busy === "merge-apply"}>
-                    执行安全合并
-                  </button>
-                </div>
-                {!!mergeGroups.length && (
-                  <div className="merge-preview-list">
-                    {mergeGroups.slice(0, 6).map((group) => (
-                      <div key={group.group_id} className="merge-preview-item">
-                        <strong>
-                          {group.reason} · {group.action} · {Math.round(group.similarity * 100)}%
-                        </strong>
-                        <small>
-                          主卡 {group.primary_card_id}；候选 {group.candidate_card_ids.join("、") || "无"}
-                        </small>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="filter-chip-row">
-                  {cardFilterGroups.map((group) => (
-                    <button key={group.key} type="button" className={cardTypeFilter === group.key ? "active-chip" : ""} onClick={() => setCardTypeFilter(group.key)}>
-                      {group.label}
-                      <span>{group.count}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="knowledge-card-grid">
-                  {filteredCards.map((card) => (
-                    <article key={card.card_id} className={`knowledge-card-item ${selectedCardId === card.card_id ? "selected-card" : ""}`}>
-                      <div className="card-title-row">
-                        <strong>{card.title}</strong>
-                        <span className={`status-pill status-${card.status}`}>{card.status}</span>
-                      </div>
-                      <small>
-                        {card.library_type} / {card.card_type} · {card.is_canonical ? "canonical" : "raw"} · evidence {card.evidence_count} · {Math.round(card.confidence * 100)}%
-                      </small>
-                      <small>
-                        {card.scope_level}
-                        {card.volume_index ? ` · V${card.volume_index}` : ""}
-                        {card.chapter_index ? ` · C${card.chapter_index}` : ""} · {card.retrievable ? "retrievable" : "not retrievable"}
-                      </small>
-                      {card.merged_into_card_id && <small className="source-ref">merged into {card.merged_into_card_id}</small>}
-                      <p>{card.summary || card.content.slice(0, 180)}</p>
-                      <div className="tag-row">
-                        {card.tags.slice(0, 5).map((tag) => (
-                          <span key={tag}>{tag}</span>
-                        ))}
-                      </div>
-                      {!!compactSourceRef(card.source_ref) && <small className="source-ref">{compactSourceRef(card.source_ref)}</small>}
-                      <div className="button-row tight-row">
-                        <button type="button" onClick={() => setSelectedCardId(card.card_id)}>
-                          详情
-                        </button>
-                        <button type="button" onClick={() => updateCardStatus(card, card.status === "disabled" ? "approved" : "disabled")} disabled={busy === `card-${card.card_id}`}>
-                          {card.status === "disabled" ? "启用" : "禁用"}
-                        </button>
-                        <button type="button" onClick={() => regenerateMarkdown(card)} disabled={busy === `export-${card.card_id}`}>
-                          生成 MD
-                        </button>
-                        {!card.is_canonical && (
-                          <button type="button" onClick={() => unmergeCard(card)} disabled={busy === `unmerge-${card.card_id}`}>
-                            恢复
-                          </button>
-                        )}
-                        <button type="button" className="danger" onClick={() => deleteKnowledgeCard(card)} disabled={busy === `card-${card.card_id}`}>
-                          删除
-                        </button>
-                      </div>
-                      {selectedCardId === card.card_id && <pre className="card-detail">{card.content}</pre>}
-                    </article>
-                  ))}
-                  {!!cards.length && !filteredCards.length && <p className="muted">当前分类下暂无知识卡。</p>}
-                  {!cards.length && <p className="muted">还没有知识卡。请上传你的 Markdown 文件或导入自己的知识包。</p>}
-                </div>
-              </div>
-            )}
-
-            {activeKnowledgeTab === "docs" && (
-              <div className="markdown-doc-layout">
-                <div className="doc-list">
-                  {markdownDocs.map((doc) => (
-                    <button key={doc.doc_id} type="button" className={selectedDocId === doc.doc_id ? "active-file" : ""} onClick={() => openMarkdownDoc(doc.doc_id)}>
-                      <span>
-                        <strong>{doc.title}</strong>
-                        <small>
-                          {doc.library_type}/{doc.card_type} · {doc.exists ? doc.status : "missing"}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                  {!markdownDocs.length && <p className="muted">暂无 Markdown 文档。</p>}
-                </div>
-                <div className="doc-editor">
-                  <div className="preview-toolbar">
-                    <strong>{selectedDocId || "选择 Markdown 文档"}</strong>
-                    <div className="button-row">
-                      <button type="button" onClick={saveMarkdownDoc} disabled={!selectedDocId || busy === `doc-save-${selectedDocId}`}>
-                        保存
-                      </button>
-                      <button type="button" className="primary" onClick={syncMarkdownDoc} disabled={!selectedDocId || busy === `doc-sync-${selectedDocId}`}>
-                        同步到知识卡
-                      </button>
-                      <button type="button" className="danger" onClick={deleteMarkdownDoc} disabled={!selectedDocId || busy === `doc-delete-${selectedDocId}`}>
-                        删除文档
-                      </button>
-                    </div>
-                  </div>
-                  <textarea rows={18} value={markdownContent} onChange={(event) => setMarkdownContent(event.target.value)} placeholder="Markdown 内容会显示在这里。" />
-                </div>
-              </div>
-            )}
-
-            {activeKnowledgeTab === "result" && (
-              <div className="generation-result-panel">
-                <div className="metric-strip">
-                  <div>
-                    <span>目标阶段</span>
-                    <strong>{retrievalDebug?.stage || ragStage}</strong>
-                  </div>
-                  <div>
-                    <span>召回知识</span>
-                    <strong>{usedKnowledge.length}</strong>
-                  </div>
-                  <div>
-                    <span>Job</span>
-                    <strong>{draftJob?.status || "sync"}</strong>
-                  </div>
-                  <div>
-                    <span>目标/实际字数</span>
-                    <strong>
-                      {targetChars} / {actualChars ?? 0}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>分段数</span>
-                    <strong>{longSections.length || 1}</strong>
-                  </div>
-                  <div>
-                    <span>Ratio</span>
-                    <strong>{draftJob?.completion_ratio ? `${Math.round(draftJob.completion_ratio * 100)}%` : actualChars ? `${Math.round((actualChars / targetChars) * 100)}%` : "0%"}</strong>
-                  </div>
-                </div>
-                {draftJob && (
-                  <div className="retrieval-debug">
-                    <strong>长文本任务</strong>
-                    <small>
-                      {draftJob.job_id.slice(0, 8)} · {draftJob.status} · {draftJob.current_section || 0}/{draftJob.section_count || longSections.length || 0}
-                    </small>
-                    {!!draftJob.error_message && <p>{draftJob.error_message}</p>}
-                  </div>
-                )}
-                {!!generationWarnings.length && (
-                  <div className="retrieval-debug">
-                    <strong>生成提示</strong>
-                    {generationWarnings.map((item) => (
-                      <p key={item}>{item}</p>
-                    ))}
-                  </div>
-                )}
-                {!!usedKnowledge.length && (
-                  <div className="hit-list">
-                    {usedKnowledge.map((item) => (
-                      <article key={item.id}>
-                        <strong>
-                          [{item.card_type}] {item.title}
-                        </strong>
-                        <small>
-                          {item.library_type} · score {item.score}
-                        </small>
-                        {!!compactSourceRef(item.source_ref) && <small className="source-ref">{compactSourceRef(item.source_ref)}</small>}
-                        {!!item.content_preview && <p>{item.content_preview}</p>}
-                      </article>
-                    ))}
-                  </div>
-                )}
-                {!!longSections.length && (
-                  <div className="section-progress-list">
-                    {longSections.map((section) => (
-                      <article key={section.index}>
-                        <div className="card-title-row">
-                          <strong>
-                            第 {section.index} 段 · {section.status}
-                          </strong>
-                          <span>
-                            {section.actual_chars}/{section.target_chars}
-                          </span>
-                        </div>
-                        <p>{section.focus}</p>
-                        <small>
-                          used_knowledge {section.used_knowledge.length} · supplement {section.supplement_count || 0} · cjk {section.cjk_chars || 0}
-                        </small>
-                        {!!section.continuity_state && (
-                          <details className="section-continuity">
-                            <summary>连续性状态</summary>
-                            <pre>{section.continuity_state}</pre>
-                          </details>
-                        )}
-                      </article>
-                    ))}
-                  </div>
-                )}
-                <pre>{draft || outline || "生成结果会显示在下方正文区；这里保留最近一次 used_knowledge 和 prompt preview。"}</pre>
-                {promptPreview && (
-                  <>
-                    <h3>Prompt Preview</h3>
-                    <pre>{promptPreview}</pre>
-                  </>
-                )}
-                            </div>
-            )}
+          <div className="writing-editor-toolbar">
+            <button type="button" title="生成提纲" onClick={() => setAssistantTab("outline")}>
+              提纲
+            </button>
+            <button type="button" title="生成正文" onClick={() => void startDraftJob()} disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked || positionMissing}>
+              正文
+            </button>
+            <button type="button" title="润色正文" onClick={generateRevision} disabled={!selected || !draft || busy === "revision" || modelCallBlocked || positionMissing}>
+              润色
+            </button>
+            <span className="writing-toolbar-divider" />
+            <button type="button" title="复制正文" onClick={() => navigator.clipboard.writeText(draft)} disabled={!draft}>
+              复制
+            </button>
+            <button type="button" title="清空正文" onClick={() => setDraft("")} disabled={!draft}>
+              清空
+            </button>
+            <button
+              type="button"
+              title="生成结果"
+              onClick={() => {
+                setAssistantTab("resources");
+                setActiveKnowledgeTab("result");
+              }}
+            >
+              结果
+            </button>
+            <div className="writing-word-count">字数：{draftWordCount}</div>
           </div>
+
+          <div className="writing-editor-surface">
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder={confirmedOutline ? "正文生成后会显示在这里，也可以直接粘贴或继续编辑。" : "请先在右侧生成并确认提纲，再生成正文。"}
+            />
+          </div>
+
+          {(activeDraftJob || generationWarnings.length > 0 || positionMissing) && (
+            <div className="writing-editor-inline-status">
+              {positionMissing && <span className="is-error">请填写当前 Volume 和 Chapter。</span>}
+              {activeDraftJob && (
+                <span>
+                  长文本任务：{draftJob?.status} · {draftJob?.current_section || 0}/{draftJob?.section_count || longSections.length || 0}
+                </span>
+              )}
+              {generationWarnings.slice(0, 2).map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+            </div>
           )}
 
-          {mainNavTab === "memory" && (
-          <div className="agent-two-col">
-            <form className="panel compact-form" onSubmit={searchRAG}>
-              <h2>RAG 召回预览</h2>
-              <label>
-                任务或关键词
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：黄金三章如何制造期待？" />
-              </label>
-              <div className="mode-grid">
-                <label>
-                  Stage
-                  <select value={ragStage} onChange={(event) => setRagStage(event.target.value)}>
-                    <option value="outline">outline</option>
-                    <option value="draft">draft</option>
-                    <option value="revision">revision</option>
-                    <option value="continue">continue</option>
-                    <option value="worldbuilding_check">worldbuilding_check</option>
-                  </select>
-                </label>
-                <label>
-                  top_k
-                  <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
-                </label>
-              </div>
-              <button className="primary" disabled={!selected || busy === "rag-search" || positionMissing}>
-                测试召回
+          <div className="writing-editor-footer">
+            <div>
+              <button type="button" className="primary" onClick={saveDraftToMemory} disabled={!selected || !draft || busy === "memory" || positionMissing}>
+                保存草稿
               </button>
-              {retrievalDebug && (
-                <div className="retrieval-debug">
-                  <strong>召回策略</strong>
-                  <small>
-                    {retrievalDebug.stage} · top_k {retrievalDebug.top_k} · 候选 {retrievalDebug.total_candidates} · 选中 {retrievalDebug.selected_count}
-                    {!!retrievalDebug.filtered_duplicate_count && ` · 去重 ${retrievalDebug.filtered_duplicate_count}`}
-                  </small>
-                  <small>
-                    pos V{retrievalDebug.current_volume_index ?? "-"} / C{retrievalDebug.current_chapter_index ?? "-"} · scope{" "}
-                    {retrievalDebug.candidate_count_before_scope_filter ?? 0} → {retrievalDebug.candidate_count_after_scope_filter ?? 0} · future{" "}
-                    {retrievalDebug.filtered_by_future_count ?? 0} · status {retrievalDebug.filtered_by_status_count ?? 0}
-                  </small>
-                  {retrievalDebug.raw_query && <p>raw: {retrievalDebug.raw_query}</p>}
-                  <p>{retrievalDebug.preferred_card_types.join(" / ")}</p>
-                  {!!retrievalDebug.expanded_terms?.length && <p>{retrievalDebug.expanded_terms.slice(0, 16).join(" / ")}</p>}
-                  {!!retrievalDebug.warnings?.length && <p className="warn-cell">{retrievalDebug.warnings.join(" / ")}</p>}
-                  {!!retrievalDebug.selected_card_ids?.length && <p>{retrievalDebug.selected_card_ids.map((id) => `${id}:${retrievalDebug.selected_card_scope?.[id] || "scope"}`).join(" / ")}</p>}
-                </div>
-              )}
-              <div className="hit-list">
-                {ragResults.map((hit) => (
-                  <article key={hit.id}>
-                    <strong>{hit.title}</strong>
-                    <small>
-                      {hit.library_type} / {hit.card_type} · score {hit.score}
-                    </small>
-                    {!!hit.tags.length && (
-                      <div className="tag-row">
-                        {hit.tags.slice(0, 6).map((tag) => (
-                          <span key={tag}>{tag}</span>
-                        ))}
-                      </div>
-                    )}
-                    {!!compactSourceRef(hit.source_ref) && <small className="source-ref">{compactSourceRef(hit.source_ref)}</small>}
-                    <p>{hit.content_preview || "本次生成使用了这张知识卡。"}</p>
-                  </article>
-                ))}
-              </div>
-            </form>
-
-            <div className="panel compact-form memory-panel">
-              <div className="preview-toolbar">
-                <h2>长期 Memory</h2>
-                <span className="muted">{memories.length} 条</span>
-              </div>
-              <p className="muted">Memory 会跟随当前作品，用来承接已确认提纲、已写正文、人物状态、伏笔和你的备注。</p>
-              <div className="mode-grid">
-                <label>
-                  类型
-                  <select value={memoryType} onChange={(event) => setMemoryType(event.target.value)}>
-                    <option value="note">备注</option>
-                    <option value="outline">提纲</option>
-                    <option value="draft">正文片段</option>
-                    <option value="continuity">连续性</option>
-                  </select>
-                </label>
-                <label>
-                  标题
-                  <input value={memoryTitle} onChange={(event) => setMemoryTitle(event.target.value)} placeholder="例如：第一章结尾状态" />
-                </label>
-              </div>
-              <textarea rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写下需要长期承接的上下文。" />
               <button
                 type="button"
-                className="primary"
-                disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim() || positionMissing}
-                onClick={() => saveMemory(memoryTitle, memoryContent)}
+                onClick={() => {
+                  setAssistantTab("resources");
+                  setActiveKnowledgeTab("result");
+                }}
               >
-                保存 Memory
+                预览
               </button>
-              <div className="hit-list memory-list">
-                {memories.slice(0, 6).map((memory) => (
-                  <article key={memory.id}>
-                    <strong>{memory.title}</strong>
-                    <small>
-                      {memory.memory_type} · {memory.source}
-                    </small>
-                    <p>{memory.content}</p>
-                    <button type="button" className="danger" onClick={() => deleteMemory(memory.id)} disabled={busy === `memory-${memory.id}`}>
-                      删除
-                    </button>
-                  </article>
-                ))}
-                {!memories.length && <p className="muted">还没有 Memory。确认提纲或手动保存后会显示在这里。</p>}
-              </div>
-                        </div>
-          </div>
-          )}
-
-          {mainNavTab === "writing_guide" && (
-          <div className="writing-flow">
-            <form className="panel compact-form writing-step" onSubmit={generateOutline}>
-              <div className="step-badge">1</div>
-              <h2>发送请求</h2>
-              <p className="muted">把你想写的章节、风格、字数、承接上下文放在这里。系统会先生成提纲，不会直接生成正文。</p>
-              <label>
-                写作请求
-                <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
-              </label>
-              <label>
-                补充上下文/已有正文，可选
-                <textarea rows={5} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
-              </label>
-              <div className="mode-grid">
-                <label>
-                  目标字数
-                  <input type="number" min={500} max={50000} step={500} value={targetChars} onChange={(event) => setTargetChars(Number(event.target.value) || 3000)} />
-                </label>
-                <label>
-                  RAG top_k
-                  <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
-                </label>
-              </div>
-              {targetChars > 2500 && <small className="warn-cell">目标字数较长，正文生成会自动分段并合并结果。</small>}
-              <div className="mode-grid">
-                <label>
-                  模型选择
-                  <select value={writingModelId} onChange={(event) => setWritingModelId(event.target.value)}>
-                    {writingModels.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  API Key
-                  <input
-                    type="password"
-                    value={writingApiKey}
-                    onChange={(event) => setWritingApiKey(event.target.value)}
-                    placeholder={selectedWritingModel?.provider === "doubao" ? "填写你的豆包 Ark API Key" : "填写你的模型 API Key"}
-                  />
-                </label>
-                <label>
-                  生成模式
-                  <select value={mode} onChange={(event) => setMode(event.target.value)}>
-                    <option value="fast">快速</option>
-                    <option value="standard">标准</option>
-                    <option value="deep">深度</option>
-                  </select>
-                </label>
-                <label>
-                  知识模式
-                  <select value={knowledgeMode} onChange={(event) => setKnowledgeMode(event.target.value)}>
-                    <option value="reference">参考知识</option>
-                    <option value="strict">严格知识</option>
-                  </select>
-                </label>
-              </div>
-              <label className="check-row">
-                <input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} />
-                dry-run：不调用模型，只验证检索和引用
-              </label>
-              {modelCallBlocked && <small className="warn-cell">关闭 dry-run 后，请先填写你自己的 API Key。</small>}
-              {debugRawKnowledge && !dryRun && <small className="warn-cell">Raw Evidence 只会用于 dry-run 调试预览，不会进入正式生成。</small>}
-              <button className="primary" disabled={!selected || busy === "outline" || modelCallBlocked || positionMissing}>
-                发送请求，生成提纲
-              </button>
-            </form>
-
-            <div className="panel compact-form writing-step">
-              <div className="step-badge">2</div>
-              <h2>生成并确认提纲</h2>
-              <p className="muted">这里显示模型生成的章节提纲。你可以直接编辑，确认后才允许进入正文生成。</p>
-              <label>
-                章节提纲
-                <textarea rows={16} value={outline} onChange={(event) => setOutline(event.target.value)} placeholder="提纲会显示在这里。你也可以手动粘贴或修改提纲，然后点击确认。" />
-              </label>
-              <div className="button-row">
-                <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
-                  复制提纲
-                </button>
-                <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline" || positionMissing} onClick={confirmOutline}>
-                  确认提纲
-                </button>
-              </div>
-              <small className="muted">{confirmedOutline ? "已确认提纲，可以生成正文。" : "提纲确认后会写入 Memory，并解锁第三个对话框。"}</small>
             </div>
-
-            <form className="panel compact-form writing-step" onSubmit={generateDraft}>
-              <div className="step-badge">3</div>
-              <h2>生成正文</h2>
-              <p className="muted">用户确认提纲后，点击这里生成小说正文。这里不会再输出提纲、表格、结构核对或写作说明。</p>
-              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked || positionMissing}>
-                根据确认提纲生成正文
+            <div>
+              <button type="button" onClick={cancelDraftJob} disabled={!draftJob || !activeDraftJob || busy === "draft-job-cancel"}>
+                取消任务
               </button>
-              <div className="button-row">
-                <button type="button" disabled={!draftJob || ["completed", "failed", "cancelled"].includes(draftJob.status) || busy === "draft-job-cancel"} onClick={cancelDraftJob}>
-                  取消任务
-                </button>
-              </div>
-              <div className="preview-panel inline-output">
-                <div className="preview-toolbar">
-                  <strong>小说正文</strong>
-                  <div className="button-row">
+              <button type="button" className="publish" onClick={saveDraftToMemory} disabled={!selected || !draft || busy === "memory" || positionMissing}>
+                存入 Memory
+              </button>
+            </div>
+          </div>
+        </main>
+
+        <div className="writing-agent-resizer" onPointerDown={beginRightPanelResize} />
+
+        <aside className="writing-agent-right-panel" style={{ width: rightPanelWidth }}>
+          <div className="writing-assistant-tabs">
+            <button type="button" className={assistantTab === "outline" ? "active" : ""} onClick={() => setAssistantTab("outline")}>
+              大纲
+            </button>
+            <button type="button" className={assistantTab === "memory" ? "active" : ""} onClick={() => setAssistantTab("memory")}>
+              人设
+            </button>
+            <button type="button" className={assistantTab === "worldbuilding" ? "active" : ""} onClick={() => setAssistantTab("worldbuilding")}>
+              设定
+            </button>
+            <button type="button" className={assistantTab === "resources" ? "active" : ""} onClick={() => setAssistantTab("resources")}>
+              拆卡
+            </button>
+          </div>
+
+          <div className="writing-assistant-content">
+            {assistantTab === "outline" && (
+              <>
+                <form className="writing-side-card" onSubmit={generateOutline}>
+                  <div className="writing-side-card-head">
+                    <strong>发送请求</strong>
+                    <span>{dryRun ? "dry-run" : "model"}</span>
+                  </div>
+                  <label>
+                    写作请求
+                    <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
+                  </label>
+                  <label>
+                    补充上下文 / 已有正文
+                    <textarea rows={4} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
+                  </label>
+                  <div className="mode-grid">
+                    <label>
+                      目标字数
+                      <input type="number" min={500} max={50000} step={500} value={targetChars} onChange={(event) => setTargetChars(Number(event.target.value) || 3000)} />
+                    </label>
+                    <label>
+                      RAG top_k
+                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                    </label>
+                  </div>
+                  <div className="mode-grid">
+                    <label>
+                      模型
+                      <select value={writingModelId} onChange={(event) => setWritingModelId(event.target.value)}>
+                        {writingModels.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      API Key
+                      <input type="password" value={writingApiKey} onChange={(event) => setWritingApiKey(event.target.value)} placeholder="本次请求使用" />
+                    </label>
+                    <label>
+                      生成模式
+                      <select value={mode} onChange={(event) => setMode(event.target.value)}>
+                        <option value="fast">快速</option>
+                        <option value="standard">标准</option>
+                        <option value="deep">深度</option>
+                      </select>
+                    </label>
+                    <label>
+                      知识模式
+                      <select value={knowledgeMode} onChange={(event) => setKnowledgeMode(event.target.value)}>
+                        <option value="reference">参考知识</option>
+                        <option value="strict">严格知识</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="check-row">
+                    <input type="checkbox" checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} />
+                    dry-run
+                  </label>
+                  <label className="check-row">
+                    <input type="checkbox" checked={debugRawKnowledge} onChange={(event) => setDebugRawKnowledge(event.target.checked)} />
+                    Raw Evidence
+                  </label>
+                  {modelCallBlocked && <small className="warn-cell">关闭 dry-run 后，请先填写 API Key。</small>}
+                  <button className="primary" disabled={!selected || busy === "outline" || modelCallBlocked || positionMissing}>
+                    生成提纲
+                  </button>
+                </form>
+
+                <div className="writing-side-card">
+                  <div className="writing-side-card-head">
+                    <strong>章节提纲</strong>
+                    <span>{confirmedOutline ? "已确认" : "待确认"}</span>
+                  </div>
+                  <textarea rows={14} value={outline} onChange={(event) => setOutline(event.target.value)} placeholder="提纲会显示在这里。" />
+                  <div className="writing-compact-actions">
+                    <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
+                      复制提纲
+                    </button>
+                    <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline" || positionMissing} onClick={confirmOutline}>
+                      确认提纲
+                    </button>
+                  </div>
+                </div>
+
+                <div className="writing-side-card">
+                  <div className="writing-side-card-head">
+                    <strong>正文生成</strong>
+                    <span>{draftJob?.status || "ready"}</span>
+                  </div>
+                  <button className="primary" type="button" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked || positionMissing} onClick={() => void startDraftJob()}>
+                    根据确认提纲生成正文
+                  </button>
+                  <div className="writing-compact-actions">
                     <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
                       复制正文
                     </button>
                     <button type="button" disabled={!selected || !draft || busy === "revision" || modelCallBlocked || positionMissing} onClick={generateRevision}>
-                      润色/改写正文
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!selected || !draft || busy === "memory" || positionMissing}
-                      onClick={async () => {
-                        if (!selected || !draft) return;
-                        setBusy("memory");
-                        setError("");
-                        try {
-                          const saved = await api.confirmDraftMemory(selected.id, {
-                            title: `正文片段 ${new Date().toLocaleString()}`,
-                            content: draft,
-                            tags: ["draft"],
-                            scope_level: "chapter",
-                            volume_index: currentPositionPayload.current_volume_index,
-                            chapter_index: currentPositionPayload.current_chapter_index,
-                          });
-                          setMemories((items) => [saved, ...items]);
-                          await refreshKnowledgeCards(selected.id);
-                          setMessage("正文已写入 Memory。");
-                        } catch (err) {
-                          setError(err instanceof Error ? err.message : "保存正文 Memory 失败");
-                        } finally {
-                          setBusy("");
-                        }
-                      }}
-                    >
-                      存入 Memory
+                      润色正文
                     </button>
                   </div>
                 </div>
-                <pre>{draft || (confirmedOutline ? "正文会显示在这里。" : "请先在第二个对话框确认提纲。")}</pre>
-              </div>
-                        </form>
-          </div>
-          )}
+              </>
+            )}
 
-          {mainNavTab === "worldbuilding" && (
-          <div className="panel compact-form">
-            <h2>世界观设定草案</h2>
-            <p className="muted">这里生成的是原创世界观候选稿。它不会自动进入作品文件树，只有你确认后才会作为世界观设定导入当前作品。</p>
-            <label>
-              故事种子
-              <textarea rows={3} value={storySeed} onChange={(event) => setStorySeed(event.target.value)} />
-            </label>
-            <div className="button-row">
-              <button type="button" onClick={generateWorldbuildingDraft} disabled={!selected || busy === "worldbuilding" || modelCallBlocked}>
-                生成世界观草案
-              </button>
-              <button type="button" className="primary" onClick={confirmWorldbuildingImport} disabled={!selected || !worldbuildingDraft || busy === "confirm-worldbuilding"}>
-                确认导入为世界观设定
-              </button>
-            </div>
-                        <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入当前作品。" />
-          </div>
-          )}
+            {assistantTab === "memory" && (
+              <>
+                <form className="writing-side-card" onSubmit={searchRAG}>
+                  <div className="writing-side-card-head">
+                    <strong>RAG 召回预览</strong>
+                    <span>{ragResults.length} 条</span>
+                  </div>
+                  <label>
+                    任务或关键词
+                    <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="黄金三章如何制造期待？" />
+                  </label>
+                  <div className="mode-grid">
+                    <label>
+                      Stage
+                      <select value={ragStage} onChange={(event) => setRagStage(event.target.value)}>
+                        <option value="outline">outline</option>
+                        <option value="draft">draft</option>
+                        <option value="revision">revision</option>
+                        <option value="continue">continue</option>
+                        <option value="worldbuilding_check">worldbuilding_check</option>
+                      </select>
+                    </label>
+                    <label>
+                      top_k
+                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                    </label>
+                  </div>
+                  <button className="primary" disabled={!selected || busy === "rag-search" || positionMissing}>
+                    测试召回
+                  </button>
+                  {retrievalDebug && (
+                    <div className="retrieval-debug">
+                      <strong>召回策略</strong>
+                      <small>
+                        {retrievalDebug.stage} · top_k {retrievalDebug.top_k} · 候选 {retrievalDebug.total_candidates} · 选中 {retrievalDebug.selected_count}
+                      </small>
+                      {!!retrievalDebug.warnings?.length && <p className="warn-cell">{retrievalDebug.warnings.join(" / ")}</p>}
+                    </div>
+                  )}
+                  <div className="hit-list">
+                    {ragResults.map((hit) => (
+                      <article key={hit.id}>
+                        <strong>{hit.title}</strong>
+                        <small>
+                          {hit.library_type} / {hit.card_type} · score {hit.score}
+                        </small>
+                        <p>{hit.content_preview || "本次生成使用了这张知识卡。"}</p>
+                      </article>
+                    ))}
+                  </div>
+                </form>
 
-          {mainNavTab === "history" && (
-          <div className="panel compact-form">
-            <h2>历史记录</h2>
-            <p className="muted">当前作品的历史提纲、正文和修改记录来源于已确认的 Memory。你可以在下面重新查看已确认的内容。</p>
-            {memories.length > 0 ? (
-              <div className="hit-list memory-list">
-                {memories.map((memory) => (
-                  <article key={memory.id}>
-                    <strong>{memory.title}</strong>
-                    <small>
-                      {memory.memory_type} · {memory.source} · {memory.created_at ? new Date(memory.created_at).toLocaleString() : ""}
-                    </small>
-                    <p>{memory.content}</p>
-                  </article>
-                ))}
+                <div className="writing-side-card">
+                  <div className="writing-side-card-head">
+                    <strong>长期 Memory</strong>
+                    <span>{memories.length} 条</span>
+                  </div>
+                  <div className="mode-grid">
+                    <label>
+                      类型
+                      <select value={memoryType} onChange={(event) => setMemoryType(event.target.value)}>
+                        <option value="note">备注</option>
+                        <option value="outline">提纲</option>
+                        <option value="draft">正文片段</option>
+                        <option value="continuity">连续性</option>
+                      </select>
+                    </label>
+                    <label>
+                      标题
+                      <input value={memoryTitle} onChange={(event) => setMemoryTitle(event.target.value)} placeholder="第一章结尾状态" />
+                    </label>
+                  </div>
+                  <textarea rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写下需要长期承接的上下文。" />
+                  <button type="button" className="primary" disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim() || positionMissing} onClick={() => saveMemory(memoryTitle, memoryContent)}>
+                    保存 Memory
+                  </button>
+                  <div className="hit-list memory-list">
+                    {memories.map((memory) => (
+                      <article key={memory.id}>
+                        <strong>{memory.title}</strong>
+                        <small>
+                          {memory.memory_type} · {memory.source}
+                          {mainNavTab === "history" && memory.created_at ? ` · ${new Date(memory.created_at).toLocaleString()}` : ""}
+                        </small>
+                        <p>{memory.content}</p>
+                        {mainNavTab !== "history" && (
+                          <button type="button" className="danger" onClick={() => deleteMemory(memory.id)} disabled={busy === `memory-${memory.id}`}>
+                            删除
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                    {!memories.length && <p className="muted">还没有 Memory。</p>}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {assistantTab === "worldbuilding" && (
+              <div className="writing-side-card">
+                <div className="writing-side-card-head">
+                  <strong>世界观设定草案</strong>
+                  <span>{worldbuildingDraft ? "draft" : "empty"}</span>
+                </div>
+                <div className="writing-setting-upload">
+                  <div>
+                    <strong>上传设定文件</strong>
+                    <small>支持 txt、md、docx、pdf；会导入当前作品的世界观设定。</small>
+                  </div>
+                  <label className="button-link compact-action">
+                    上传设定
+                    <input
+                      className="hidden-input"
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.docx,.pdf,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={(event) => uploadFilesTo(event, "worldbuilding")}
+                      disabled={!selected || busy === "upload"}
+                    />
+                  </label>
+                </div>
+                <div className="writing-setting-list">
+                  <strong>已导入设定</strong>
+                  {(documentsByType.worldbuilding || []).slice(0, 5).map((document) => (
+                    <div key={document.id}>
+                      <span title={documentTitle(document)}>{documentTitle(document)}</span>
+                      <small>
+                        {document.chunk_count} 分块 · {document.status}
+                      </small>
+                    </div>
+                  ))}
+                  {!(documentsByType.worldbuilding || []).length && <small>当前作品还没有设定文件。</small>}
+                </div>
+                <label>
+                  故事种子
+                  <textarea rows={4} value={storySeed} onChange={(event) => setStorySeed(event.target.value)} />
+                </label>
+                <div className="writing-compact-actions">
+                  <button type="button" onClick={generateWorldbuildingDraft} disabled={!selected || busy === "worldbuilding" || modelCallBlocked}>
+                    生成草案
+                  </button>
+                  <button type="button" className="primary" onClick={confirmWorldbuildingImport} disabled={!selected || !worldbuildingDraft || busy === "confirm-worldbuilding"}>
+                    确认导入
+                  </button>
+                </div>
+                <textarea rows={18} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入当前作品。" />
               </div>
-            ) : (
-              <p className="muted">还没有历史记录。确认提纲或正文后，记录会自动出现在这里。</p>
+            )}
+
+            {assistantTab === "resources" && (
+              <div className="writing-side-card resource-card">
+                <div className="writing-side-card-head">
+                  <strong>资料库</strong>
+                  <span>{cards.length} 卡</span>
+                </div>
+                <div className="writing-card-import">
+                  <div className="writing-card-import-head">
+                    <div>
+                      <strong>拆卡导入</strong>
+                      <small>导入知识包，或把 Markdown 自动拆成知识卡。</small>
+                    </div>
+                    <label>
+                      类型
+                      <select value={uploadType} onChange={(event) => setUploadType(event.target.value)}>
+                        {KNOWLEDGE_GROUPS.map((group) => (
+                          <option key={group.key} value={group.key}>
+                            {group.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <label>
+                    知识包路径
+                    <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="knowledge_package.json" />
+                  </label>
+                  <button type="button" className="primary" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
+                    导入 knowledge_package
+                  </button>
+
+                  <label>
+                    Markdown 知识文档路径
+                    <input value={markdownSourcePath} onChange={(event) => setMarkdownSourcePath(event.target.value)} placeholder="examples/my_knowledge.md" />
+                  </label>
+                  <div className="writing-compact-actions">
+                    <button type="button" onClick={importMarkdownPath} disabled={!selected || busy === "import-md-path" || !markdownSourcePath.trim()}>
+                      自动拆卡
+                    </button>
+                    <label className="button-link compact-action">
+                      上传 MD 拆卡
+                      <input className="hidden-input" type="file" multiple accept=".md,.markdown,text/markdown,text/plain" onChange={importMarkdownFiles} disabled={!selected || busy === "import-md-files"} />
+                    </label>
+                    <button type="button" onClick={importCurrentJob} disabled={!selected || !job || busy === "import"}>
+                      导入拆书结果
+                    </button>
+                  </div>
+                </div>
+                <div className="tab-row">
+                  <button type="button" className={activeKnowledgeTab === "cards" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("cards")}>
+                    知识卡
+                  </button>
+                  <button type="button" className={activeKnowledgeTab === "docs" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("docs")}>
+                    Markdown
+                  </button>
+                  <button type="button" className={activeKnowledgeTab === "result" ? "active-tab" : ""} onClick={() => setActiveKnowledgeTab("result")}>
+                    结果
+                  </button>
+                </div>
+
+                {activeKnowledgeTab === "cards" && (
+                  <div className="writing-resource-pane">
+                    <div className="metric-grid">
+                      <div>
+                        <strong>{mergeStats?.raw_card_count ?? 0}</strong>
+                        <span>Raw</span>
+                      </div>
+                      <div>
+                        <strong>{mergeStats?.canonical_card_count ?? cards.filter((card) => card.is_canonical).length}</strong>
+                        <span>Canonical</span>
+                      </div>
+                      <div>
+                        <strong>{mergeStats?.merged_card_count ?? cards.filter((card) => card.status === "merged").length}</strong>
+                        <span>已合并</span>
+                      </div>
+                    </div>
+                    <div className="writing-compact-actions">
+                      <button type="button" onClick={() => setShowRawCards((value) => !value)}>
+                        {showRawCards ? "隐藏 Raw" : "显示 Raw"}
+                      </button>
+                      <button type="button" onClick={previewMerges} disabled={!selected || busy === "merge-preview"}>
+                        预览合并
+                      </button>
+                      <button type="button" className="primary" onClick={applySafeMerges} disabled={!selected || busy === "merge-apply"}>
+                        安全合并
+                      </button>
+                    </div>
+                    <div className="filter-chip-row">
+                      {cardFilterGroups.map((group) => (
+                        <button key={group.key} type="button" className={cardTypeFilter === group.key ? "active-chip" : ""} onClick={() => setCardTypeFilter(group.key)}>
+                          {group.label}
+                          <span>{group.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="knowledge-card-grid">
+                      {filteredCards.map((card) => (
+                        <article key={card.card_id} className={`knowledge-card-item ${selectedCardId === card.card_id ? "selected-card" : ""}`}>
+                          <div className="card-title-row">
+                            <strong>{card.title}</strong>
+                            <span className={`status-pill status-${card.status}`}>{card.status}</span>
+                          </div>
+                          <small>
+                            {card.library_type} / {card.card_type} · {card.is_canonical ? "canonical" : "raw"} · {Math.round(card.confidence * 100)}%
+                          </small>
+                          <p>{card.summary || card.content.slice(0, 180)}</p>
+                          {!!card.tags.length && (
+                            <div className="tag-row">
+                              {card.tags.slice(0, 5).map((tag) => (
+                                <span key={tag}>{tag}</span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="writing-compact-actions">
+                            <button type="button" onClick={() => setSelectedCardId(card.card_id)}>
+                              详情
+                            </button>
+                            <button type="button" onClick={() => updateCardStatus(card, card.status === "disabled" ? "approved" : "disabled")} disabled={busy === `card-${card.card_id}`}>
+                              {card.status === "disabled" ? "启用" : "禁用"}
+                            </button>
+                            <button type="button" onClick={() => regenerateMarkdown(card)} disabled={busy === `export-${card.card_id}`}>
+                              生成 MD
+                            </button>
+                            {!card.is_canonical && (
+                              <button type="button" onClick={() => unmergeCard(card)} disabled={busy === `unmerge-${card.card_id}`}>
+                                恢复
+                              </button>
+                            )}
+                            <button type="button" className="danger" onClick={() => deleteKnowledgeCard(card)} disabled={busy === `card-${card.card_id}`}>
+                              删除
+                            </button>
+                          </div>
+                          {selectedCardId === card.card_id && <pre className="card-detail">{card.content}</pre>}
+                        </article>
+                      ))}
+                      {!!cards.length && !filteredCards.length && <p className="muted">当前分类下暂无知识卡。</p>}
+                      {!cards.length && <p className="muted">还没有知识卡。</p>}
+                    </div>
+                  </div>
+                )}
+
+                {activeKnowledgeTab === "docs" && (
+                  <div className="writing-resource-pane">
+                    <div className="doc-list">
+                      {markdownDocs.map((doc) => (
+                        <button key={doc.doc_id} type="button" className={selectedDocId === doc.doc_id ? "active-file" : ""} onClick={() => openMarkdownDoc(doc.doc_id)}>
+                          <span>
+                            <strong>{doc.title}</strong>
+                            <small>
+                              {doc.library_type}/{doc.card_type} · {doc.exists ? doc.status : "missing"}
+                            </small>
+                          </span>
+                        </button>
+                      ))}
+                      {!markdownDocs.length && <p className="muted">暂无 Markdown 文档。</p>}
+                    </div>
+                    <textarea rows={14} value={markdownContent} onChange={(event) => setMarkdownContent(event.target.value)} placeholder="Markdown 内容会显示在这里。" />
+                    <div className="writing-compact-actions">
+                      <button type="button" onClick={saveMarkdownDoc} disabled={!selectedDocId || busy === `doc-save-${selectedDocId}`}>
+                        保存
+                      </button>
+                      <button type="button" className="primary" onClick={syncMarkdownDoc} disabled={!selectedDocId || busy === `doc-sync-${selectedDocId}`}>
+                        同步
+                      </button>
+                      <button type="button" className="danger" onClick={deleteMarkdownDoc} disabled={!selectedDocId || busy === `doc-delete-${selectedDocId}`}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {activeKnowledgeTab === "result" && (
+                  <div className="writing-resource-pane">
+                    <div className="metric-grid">
+                      <div>
+                        <strong>{usedKnowledge.length}</strong>
+                        <span>召回知识</span>
+                      </div>
+                      <div>
+                        <strong>{actualChars ?? draftWordCount}</strong>
+                        <span>实际字数</span>
+                      </div>
+                      <div>
+                        <strong>{longSections.length || 1}</strong>
+                        <span>分段</span>
+                      </div>
+                    </div>
+                    {!!usedKnowledge.length && (
+                      <div className="hit-list">
+                        {usedKnowledge.map((item) => (
+                          <article key={item.id}>
+                            <strong>
+                              [{item.card_type}] {item.title}
+                            </strong>
+                            <small>
+                              {item.library_type} · score {item.score}
+                            </small>
+                            {!!item.content_preview && <p>{item.content_preview}</p>}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                    {!!longSections.length && (
+                      <div className="section-progress-list">
+                        {longSections.map((section) => (
+                          <article key={section.index}>
+                            <div className="card-title-row">
+                              <strong>
+                                第 {section.index} 段 · {section.status}
+                              </strong>
+                              <span>
+                                {section.actual_chars}/{section.target_chars}
+                              </span>
+                            </div>
+                            <p>{section.focus}</p>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                    <pre>{draft || outline || "生成结果会显示在这里。"}</pre>
+                    {promptPreview && (
+                      <>
+                        <strong>Prompt Preview</strong>
+                        <pre>{promptPreview}</pre>
+                      </>
+                    )}
+                    {!!citations.length && (
+                      <div className="hit-list">
+                        {citations.map((hit) => (
+                          <article key={hit.chunk_id}>
+                            <strong>
+                              [{hit.citation_id}] {hit.original_filename}
+                            </strong>
+                            <small>
+                              {knowledgeTypeLabel(hit.knowledge_type)} · {hit.structure_path}
+                            </small>
+                            <p>{hit.text}</p>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-          )}
-
-          {!!citations.length && (
-            <div className="panel compact-form">
-              <h2>参考资料</h2>
-              <div className="hit-list">
-                {citations.map((hit) => (
-                  <article key={hit.chunk_id}>
-                    <strong>
-                      [{hit.citation_id}] {hit.original_filename}
-                    </strong>
-                    <small>
-                      {knowledgeTypeLabel(hit.knowledge_type)} · {hit.structure_path}
-                    </small>
-                    <p>{hit.text}</p>
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        </aside>
       </div>
     </section>
   );
