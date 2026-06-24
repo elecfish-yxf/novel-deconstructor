@@ -129,6 +129,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [writingModelId, setWritingModelId] = useState("");
   const [writingApiKey, setWritingApiKey] = useState("");
   const [citations, setCitations] = useState<RetrievalHit[]>([]);
+  const [mainNavTab, setMainNavTab] = useState<"memory" | "writing_guide" | "worldbuilding" | "history">("memory");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -983,7 +984,22 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         当前浏览器工作区：{getWorkspaceId()}。项目、进度、作品和文件会按这个工作区隔离，其他访客默认看不到你的进程。
       </div>
       {error && <div className="alert">{error}</div>}
-      {message && <div className="panel notice">{message}</div>}
+            {message && <div className="panel notice">{message}</div>}
+
+      <nav className="tab-row agent-nav-bar">
+        <button type="button" className={mainNavTab === "memory" ? "active-tab" : ""} onClick={() => setMainNavTab("memory")}>
+          历史 / Memory
+        </button>
+        <button type="button" className={mainNavTab === "writing_guide" ? "active-tab" : ""} onClick={() => setMainNavTab("writing_guide")}>
+          写作指南
+        </button>
+        <button type="button" className={mainNavTab === "worldbuilding" ? "active-tab" : ""} onClick={() => setMainNavTab("worldbuilding")}>
+          世界观
+        </button>
+        <button type="button" className={mainNavTab === "history" ? "active-tab" : ""} onClick={() => setMainNavTab("history")}>
+          历史记录
+        </button>
+      </nav>
 
       <div className="agent-layout">
         <aside className="panel agent-sidebar work-sidebar">
@@ -1188,6 +1204,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
             </p>
           </div>
 
+          
+          {mainNavTab === "writing_guide" && (
           <div className="knowledge-workbench panel">
             <div className="knowledge-workbench-head">
               <div>
@@ -1440,10 +1458,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     <pre>{promptPreview}</pre>
                   </>
                 )}
-              </div>
+                            </div>
             )}
           </div>
+          )}
 
+          {mainNavTab === "memory" && (
           <div className="agent-two-col">
             <form className="panel compact-form" onSubmit={searchRAG}>
               <h2>RAG 召回预览</h2>
@@ -1562,9 +1582,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 ))}
                 {!memories.length && <p className="muted">还没有 Memory。确认提纲或手动保存后会显示在这里。</p>}
               </div>
-            </div>
+                        </div>
           </div>
+          )}
 
+          {mainNavTab === "writing_guide" && (
           <div className="writing-flow">
             <form className="panel compact-form writing-step" onSubmit={generateOutline}>
               <div className="step-badge">1</div>
@@ -1716,9 +1738,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 </div>
                 <pre>{draft || (confirmedOutline ? "正文会显示在这里。" : "请先在第二个对话框确认提纲。")}</pre>
               </div>
-            </form>
+                        </form>
           </div>
+          )}
 
+          {mainNavTab === "worldbuilding" && (
           <div className="panel compact-form">
             <h2>世界观设定草案</h2>
             <p className="muted">这里生成的是原创世界观候选稿。它不会自动进入作品文件树，只有你确认后才会作为世界观设定导入当前作品。</p>
@@ -1734,8 +1758,31 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 确认导入为世界观设定
               </button>
             </div>
-            <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入当前作品。" />
+                        <textarea rows={12} value={worldbuildingDraft} onChange={(event) => setWorldbuildingDraft(event.target.value)} placeholder="生成或粘贴世界观设定，确认后导入当前作品。" />
           </div>
+          )}
+
+          {mainNavTab === "history" && (
+          <div className="panel compact-form">
+            <h2>历史记录</h2>
+            <p className="muted">当前作品的历史提纲、正文和修改记录来源于已确认的 Memory。你可以在下面重新查看已确认的内容。</p>
+            {memories.length > 0 ? (
+              <div className="hit-list memory-list">
+                {memories.map((memory) => (
+                  <article key={memory.id}>
+                    <strong>{memory.title}</strong>
+                    <small>
+                      {memory.memory_type} · {memory.source} · {memory.created_at ? new Date(memory.created_at).toLocaleString() : ""}
+                    </small>
+                    <p>{memory.content}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted">还没有历史记录。确认提纲或正文后，记录会自动出现在这里。</p>
+            )}
+          </div>
+          )}
 
           {!!citations.length && (
             <div className="panel compact-form">
