@@ -58,6 +58,56 @@ def test_import_knowledge_package_generates_cards_and_markdown(tmp_path, monkeyp
     assert "is_canonical: true" in Path(card.markdown_path).read_text(encoding="utf-8")
 
 
+def test_user_package_purges_demo_cards_and_respects_selected_library(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    demo_package = json.loads(EXAMPLE_PACKAGE.read_text(encoding="utf-8"))
+    import_knowledge_package(db, kb, demo_package, library_type="writing_guide", status="approved")
+
+    user_package = {
+        "package_id": "user-story-bible",
+        "writing_rules": [
+            {
+                "title": "Rain court oath",
+                "content": {"rule": "Every courier must answer the rain court oath before crossing the gate."},
+            }
+        ],
+    }
+
+    result = import_knowledge_package(db, kb, user_package, library_type="worldbuilding", status="approved")
+
+    cards = db.query(KnowledgeCard).order_by(KnowledgeCard.card_id).all()
+    assert result["imported_count"] == 1
+    assert len(cards) == 1
+    assert cards[0].package_id == "user-story-bible"
+    assert cards[0].library_type == "worldbuilding"
+    assert cards[0].retrievable is True
+
+
+def test_package_import_allocates_new_id_for_auto_id_collision(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    first_package = {
+        "package_id": "first-guide",
+        "writing_rules": [{"title": "First rule", "content": {"rule": "Use a concrete personal goal."}}],
+    }
+    second_package = {
+        "package_id": "second-guide",
+        "writing_rules": [{"title": "Second rule", "content": {"rule": "Turn the gate rule into an immediate cost."}}],
+    }
+
+    first = import_knowledge_package(db, kb, first_package, library_type="writing_guide", status="approved", merge_mode="off")
+    second = import_knowledge_package(db, kb, second_package, library_type="writing_guide", status="approved", merge_mode="off")
+
+    cards = db.query(KnowledgeCard).order_by(KnowledgeCard.card_id).all()
+    assert first["imported_count"] == 1
+    assert second["imported_count"] == 1
+    assert [card.card_id for card in cards] == ["WR-001", "WR-002"]
+    assert {card.package_id for card in cards} == {"first-guide", "second-guide"}
+
+
 def test_import_markdown_knowledge_source_splits_and_archives_cards(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))

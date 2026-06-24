@@ -54,7 +54,7 @@ function compactSourceRef(sourceRef: Record<string, unknown>) {
   if (!entries.length) return "";
   return entries
     .slice(0, 3)
-    .map(([key, value]) => `${key}: ${String(value)}`)
+    .map(([key, value]) => `${key}: ${typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}`)
     .join(" · ");
 }
 
@@ -99,7 +99,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebug | null>(null);
   const [usedKnowledge, setUsedKnowledge] = useState<UsedKnowledge[]>([]);
   const [promptPreview, setPromptPreview] = useState("");
-  const [packagePath, setPackagePath] = useState("examples/sample_knowledge_package.json");
+  const [packagePath, setPackagePath] = useState("");
   const [markdownSourcePath, setMarkdownSourcePath] = useState("");
   const [activeKnowledgeTab, setActiveKnowledgeTab] = useState<"cards" | "docs" | "result">("cards");
   const [cardTypeFilter, setCardTypeFilter] = useState("all");
@@ -408,7 +408,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     try {
       const result = await api.importKnowledgePackage(selected.id, {
         package_path: packagePath,
-        library_type: "writing_guide",
+        library_type: uploadType,
         status: "approved",
         merge_mode: "safe",
         markdown_scope: "canonical_only",
@@ -1091,7 +1091,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                         </div>
                         <label>
                           知识包路径
-                          <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="examples/sample_knowledge_package.json" />
+                          <input value={packagePath} onChange={(event) => setPackagePath(event.target.value)} placeholder="输入知识包 JSON 路径" />
                         </label>
                         <button type="button" onClick={importKnowledgePackage} disabled={!selected || busy === "import-package" || !packagePath.trim()}>
                           导入 knowledge_package
@@ -1343,7 +1343,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     </article>
                   ))}
                   {!!cards.length && !filteredCards.length && <p className="muted">当前分类下暂无知识卡。</p>}
-                  {!cards.length && <p className="muted">还没有知识卡。可以先导入 `examples/sample_knowledge_package.json`。</p>}
+                  {!cards.length && <p className="muted">还没有知识卡。请上传你的 Markdown 文件或导入自己的知识包。</p>}
                 </div>
               </div>
             )}
