@@ -93,6 +93,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [hits, setHits] = useState<RetrievalHit[]>([]);
   const [ragStage, setRagStage] = useState("draft");
   const [ragTopK, setRagTopK] = useState(8);
+  const [currentVolumeIndex, setCurrentVolumeIndex] = useState(1);
+  const [currentChapterIndex, setCurrentChapterIndex] = useState(1);
   const [ragResults, setRagResults] = useState<RAGSearchResult[]>([]);
   const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebug | null>(null);
   const [usedKnowledge, setUsedKnowledge] = useState<UsedKnowledge[]>([]);
@@ -182,6 +184,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const selectedWritingModelPayload = selectedWritingModel
     ? { model_provider: selectedWritingModel.provider, model: selectedWritingModel.model, api_key: writingApiKey.trim() || undefined }
     : {};
+  const currentPositionPayload = {
+    current_volume_index: currentVolumeIndex || null,
+    current_chapter_index: currentChapterIndex || null,
+  };
   const modelCallBlocked = !dryRun && !writingApiKey.trim();
 
   function clearTransientWritingState() {
@@ -587,7 +593,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setBusy("rag-search");
     setError("");
     try {
-      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK });
+      const result = await api.searchWorkRAG(selected.id, { stage: ragStage, query, top_k: ragTopK, ...currentPositionPayload });
       setRagResults(result.results);
       setRetrievalDebug(result.retrieval_debug);
     } catch (err) {
@@ -772,6 +778,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         ...selectedWritingModelPayload,
         dry_run: dryRun,
         top_k: ragTopK,
+        ...currentPositionPayload,
       });
       setOutline(result.content);
       setCitations(result.citations);
@@ -806,6 +813,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         title: `已确认提纲 ${new Date().toLocaleString()}`,
         content: outline,
         tags: ["outline"],
+        scope_level: "chapter",
+        volume_index: currentPositionPayload.current_volume_index,
+        chapter_index: currentPositionPayload.current_chapter_index,
       });
       setMemories((items) => [saved, ...items]);
       await refreshKnowledgeCards(selected.id);
@@ -840,6 +850,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: targetChars,
+        ...currentPositionPayload,
       });
       setDraft(result.content);
       setCitations(result.citations);
@@ -875,6 +886,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: targetChars,
+        ...currentPositionPayload,
       });
       storeDraftJobRef(selected.id, job.job_id);
       applyDraftJob(job);
@@ -917,6 +929,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         dry_run: dryRun,
         top_k: ragTopK,
         target_chars: actualChars || targetChars,
+        ...currentPositionPayload,
       });
       setDraft(result.content);
       setCitations(result.citations);
@@ -946,6 +959,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         content,
         tags: [type],
         source,
+        scope_level: "chapter",
+        volume_index: currentPositionPayload.current_volume_index,
+        chapter_index: currentPositionPayload.current_chapter_index,
       });
       setMemories((items) => [saved, ...items]);
       await refreshKnowledgeCards(selected.id);
@@ -1283,6 +1299,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                       <small>
                         {card.library_type} / {card.card_type} · {card.is_canonical ? "canonical" : "raw"} · evidence {card.evidence_count} · {Math.round(card.confidence * 100)}%
                       </small>
+                      <small>
+                        {card.scope_level}
+                        {card.volume_index ? ` · V${card.volume_index}` : ""}
+                        {card.chapter_index ? ` · C${card.chapter_index}` : ""} · {card.retrievable ? "retrievable" : "not retrievable"}
+                      </small>
                       {card.merged_into_card_id && <small className="source-ref">merged into {card.merged_into_card_id}</small>}
                       <p>{card.summary || card.content.slice(0, 180)}</p>
                       <div className="tag-row">
@@ -1470,6 +1491,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   top_k
                   <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
                 </label>
+                <label>
+                  Volume
+                  <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(Number(event.target.value) || 1)} />
+                </label>
+                <label>
+                  Chapter
+                  <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(Number(event.target.value) || 1)} />
+                </label>
               </div>
               <button className="primary" disabled={!selected || busy === "rag-search"}>
                 测试召回
@@ -1481,9 +1510,15 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     {retrievalDebug.stage} · top_k {retrievalDebug.top_k} · 候选 {retrievalDebug.total_candidates} · 选中 {retrievalDebug.selected_count}
                     {!!retrievalDebug.filtered_duplicate_count && ` · 去重 ${retrievalDebug.filtered_duplicate_count}`}
                   </small>
+                  <small>
+                    pos V{retrievalDebug.current_volume_index ?? "-"} / C{retrievalDebug.current_chapter_index ?? "-"} · scope{" "}
+                    {retrievalDebug.candidate_count_before_scope_filter ?? 0} → {retrievalDebug.candidate_count_after_scope_filter ?? 0} · future{" "}
+                    {retrievalDebug.filtered_by_future_count ?? 0} · status {retrievalDebug.filtered_by_status_count ?? 0}
+                  </small>
                   {retrievalDebug.raw_query && <p>raw: {retrievalDebug.raw_query}</p>}
                   <p>{retrievalDebug.preferred_card_types.join(" / ")}</p>
                   {!!retrievalDebug.expanded_terms?.length && <p>{retrievalDebug.expanded_terms.slice(0, 16).join(" / ")}</p>}
+                  {!!retrievalDebug.selected_card_ids?.length && <p>{retrievalDebug.selected_card_ids.map((id) => `${id}:${retrievalDebug.selected_card_scope?.[id] || "scope"}`).join(" / ")}</p>}
                 </div>
               )}
               <div className="hit-list">
@@ -1576,6 +1611,14 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <label>
                   RAG top_k
                   <input type="number" min={1} max={30} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                </label>
+                <label>
+                  Volume
+                  <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(Number(event.target.value) || 1)} />
+                </label>
+                <label>
+                  Chapter
+                  <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(Number(event.target.value) || 1)} />
                 </label>
               </div>
               {targetChars > 2500 && <small className="warn-cell">目标字数较长，正文生成会自动分段并合并结果。</small>}
@@ -1681,6 +1724,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                             title: `正文片段 ${new Date().toLocaleString()}`,
                             content: draft,
                             tags: ["draft"],
+                            scope_level: "chapter",
+                            volume_index: currentPositionPayload.current_volume_index,
+                            chapter_index: currentPositionPayload.current_chapter_index,
                           });
                           setMemories((items) => [saved, ...items]);
                           await refreshKnowledgeCards(selected.id);

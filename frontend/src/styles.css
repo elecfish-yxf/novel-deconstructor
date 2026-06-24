@@ -61,8 +61,10 @@ button.danger {
 
 .app-shell {
   min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .sidebar {
@@ -72,6 +74,8 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .brand {
@@ -143,6 +147,8 @@ nav button.active {
   padding: 28px;
   max-width: 1380px;
   width: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .auth-shell {
@@ -564,12 +570,15 @@ th {
   display: grid;
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 16px;
+  min-height: calc(100vh - 112px);
+  min-width: 0;
 }
 
 .agent-sidebar {
   align-self: start;
   display: grid;
   gap: 14px;
+  min-height: 0;
 }
 
 .work-sidebar {
@@ -767,6 +776,8 @@ th {
 .agent-main {
   display: grid;
   gap: 16px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .agent-two-col {
@@ -779,6 +790,10 @@ th {
 .knowledge-workbench {
   padding: 0;
   overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 132px);
+  min-height: 0;
 }
 
 .knowledge-workbench-head {
@@ -811,6 +826,8 @@ th {
   display: grid;
   gap: 12px;
   padding: 14px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .metric-grid {
@@ -886,8 +903,11 @@ th {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
-  max-height: 540px;
-  overflow: auto;
+  max-height: min(620px, calc(100vh - 430px));
+  min-height: 240px;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .knowledge-card-item {
@@ -938,7 +958,7 @@ th {
 }
 
 .card-detail {
-  max-height: 240px;
+  max-height: min(360px, 45vh);
   overflow: auto;
   white-space: pre-wrap;
   background: #0f172a;
@@ -953,14 +973,17 @@ th {
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .doc-list {
   display: grid;
   gap: 8px;
   align-content: start;
-  max-height: 540px;
-  overflow: auto;
+  max-height: min(620px, calc(100vh - 230px));
+  min-height: 220px;
+  overflow-y: auto;
 }
 
 .doc-list button {
@@ -980,16 +1003,26 @@ th {
   display: grid;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+}
+
+.doc-editor textarea {
+  min-height: 0;
+  max-height: calc(100vh - 310px);
+  overflow: auto;
 }
 
 .generation-result-panel {
   padding: 14px;
   display: grid;
   gap: 12px;
+  min-height: 0;
+  max-height: calc(100vh - 210px);
+  overflow-y: auto;
 }
 
 .generation-result-panel pre {
-  max-height: 420px;
+  max-height: min(520px, 50vh);
   overflow: auto;
   white-space: pre-wrap;
   background: #f8fafc;
@@ -1006,6 +1039,8 @@ th {
   background: #eff6ff;
   border-radius: 8px;
   padding: 10px;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .retrieval-debug p {
@@ -1091,8 +1126,9 @@ th {
 .hit-list {
   display: grid;
   gap: 10px;
-  max-height: 420px;
-  overflow: auto;
+  max-height: min(460px, 50vh);
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .hit-list article {
@@ -1192,10 +1228,30 @@ th {
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .sidebar {
     position: static;
+    overflow: visible;
+  }
+
+  .workspace {
+    overflow: visible;
+  }
+
+  .agent-layout,
+  .knowledge-workbench,
+  .generation-result-panel {
+    min-height: 0;
+    max-height: none;
+  }
+
+  .knowledge-card-grid,
+  .doc-list,
+  .doc-editor textarea {
+    max-height: 70vh;
   }
 
   .form-grid,

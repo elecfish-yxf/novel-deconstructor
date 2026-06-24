@@ -24,6 +24,19 @@ CHAPTER_HEADING_RE = re.compile(
     r")\s*$",
     re.IGNORECASE,
 )
+VOLUME_HEADING_RE = re.compile(
+    rf"^\s*("
+    rf"第\s*{HEADING_NUMBER}\s*[卷部](?:\s*[:：、.\-—]\s*.{{0,80}})?"
+    rf"|[卷部]\s*{HEADING_NUMBER}(?:\s*[:：、.\-—]\s*.{{0,80}})?"
+    rf"|Volume\s+{HEADING_NUMBER}(?:\s*[:：、.\-—]\s*.{{0,80}})?"
+    rf"|Book\s+{HEADING_NUMBER}(?:\s*[:：、.\-—]\s*.{{0,80}})?"
+    rf"|Part\s+{HEADING_NUMBER}(?:\s*[:：、.\-—]\s*.{{0,80}})?"
+    r"|上卷(?:\s*[:：、.\-—]\s*.{0,80})?"
+    r"|中卷(?:\s*[:：、.\-—]\s*.{0,80})?"
+    r"|下卷(?:\s*[:：、.\-—]\s*.{0,80})?"
+    r")\s*$",
+    re.IGNORECASE,
+)
 DECORATION_RE = re.compile(r"^[\s#>*\-_=~★☆◆◇●○◎【\[\(（《〈「『]+|[\s#<*\-_=~★☆◆◇●○◎】\]\)）》〉」』]+$")
 FRONT_MATTER_MARKERS = [
     "书名",
@@ -63,6 +76,13 @@ def is_chapter_heading(line: str) -> bool:
     return bool(CHAPTER_HEADING_RE.match(text))
 
 
+def is_volume_heading(line: str) -> bool:
+    text = normalize_heading_text(line)
+    if not text or len(text) > 120:
+        return False
+    return bool(VOLUME_HEADING_RE.match(text))
+
+
 def normalize_heading_text(line: str) -> str:
     text = line.strip().replace("\u3000", " ")
     text = DECORATION_RE.sub("", text).strip()
@@ -100,6 +120,8 @@ def _write_artifact(
     text: str,
     char_start: int,
     split_reason: str,
+    volume_index: int = 1,
+    volume_title: str = "Volume 1",
 ) -> ChapterArtifact:
     char_end = char_start + len(text)
     stable_id = _stable_id(source_file_id, title, char_start, char_end)
@@ -108,7 +130,10 @@ def _write_artifact(
     metadata_path = output_dir / f"chunk_{chapter_index:04d}.metadata.json"
     metadata = {
         "id": stable_id,
+        "volume_index": volume_index,
+        "volume_title": volume_title,
         "chapter_index": chapter_index,
+        "chapter_title": title,
         "title": title,
         "char_start": char_start,
         "char_end": char_end,
@@ -152,7 +177,7 @@ def _count_headings(path: Path) -> int:
     count = 0
     with path.open("r", encoding="utf-8") as source:
         for line in source:
-            if is_chapter_heading(line):
+            if is_volume_heading(line) or is_chapter_heading(line):
                 count += 1
     return count
 
@@ -187,20 +212,61 @@ def _split_by_headings(
 ) -> list[ChapterArtifact]:
     text = raw_text_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
-    headings: list[tuple[int, str]] = []
+    markers: list[dict] = []
     absolute_pos = 0
+    volume_index = 1
+    volume_title = "Volume 1"
+    saw_explicit_volume = False
     for line in lines:
-        if is_chapter_heading(line):
-            headings.append((absolute_pos, normalize_heading_text(line)))
+        normalized = normalize_heading_text(line)
+        if is_volume_heading(line):
+            volume_index = volume_index + 1 if saw_explicit_volume else 1
+            volume_title = normalized or f"Volume {volume_index}"
+            saw_explicit_volume = True
+            markers.append(
+                {
+                    "kind": "volume",
+                    "pos": absolute_pos,
+                    "title": volume_title,
+                    "volume_index": volume_index,
+                    "volume_title": volume_title,
+                }
+            )
+        elif is_chapter_heading(line):
+            markers.append(
+                {
+                    "kind": "chapter",
+                    "pos": absolute_pos,
+                    "title": normalized,
+                    "volume_index": volume_index,
+                    "volume_title": volume_title,
+                }
+            )
         absolute_pos += len(line)
 
-    headings = _drop_front_matter_headings(text, headings)
-    if not headings:
+    raw_headings = [(int(marker["pos"]), str(marker["title"])) for marker in markers if marker["kind"] == "chapter"]
+    headings = _drop_front_matter_headings(text, raw_headings)
+    retained_chapter_positions = {start for start, _ in headings}
+    first_retained_start = min(retained_chapter_positions) if retained_chapter_positions else 0
+    markers = [
+        marker
+        for marker in markers
+        if (marker["kind"] == "volume" or int(marker["pos"]) >= first_retained_start)
+        and (marker["kind"] != "chapter" or int(marker["pos"]) in retained_chapter_positions)
+    ]
+    if not markers:
         return _split_by_size(raw_text_path, output_dir, source_file_id, max_chars, overlap_chars)
 
     artifacts: list[ChapterArtifact] = []
 
-    def write_chapter(title: str, chapter_text: str, chapter_start: int, reason: str) -> None:
+    def write_chapter(
+        title: str,
+        chapter_text: str,
+        chapter_start: int,
+        reason: str,
+        marker_volume_index: int,
+        marker_volume_title: str,
+    ) -> None:
         chapter_text = chapter_text.strip("\n")
         if not chapter_text.strip():
             return
@@ -216,17 +282,31 @@ def _split_by_headings(
                     part_text,
                     chapter_start + offset,
                     reason if part_index == 1 else "chapter_too_long",
+                    marker_volume_index,
+                    marker_volume_title,
                 )
             )
 
-    first_start = headings[0][0]
+    first_start = int(markers[0]["pos"])
     preface = text[:first_start]
     if preface.strip() and not _looks_like_front_matter(preface):
-        write_chapter("开篇", preface, 0, "preface")
+        write_chapter("开篇", preface, 0, "preface", 1, "Volume 1")
 
-    for index, (start, chapter_title) in enumerate(headings):
-        end = headings[index + 1][0] if index + 1 < len(headings) else len(text)
-        write_chapter(chapter_title, text[start:end], start, "chapter_heading")
+    for index, marker in enumerate(markers):
+        start = int(marker["pos"])
+        end = int(markers[index + 1]["pos"]) if index + 1 < len(markers) else len(text)
+        title = str(marker["title"])
+        segment = text[start:end]
+        if marker["kind"] == "volume" and not _volume_segment_has_body(segment, title):
+            continue
+        write_chapter(
+            title,
+            segment,
+            start,
+            "chapter_heading" if marker["kind"] == "chapter" else "volume_heading",
+            int(marker["volume_index"]),
+            str(marker["volume_title"]),
+        )
     return artifacts
 
 
@@ -255,6 +335,20 @@ def _looks_like_front_matter(text: str) -> bool:
     marker_hits = sum(1 for marker in FRONT_MATTER_MARKERS if marker in text)
     first_nonempty = next((line for line in text.splitlines() if line.strip()), "")
     return marker_hits >= 2 and is_chapter_heading(first_nonempty)
+
+
+def _volume_segment_has_body(segment: str, volume_title: str) -> bool:
+    lines = segment.splitlines()
+    body_lines = []
+    skipped_heading = False
+    for line in lines:
+        normalized = normalize_heading_text(line)
+        if not skipped_heading and normalized == normalize_heading_text(volume_title):
+            skipped_heading = True
+            continue
+        if line.strip():
+            body_lines.append(line.strip())
+    return bool(body_lines)
 
 
 def _split_by_size(

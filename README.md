@@ -184,10 +184,20 @@ npm run dev
 
 KnowledgeCard / Markdown / Canonical Card 的关系：
 
-- Raw Card：从知识包或 Markdown 中导入的原始卡片，保留来源和证据。
-- Canonical Card：人工确认或安全合并后的主卡片，默认参与 RAG 检索。
+- Raw Evidence / Raw Card：从知识包或 Markdown 中导入的原始卡片，保留来源和证据，默认 `status=raw_extracted`、`is_canonical=false`、`retrievable=false`。
+- Canonical Knowledge / Canonical Card：人工确认或安全合并后的主卡片；只有 `reviewed` / `approved`、`is_canonical=true`、`retrievable=true` 的卡片默认参与 RAG 检索。
 - Markdown Doc：给人编辑的知识文档，可同步回结构化卡片。
-- disabled / deleted / merged-away 卡片默认不参与检索。
+- disabled / deleted / deprecated / superseded / merged-away 卡片默认不参与检索。
+
+每张 KnowledgeCard 都有明确作用域，不再用 `source_ref` 判断召回范围：
+
+- `scope_level=global`：全局知识，通常适合 `writing_guide`。
+- `scope_level=volume`：当前卷及之前卷可见。
+- `scope_level=chapter`：当前章节及之前章节可见。
+- `volume_index` / `chapter_index` 描述卡片所属位置。
+- `reveal_at_*` / `valid_from_*` / `valid_until_*` 控制何时可见、何时过期。
+
+`source_ref` 只用于证据追踪。它说明知识来自哪里，但不再决定 RAG 能不能召回这张卡。写第 1 卷第 5 章时，RAG 会在关键词评分前先硬过滤第 1 卷第 6 章、第 2 卷以及未来才揭示的 worldbuilding / memory，避免未来章节泄漏。
 
 拆书结果默认应进入 `writing_guide`。只有用户原创或明确确认的新作品事实，才应进入 `worldbuilding`。已经确认的提纲、正文片段和连续性备注，才应进入 `memory`。
 
@@ -219,7 +229,9 @@ Lightweight RAG Writing Agent Loop：
 user task
   -> task_type / phase
   -> query expansion
-  -> canonical cards first
+  -> knowledge base + library filter
+  -> reviewed/approved + canonical + retrievable filter
+  -> global / volume / chapter scope hard filter
   -> keyword + tag + card_type scoring
   -> duplicate/diversity filtering
   -> prompt assembly
@@ -228,7 +240,7 @@ user task
   -> confirmed output writes Memory
 ```
 
-这套 RAG 的重点是可解释和轻量：你能看到召回了哪些卡片、为什么进入 Prompt、哪些重复内容被过滤。它不是生产级 GraphRAG，也不是完整向量数据库。
+这套 RAG 的重点是可解释和轻量：你能看到召回了哪些卡片、scope 过滤前后候选数、哪些未来知识被过滤、哪些重复内容被过滤。它仍然不是生产级向量 RAG，没有集成 Qdrant、Chroma、Milvus 或 pgvector；本轮实现的是 scope-safe lightweight RAG。
 
 ## Long Text Generation
 

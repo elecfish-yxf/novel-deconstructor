@@ -56,8 +56,11 @@ CARD_PREFIXES = {
     "item": "IT",
 }
 VALID_LIBRARY_TYPES = {"writing_guide", "worldbuilding", "memory"}
-VALID_STATUSES = {"raw_extracted", "approved", "merged", "disabled", "deleted", "deprecated"}
-ACTIVE_STATUSES = {"raw_extracted", "approved"}
+VALID_STATUSES = {"raw_extracted", "reviewed", "approved", "merged", "disabled", "deleted", "deprecated", "superseded"}
+RETRIEVABLE_STATUSES = {"reviewed", "approved"}
+BLOCKED_STATUSES = {"deleted", "deprecated", "superseded", "merged", "disabled"}
+ACTIVE_STATUSES = RETRIEVABLE_STATUSES
+VALID_SCOPE_LEVELS = {"global", "volume", "chapter"}
 AUTO_MERGE_THRESHOLD = 0.88
 REVIEW_MERGE_THRESHOLD = 0.72
 SEMANTIC_MERGE_CARD_TYPES = {
@@ -162,7 +165,26 @@ def normalize_status(value: str | None, default: str = "raw_extracted") -> str:
 
 def normalize_card_type(value: str | None, fallback: str = "writing_rule") -> str:
     cleaned = (value or fallback).strip()
-    return CARD_COLLECTIONS.get(cleaned, cleaned)
+    aliases = {
+        "WritingRule": "writing_rule",
+        "EmotionModule": "emotion_module",
+        "ConflictPattern": "conflict_pattern",
+        "AntiPattern": "anti_pattern",
+        "StylePattern": "style_pattern",
+        "InformationPattern": "information_pattern",
+        "ChapterAnalysis": "chapter_analysis",
+        "Memory": "memory",
+        "WorldbuildingFact": "worldbuilding",
+    }
+    if cleaned in aliases:
+        return aliases[cleaned]
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", cleaned).lower()
+    return CARD_COLLECTIONS.get(cleaned, CARD_COLLECTIONS.get(snake, snake))
+
+
+def normalize_scope_level(value: str | None, default: str = "global") -> str:
+    cleaned = (value or default or "global").strip().lower()
+    return cleaned if cleaned in VALID_SCOPE_LEVELS else default
 
 
 def select_preferred_card_types(stage: str) -> list[str]:
@@ -175,6 +197,56 @@ def select_preferred_card_types(stage: str) -> list[str]:
         "worldbuilding_check": ["worldbuilding", "memory", "character", "location", "faction", "rule"],
     }
     return mapping.get((stage or "").strip(), ["writing_rule", "emotion_module", "anti_pattern", "memory"])
+
+
+def is_after(
+    volume_a: int | None,
+    chapter_a: int | None,
+    volume_b: int | None,
+    chapter_b: int | None,
+) -> bool:
+    if volume_a is None or volume_b is None:
+        return False
+    if volume_a > volume_b:
+        return True
+    if volume_a == volume_b and chapter_a is not None and chapter_b is not None:
+        return chapter_a > chapter_b
+    return False
+
+
+def is_before(
+    volume_a: int | None,
+    chapter_a: int | None,
+    volume_b: int | None,
+    chapter_b: int | None,
+) -> bool:
+    if volume_a is None or volume_b is None:
+        return False
+    if volume_a < volume_b:
+        return True
+    if volume_a == volume_b and chapter_a is not None and chapter_b is not None:
+        return chapter_a < chapter_b
+    return False
+
+
+def is_card_visible_for_position(
+    card: KnowledgeCard,
+    current_volume_index: int | None,
+    current_chapter_index: int | None,
+    *,
+    include_future: bool = False,
+    include_raw: bool = False,
+    allowed_scope_levels: list[str] | None = None,
+) -> bool:
+    if _card_status_filter_reason(card, include_raw=include_raw):
+        return False
+    return _card_scope_filter_reason(
+        card,
+        current_volume_index,
+        current_chapter_index,
+        include_future=include_future,
+        allowed_scope_levels=allowed_scope_levels,
+    ) is None
 
 
 def knowledge_docs_root(knowledge_base: KnowledgeBase) -> Path:
@@ -206,7 +278,11 @@ def import_knowledge_package(
     seen_fingerprints: set[tuple[str, str, str]] = set()
 
     for source_key, raw_card in _iter_package_cards(package):
-        card_type = normalize_card_type(raw_card.get("card_type") or raw_card.get("type") or CARD_COLLECTIONS[source_key])
+        default_card_type = CARD_COLLECTIONS.get(source_key) or raw_card.get("card_type") or raw_card.get("type") or "writing_rule"
+        card_type = normalize_card_type(raw_card.get("card_type") or raw_card.get("type") or default_card_type)
+        card_library = normalize_library_type(str(raw_card.get("library_type") or raw_card.get("layer") or normalized_library), normalized_library)
+        card_status = normalize_status(str(raw_card.get("status") or normalized_status), normalized_status)
+        is_canonical = _default_is_canonical(raw_card, card_status)
         counters[card_type] += 1
         card_id = _card_id(raw_card, card_type, counters[card_type])
         if card_id in seen_ids:
@@ -224,15 +300,16 @@ def import_knowledge_package(
         title = _card_title(raw_card, card_type, card_id)
         content = _card_content(raw_card, card_type)
         fingerprint = content_fingerprint(title, content, _avoid_text(raw_card), _tags(raw_card, card_type))
-        fingerprint_key = (normalized_library, card_type, fingerprint)
+        fingerprint_key = (card_library, card_type, fingerprint)
         if fingerprint in {item[2] for item in seen_fingerprints if item[:2] == fingerprint_key[:2]}:
             exact_duplicates += 1
         seen_fingerprints.add(fingerprint_key)
         source_ref = _source_ref(package, raw_card, source_key)
+        scope = _scope_values(raw_card, source_ref, card_library, card_type)
         card = KnowledgeCard(
             knowledge_base_id=knowledge_base.id,
             card_id=card_id,
-            library_type=normalized_library,
+            library_type=card_library,
             card_type=card_type,
             title=title,
             content=content,
@@ -242,13 +319,26 @@ def import_knowledge_package(
             use_when_json=_json(_as_list(raw_card.get("use_when"))),
             avoid=_avoid_text(raw_card),
             confidence=_confidence(raw_card),
-            status=normalized_status,
+            status=card_status,
             source_kind="knowledge_package",
             package_id=str(package.get("package_id") or ""),
-            is_canonical=True,
+            is_canonical=is_canonical,
             merged_from_ids_json=_json([card_id]),
             evidence_count=1,
             content_fingerprint=fingerprint,
+            scope_level=scope["scope_level"],
+            volume_index=scope["volume_index"],
+            volume_title=scope["volume_title"],
+            chapter_index=scope["chapter_index"],
+            chapter_title=scope["chapter_title"],
+            valid_from_volume_index=scope["valid_from_volume_index"],
+            valid_from_chapter_index=scope["valid_from_chapter_index"],
+            valid_until_volume_index=scope["valid_until_volume_index"],
+            valid_until_chapter_index=scope["valid_until_chapter_index"],
+            reveal_at_volume_index=scope["reveal_at_volume_index"],
+            reveal_at_chapter_index=scope["reveal_at_chapter_index"],
+            retrievable=_default_retrievable(raw_card, card_library, card_status, is_canonical),
+            priority=_int_or_none(raw_card.get("priority")) or 0,
         )
         card.markdown_path = str(card_markdown_path(knowledge_base, card))
         db.add(card)
@@ -360,6 +450,9 @@ def import_markdown_knowledge_source(
             "heading_path": section.get("heading_path", []),
             "section_index": index,
         }
+        raw_scope = {**frontmatter, "title": section_title}
+        scope = _scope_values(raw_scope, source_ref, normalized_library, card_type)
+        is_canonical = _default_is_canonical(raw_scope, normalized_status)
         card = KnowledgeCard(
             knowledge_base_id=knowledge_base.id,
             card_id=card_id,
@@ -376,10 +469,23 @@ def import_markdown_knowledge_source(
             status=normalized_status,
             source_kind="markdown_import",
             package_id="",
-            is_canonical=True,
+            is_canonical=is_canonical,
             merged_from_ids_json=_json([card_id]),
             evidence_count=1,
             content_fingerprint=content_fingerprint(section_title, section_body, section_body if card_type == "anti_pattern" else "", tags),
+            scope_level=scope["scope_level"],
+            volume_index=scope["volume_index"],
+            volume_title=scope["volume_title"],
+            chapter_index=scope["chapter_index"],
+            chapter_title=scope["chapter_title"],
+            valid_from_volume_index=scope["valid_from_volume_index"],
+            valid_from_chapter_index=scope["valid_from_chapter_index"],
+            valid_until_volume_index=scope["valid_until_volume_index"],
+            valid_until_chapter_index=scope["valid_until_chapter_index"],
+            reveal_at_volume_index=scope["reveal_at_volume_index"],
+            reveal_at_chapter_index=scope["reveal_at_chapter_index"],
+            retrievable=_default_retrievable(raw_scope, normalized_library, normalized_status, is_canonical),
+            priority=_int_or_none(frontmatter.get("priority")) or 0,
         )
         card.markdown_path = str(card_markdown_path(knowledge_base, card))
         db.add(card)
@@ -431,6 +537,19 @@ def sync_memory_card(db: Session, knowledge_base: KnowledgeBase, memory: Writing
     card.merged_from_ids_json = _json([card_id])
     card.evidence_count = 1
     card.content_fingerprint = content_fingerprint(card.title, card.content, card.avoid, tags)
+    card.scope_level = normalize_scope_level(memory.scope_level, "chapter")
+    card.volume_index = memory.volume_index
+    card.volume_title = memory.volume_title
+    card.chapter_index = memory.chapter_index
+    card.chapter_title = memory.chapter_title
+    card.valid_from_volume_index = memory.valid_from_volume_index
+    card.valid_from_chapter_index = memory.valid_from_chapter_index
+    card.valid_until_volume_index = memory.valid_until_volume_index
+    card.valid_until_chapter_index = memory.valid_until_chapter_index
+    card.reveal_at_volume_index = memory.reveal_at_volume_index
+    card.reveal_at_chapter_index = memory.reveal_at_chapter_index
+    card.retrievable = bool(memory.retrievable)
+    card.priority = memory.priority or 0
     card.markdown_path = str(card_markdown_path(knowledge_base, card))
     db.flush()
     write_card_markdown(knowledge_base, card)
@@ -463,6 +582,19 @@ def card_to_read(card: KnowledgeCard) -> dict[str, Any]:
         "merged_from_ids": _json_list(card.merged_from_ids_json),
         "evidence_count": card.evidence_count or 1,
         "content_fingerprint": card.content_fingerprint or "",
+        "scope_level": card.scope_level or "global",
+        "volume_index": card.volume_index,
+        "volume_title": card.volume_title,
+        "chapter_index": card.chapter_index,
+        "chapter_title": card.chapter_title,
+        "valid_from_volume_index": card.valid_from_volume_index,
+        "valid_from_chapter_index": card.valid_from_chapter_index,
+        "valid_until_volume_index": card.valid_until_volume_index,
+        "valid_until_chapter_index": card.valid_until_chapter_index,
+        "reveal_at_volume_index": card.reveal_at_volume_index,
+        "reveal_at_chapter_index": card.reveal_at_chapter_index,
+        "retrievable": bool(card.retrievable),
+        "priority": card.priority or 0,
         "created_at": card.created_at,
         "updated_at": card.updated_at,
     }
@@ -472,7 +604,8 @@ def card_markdown_path(knowledge_base: KnowledgeBase, card: KnowledgeCard) -> Pa
     library = secure_slug(card.library_type or "writing_guide", "writing_guide")
     card_type = secure_slug(card.card_type or "card", "card")
     filename = f"{secure_slug(card.card_id or card.title, 'card')}.md"
-    return knowledge_docs_root(knowledge_base) / library / card_type / filename
+    scope_dir = _scope_markdown_dir(card)
+    return knowledge_docs_root(knowledge_base) / library / scope_dir / card_type / filename
 
 
 def write_card_markdown(knowledge_base: KnowledgeBase, card: KnowledgeCard) -> Path:
@@ -498,6 +631,19 @@ def render_card_markdown(card: KnowledgeCard) -> str:
             "evidence_count": card.evidence_count or 1,
             "merged_from": _json_list(card.merged_from_ids_json),
             "confidence": card.confidence,
+            "scope_level": card.scope_level or "global",
+            "volume_index": card.volume_index,
+            "volume_title": card.volume_title,
+            "chapter_index": card.chapter_index,
+            "chapter_title": card.chapter_title,
+            "valid_from_volume_index": card.valid_from_volume_index,
+            "valid_from_chapter_index": card.valid_from_chapter_index,
+            "valid_until_volume_index": card.valid_until_volume_index,
+            "valid_until_chapter_index": card.valid_until_chapter_index,
+            "reveal_at_volume_index": card.reveal_at_volume_index,
+            "reveal_at_chapter_index": card.reveal_at_chapter_index,
+            "retrievable": bool(card.retrievable),
+            "priority": card.priority or 0,
             "tags": tags,
             "use_when": use_when,
             "source_ref": source_ref,
@@ -593,6 +739,19 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
         "card_type": "card_type",
         "status": "status",
         "confidence": "confidence",
+        "scope_level": "scope_level",
+        "volume_index": "volume_index",
+        "volume_title": "volume_title",
+        "chapter_index": "chapter_index",
+        "chapter_title": "chapter_title",
+        "valid_from_volume_index": "valid_from_volume_index",
+        "valid_from_chapter_index": "valid_from_chapter_index",
+        "valid_until_volume_index": "valid_until_volume_index",
+        "valid_until_chapter_index": "valid_until_chapter_index",
+        "reveal_at_volume_index": "reveal_at_volume_index",
+        "reveal_at_chapter_index": "reveal_at_chapter_index",
+        "retrievable": "retrievable",
+        "priority": "priority",
     }
     for source_key, attr in field_map.items():
         if source_key not in frontmatter:
@@ -609,6 +768,24 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
                 value = float(value)
             except (TypeError, ValueError):
                 continue
+        elif attr == "scope_level":
+            value = normalize_scope_level(str(value), card.scope_level)
+        elif attr == "retrievable":
+            value = _bool_value(value, bool(card.retrievable))
+        elif attr in {
+            "volume_index",
+            "chapter_index",
+            "valid_from_volume_index",
+            "valid_from_chapter_index",
+            "valid_until_volume_index",
+            "valid_until_chapter_index",
+            "reveal_at_volume_index",
+            "reveal_at_chapter_index",
+            "priority",
+        }:
+            value = _int_or_none(value)
+            if attr == "priority" and value is None:
+                value = 0
         if getattr(card, attr) != value:
             setattr(card, attr, value)
             updated.append(attr)
@@ -819,6 +996,11 @@ def search_knowledge_cards(
     top_k: int = 8,
     library_type: str | None = None,
     include_inactive: bool = False,
+    current_volume_index: int | None = None,
+    current_chapter_index: int | None = None,
+    include_future: bool = False,
+    include_raw: bool = False,
+    allowed_scope_levels: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     limit = max(1, min(top_k or 8, 30))
     preferred_card_types = select_preferred_card_types(stage)
@@ -828,13 +1010,43 @@ def search_knowledge_cards(
         cards_query = cards_query.filter(KnowledgeCard.knowledge_base_id.in_(knowledge_base_ids))
     if library_type:
         cards_query = cards_query.filter(KnowledgeCard.library_type == library_type)
-    if not include_inactive:
-        cards_query = cards_query.filter(KnowledgeCard.status.in_(ACTIVE_STATUSES))
-        cards_query = cards_query.filter(KnowledgeCard.is_canonical.is_(True))
-    candidates = cards_query.all()
+    base_candidates = cards_query.all()
+    status_candidates: list[KnowledgeCard] = []
+    filtered_by_status_count = 0
+    for card in base_candidates:
+        reason = _card_status_filter_reason(card, include_raw=include_raw)
+        if reason and not include_inactive:
+            filtered_by_status_count += 1
+            continue
+        if reason in {"blocked_status", "not_retrievable"}:
+            filtered_by_status_count += 1
+            continue
+        status_candidates.append(card)
+
+    visible_candidates: list[KnowledgeCard] = []
+    filtered_by_scope_count = 0
+    filtered_by_future_count = 0
+    for card in status_candidates:
+        reason = _card_scope_filter_reason(
+            card,
+            current_volume_index,
+            current_chapter_index,
+            include_future=include_future,
+            allowed_scope_levels=allowed_scope_levels,
+        )
+        if reason is None:
+            visible_candidates.append(card)
+            continue
+        if reason == "future":
+            filtered_by_future_count += 1
+        else:
+            filtered_by_scope_count += 1
+
     scored: list[tuple[float, KnowledgeCard]] = []
-    for card in candidates:
+    for card in visible_candidates:
         score = _score_card(card, expanded_query["query"], stage, preferred_card_types, expanded_query["expanded_terms"])
+        if card.priority:
+            score += min(max(card.priority, 0), 100) / 100
         if score > 0:
             scored.append((score, card))
     scored.sort(key=lambda item: (item[0], _card_sort_time(item[1])), reverse=True)
@@ -845,7 +1057,16 @@ def search_knowledge_cards(
         "raw_query": expanded_query["raw_query"],
         "expanded_terms": expanded_query["expanded_terms"],
         "preferred_card_types": preferred_card_types,
-        "total_candidates": len(candidates),
+        "total_candidates": len(base_candidates),
+        "current_volume_index": current_volume_index,
+        "current_chapter_index": current_chapter_index,
+        "candidate_count_before_scope_filter": len(status_candidates),
+        "candidate_count_after_scope_filter": len(visible_candidates),
+        "filtered_by_status_count": filtered_by_status_count,
+        "filtered_by_scope_count": filtered_by_scope_count,
+        "filtered_by_future_count": filtered_by_future_count,
+        "selected_card_ids": [card.card_id for _, card in selected],
+        "selected_card_scope": {card.card_id: _scope_label(card) for _, card in selected},
         "selected_count": len(results),
         "filtered_duplicate_count": filtered_duplicate_count,
         "diversity_buckets": diversity_buckets,
@@ -867,6 +1088,9 @@ def used_knowledge_from_results(results: list[dict[str, Any]]) -> list[dict[str,
             "content_preview": item.get("content_preview", ""),
             "tags": item.get("tags", []),
             "status": item.get("status"),
+            "scope_level": item.get("scope_level"),
+            "volume_index": item.get("volume_index"),
+            "chapter_index": item.get("chapter_index"),
         }
         for item in results
     ]
@@ -1087,6 +1311,9 @@ def _iter_package_cards(package: dict[str, Any]) -> list[tuple[str, dict[str, An
             item = dict(value)
             item.setdefault("type", card_type)
             cards.append((key, item))
+    canonical_cards = package.get("canonical_cards")
+    if isinstance(canonical_cards, list):
+        cards.extend(("canonical_cards", item) for item in canonical_cards if isinstance(item, dict))
     return cards
 
 
@@ -1106,6 +1333,9 @@ def _card_title(raw: dict[str, Any], card_type: str, card_id: str) -> str:
 
 
 def _card_content(raw: dict[str, Any], card_type: str) -> str:
+    raw_values = dict(raw)
+    if isinstance(raw.get("content"), dict):
+        raw_values.update(raw["content"])
     field_groups = {
         "chapter_analysis": [
             "summary",
@@ -1133,14 +1363,14 @@ def _card_content(raw: dict[str, Any], card_type: str) -> str:
         fields = [key for key in raw if key not in {"id", "card_id", "type", "title", "name", "tags", "source", "source_ref", "status", "confidence"}]
     lines: list[str] = []
     for field in fields:
-        if field not in raw:
+        if field not in raw_values:
             continue
-        text = _value_markdown(field, raw[field])
+        text = _value_markdown(field, raw_values[field])
         if text:
             lines.append(text)
     if lines:
         return "\n\n".join(lines)
-    return json.dumps(raw, ensure_ascii=False, indent=2)
+    return json.dumps(raw_values, ensure_ascii=False, indent=2)
 
 
 def _value_markdown(label: str, value: Any) -> str:
@@ -1183,7 +1413,180 @@ def _source_ref(package: dict[str, Any], raw: dict[str, Any], source_key: str) -
         value = raw.get(key)
         if isinstance(value, dict):
             source_ref.update(value)
+    source_refs = raw.get("source_refs")
+    if isinstance(source_refs, list):
+        source_ref["source_refs"] = [item for item in source_refs if isinstance(item, dict)]
     return source_ref
+
+
+def _scope_values(
+    raw: dict[str, Any],
+    source_ref: dict[str, Any],
+    library_type: str,
+    card_type: str,
+) -> dict[str, Any]:
+    volume_index = _first_int(raw, source_ref, "volume_index")
+    chapter_index = _first_int(raw, source_ref, "chapter_index")
+    scope_default = "global"
+    if chapter_index is not None:
+        scope_default = "chapter"
+    elif volume_index is not None:
+        scope_default = "volume"
+    if library_type == "writing_guide":
+        scope_default = "global"
+    if card_type == "chapter_analysis":
+        scope_default = "chapter"
+    scope_level = normalize_scope_level(str(raw.get("scope_level") or raw.get("scope") or scope_default), scope_default)
+    return {
+        "scope_level": scope_level,
+        "volume_index": volume_index,
+        "volume_title": _first_text(raw, source_ref, "volume_title"),
+        "chapter_index": chapter_index,
+        "chapter_title": _first_text(raw, source_ref, "chapter_title") or _first_text(raw, source_ref, "chapter"),
+        "valid_from_volume_index": _first_int(raw, source_ref, "valid_from_volume_index"),
+        "valid_from_chapter_index": _first_int(raw, source_ref, "valid_from_chapter_index"),
+        "valid_until_volume_index": _first_int(raw, source_ref, "valid_until_volume_index"),
+        "valid_until_chapter_index": _first_int(raw, source_ref, "valid_until_chapter_index"),
+        "reveal_at_volume_index": _first_int(raw, source_ref, "reveal_at_volume_index"),
+        "reveal_at_chapter_index": _first_int(raw, source_ref, "reveal_at_chapter_index"),
+    }
+
+
+def _default_is_canonical(raw: dict[str, Any], status: str) -> bool:
+    if "is_canonical" in raw:
+        return _bool_value(raw.get("is_canonical"), False)
+    return status in RETRIEVABLE_STATUSES
+
+
+def _default_retrievable(raw: dict[str, Any], library_type: str, status: str, is_canonical: bool) -> bool:
+    if "retrievable" in raw:
+        return _bool_value(raw.get("retrievable"), False)
+    if not is_canonical or status not in RETRIEVABLE_STATUSES:
+        return False
+    return library_type == "writing_guide"
+
+
+def _scope_markdown_dir(card: KnowledgeCard) -> Path:
+    scope_level = normalize_scope_level(card.scope_level, "global")
+    if scope_level == "global":
+        return Path("global")
+    if scope_level == "volume":
+        if card.volume_index is None:
+            return Path("volume_unknown")
+        return Path(f"volume_{card.volume_index:03d}")
+    volume_dir = f"volume_{card.volume_index:03d}" if card.volume_index is not None else "volume_unknown"
+    chapter_dir = f"chapter_{card.chapter_index:03d}" if card.chapter_index is not None else "chapter_unknown"
+    return Path(volume_dir) / "chapters" / chapter_dir
+
+
+def _card_status_filter_reason(card: KnowledgeCard, *, include_raw: bool = False) -> str | None:
+    if not bool(card.retrievable):
+        return "not_retrievable"
+    if card.status in BLOCKED_STATUSES:
+        return "blocked_status"
+    if card.status == "raw_extracted":
+        return None if include_raw else "raw_hidden"
+    if card.status not in RETRIEVABLE_STATUSES:
+        return "inactive_status"
+    if not bool(card.is_canonical) and not include_raw:
+        return "not_canonical"
+    return None
+
+
+def _card_scope_filter_reason(
+    card: KnowledgeCard,
+    current_volume_index: int | None,
+    current_chapter_index: int | None,
+    *,
+    include_future: bool = False,
+    allowed_scope_levels: list[str] | None = None,
+) -> str | None:
+    scope_level = normalize_scope_level(card.scope_level, "global")
+    allowed = {normalize_scope_level(item, item) for item in (allowed_scope_levels or []) if item}
+    if allowed and scope_level not in allowed:
+        return "scope"
+
+    if current_volume_index is None or current_chapter_index is None:
+        if card.library_type == "writing_guide" and scope_level == "global":
+            return None
+        return "scope"
+
+    if not include_future:
+        if card.reveal_at_volume_index is not None and is_after(
+            card.reveal_at_volume_index,
+            card.reveal_at_chapter_index,
+            current_volume_index,
+            current_chapter_index,
+        ):
+            return "future"
+        if card.valid_from_volume_index is not None and is_after(
+            card.valid_from_volume_index,
+            card.valid_from_chapter_index,
+            current_volume_index,
+            current_chapter_index,
+        ):
+            return "future"
+
+    if card.valid_until_volume_index is not None and is_before(
+        card.valid_until_volume_index,
+        card.valid_until_chapter_index,
+        current_volume_index,
+        current_chapter_index,
+    ):
+        return "scope"
+
+    if scope_level == "global":
+        return None
+    if scope_level == "volume":
+        if card.volume_index is None:
+            return "scope"
+        return None if card.volume_index <= current_volume_index else "future"
+    if card.volume_index is None or card.chapter_index is None:
+        return "scope"
+    if card.volume_index < current_volume_index:
+        return None
+    if card.volume_index == current_volume_index:
+        return None if card.chapter_index <= current_chapter_index else "future"
+    return "future"
+
+
+def _first_int(raw: dict[str, Any], source_ref: dict[str, Any], key: str) -> int | None:
+    for values in (raw, source_ref):
+        value = _int_or_none(values.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _first_text(raw: dict[str, Any], source_ref: dict[str, Any], key: str) -> str | None:
+    for values in (raw, source_ref):
+        value = values.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
 
 
 def _avoid_text(raw: dict[str, Any]) -> str:
@@ -1649,7 +2052,21 @@ def _search_result(card: KnowledgeCard, score: float) -> dict[str, Any]:
         "content_preview": _clip(card.content, 320),
         "tags": _json_list(card.tags_json),
         "status": card.status,
+        "scope_level": card.scope_level or "global",
+        "volume_index": card.volume_index,
+        "chapter_index": card.chapter_index,
     }
+
+
+def _scope_label(card: KnowledgeCard) -> str:
+    scope_level = normalize_scope_level(card.scope_level, "global")
+    if scope_level == "global":
+        return "global"
+    if scope_level == "volume":
+        return f"volume:{card.volume_index}" if card.volume_index is not None else "volume:unknown"
+    volume = card.volume_index if card.volume_index is not None else "unknown"
+    chapter = card.chapter_index if card.chapter_index is not None else "unknown"
+    return f"chapter:{volume}/{chapter}"
 
 
 def _tokens(value: str) -> list[str]:
