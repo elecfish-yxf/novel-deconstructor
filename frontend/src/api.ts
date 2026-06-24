@@ -392,6 +392,7 @@ export type RetrievalDebug = {
   diversity_buckets?: Record<string, number>;
   stage?: string | null;
   top_k?: number | null;
+  warnings?: string[];
 };
 
 export type WritingGenerateResult = {

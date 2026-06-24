@@ -35,6 +35,15 @@ const KNOWLEDGE_GROUPS = [
   },
 ] as const;
 
+type PositionValue = number | "";
+
+function parsePositionInput(value: string): PositionValue {
+  if (value.trim() === "") return "";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return "";
+  return Math.floor(parsed);
+}
+
 function formatSize(value: number) {
   if (value > 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
   if (value > 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -93,8 +102,9 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [hits, setHits] = useState<RetrievalHit[]>([]);
   const [ragStage, setRagStage] = useState("draft");
   const [ragTopK, setRagTopK] = useState(8);
-  const [currentVolumeIndex, setCurrentVolumeIndex] = useState(1);
-  const [currentChapterIndex, setCurrentChapterIndex] = useState(1);
+  const [currentVolumeIndex, setCurrentVolumeIndex] = useState<PositionValue>(1);
+  const [currentChapterIndex, setCurrentChapterIndex] = useState<PositionValue>(1);
+  const [debugRawKnowledge, setDebugRawKnowledge] = useState(false);
   const [ragResults, setRagResults] = useState<RAGSearchResult[]>([]);
   const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebug | null>(null);
   const [usedKnowledge, setUsedKnowledge] = useState<UsedKnowledge[]>([]);
@@ -186,18 +196,19 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     ? { model_provider: selectedWritingModel.provider, model: selectedWritingModel.model, api_key: writingApiKey.trim() || undefined }
     : {};
   const currentPositionPayload = {
-    current_volume_index: currentVolumeIndex || null,
-    current_chapter_index: currentChapterIndex || null,
+    current_volume_index: typeof currentVolumeIndex === "number" ? currentVolumeIndex : null,
+    current_chapter_index: typeof currentChapterIndex === "number" ? currentChapterIndex : null,
   };
   const generationRetrievalPayload = {
     ...currentPositionPayload,
-    include_raw_knowledge: true,
+    include_raw_knowledge: debugRawKnowledge && dryRun,
   };
   const ragRetrievalPayload = {
     ...currentPositionPayload,
-    include_raw: true,
+    include_raw: debugRawKnowledge,
   };
   const modelCallBlocked = !dryRun && !writingApiKey.trim();
+  const positionMissing = !currentPositionPayload.current_volume_index || !currentPositionPayload.current_chapter_index;
 
   function clearTransientWritingState() {
     setHits([]);
@@ -599,6 +610,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function searchRAG(event?: FormEvent) {
     event?.preventDefault();
     if (!selected || !query.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，再进行写作检索。");
+      return;
+    }
     setBusy("rag-search");
     setError("");
     try {
@@ -770,6 +785,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   async function generateOutline(event: FormEvent) {
     event.preventDefault();
     if (!selected || !outlineTask.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，避免写作位置与检索位置不同步。");
+      return;
+    }
     setBusy("outline");
     setError("");
     setOutline("");
@@ -813,6 +832,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function confirmOutline() {
     if (!selected || !outline.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，再确认提纲 Memory。");
+      return;
+    }
     setBusy("confirm-outline");
     setError("");
     setMessage("");
@@ -845,6 +868,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function startDraftJob() {
     if (!selected || !confirmedOutline.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，再生成正文。");
+      return;
+    }
     setBusy("draft-job");
     setError("");
     setDraftJob(null);
@@ -890,6 +917,10 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
 
   async function generateRevision() {
     if (!selected || !draft.trim()) return;
+    if (positionMissing) {
+      setError("请先填写当前 Volume 和 Chapter，再润色正文。");
+      return;
+    }
     setBusy("revision");
     setError("");
     setCitations([]);
@@ -1204,6 +1235,31 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
             </p>
           </div>
 
+          <div className="panel position-command-panel">
+            <div>
+              <p className="eyebrow">Current Writing Position</p>
+              <h2>
+                V{currentPositionPayload.current_volume_index ?? "-"} / C{currentPositionPayload.current_chapter_index ?? "-"}
+              </h2>
+              <p className="muted">所有提纲、正文、RAG 预览和 Memory 确认都会使用这个卷章位置。</p>
+            </div>
+            <div className="position-grid">
+              <label>
+                Volume
+                <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(parsePositionInput(event.target.value))} />
+              </label>
+              <label>
+                Chapter
+                <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(parsePositionInput(event.target.value))} />
+              </label>
+              <label className="check-row debug-toggle">
+                <input type="checkbox" checked={debugRawKnowledge} onChange={(event) => setDebugRawKnowledge(event.target.checked)} />
+                调试 Raw Evidence
+              </label>
+            </div>
+          </div>
+          {positionMissing && <div className="alert compact-alert">请填写当前 Volume 和 Chapter，避免 future knowledge 或错误章节进入本次生成。</div>}
+
           
           {mainNavTab === "writing_guide" && (
           <div className="knowledge-workbench panel">
@@ -1486,16 +1542,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   top_k
                   <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
                 </label>
-                <label>
-                  Volume
-                  <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(Number(event.target.value) || 1)} />
-                </label>
-                <label>
-                  Chapter
-                  <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(Number(event.target.value) || 1)} />
-                </label>
               </div>
-              <button className="primary" disabled={!selected || busy === "rag-search"}>
+              <button className="primary" disabled={!selected || busy === "rag-search" || positionMissing}>
                 测试召回
               </button>
               {retrievalDebug && (
@@ -1513,6 +1561,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   {retrievalDebug.raw_query && <p>raw: {retrievalDebug.raw_query}</p>}
                   <p>{retrievalDebug.preferred_card_types.join(" / ")}</p>
                   {!!retrievalDebug.expanded_terms?.length && <p>{retrievalDebug.expanded_terms.slice(0, 16).join(" / ")}</p>}
+                  {!!retrievalDebug.warnings?.length && <p className="warn-cell">{retrievalDebug.warnings.join(" / ")}</p>}
                   {!!retrievalDebug.selected_card_ids?.length && <p>{retrievalDebug.selected_card_ids.map((id) => `${id}:${retrievalDebug.selected_card_scope?.[id] || "scope"}`).join(" / ")}</p>}
                 </div>
               )}
@@ -1562,7 +1611,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <button
                 type="button"
                 className="primary"
-                disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim()}
+                disabled={!selected || busy === "memory" || !memoryTitle.trim() || !memoryContent.trim() || positionMissing}
                 onClick={() => saveMemory(memoryTitle, memoryContent)}
               >
                 保存 Memory
@@ -1609,14 +1658,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   RAG top_k
                   <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
                 </label>
-                <label>
-                  Volume
-                  <input type="number" min={1} value={currentVolumeIndex} onChange={(event) => setCurrentVolumeIndex(Number(event.target.value) || 1)} />
-                </label>
-                <label>
-                  Chapter
-                  <input type="number" min={1} value={currentChapterIndex} onChange={(event) => setCurrentChapterIndex(Number(event.target.value) || 1)} />
-                </label>
               </div>
               {targetChars > 2500 && <small className="warn-cell">目标字数较长，正文生成会自动分段并合并结果。</small>}
               <div className="mode-grid">
@@ -1660,7 +1701,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 dry-run：不调用模型，只验证检索和引用
               </label>
               {modelCallBlocked && <small className="warn-cell">关闭 dry-run 后，请先填写你自己的 API Key。</small>}
-              <button className="primary" disabled={!selected || busy === "outline" || modelCallBlocked}>
+              {debugRawKnowledge && !dryRun && <small className="warn-cell">Raw Evidence 只会用于 dry-run 调试预览，不会进入正式生成。</small>}
+              <button className="primary" disabled={!selected || busy === "outline" || modelCallBlocked || positionMissing}>
                 发送请求，生成提纲
               </button>
             </form>
@@ -1677,7 +1719,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                 <button type="button" disabled={!outline} onClick={() => navigator.clipboard.writeText(outline)}>
                   复制提纲
                 </button>
-                <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline"} onClick={confirmOutline}>
+                <button type="button" className="primary" disabled={!selected || !outline.trim() || busy === "confirm-outline" || positionMissing} onClick={confirmOutline}>
                   确认提纲
                 </button>
               </div>
@@ -1688,7 +1730,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
               <div className="step-badge">3</div>
               <h2>生成正文</h2>
               <p className="muted">用户确认提纲后，点击这里生成小说正文。这里不会再输出提纲、表格、结构核对或写作说明。</p>
-              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked}>
+              <button className="primary" disabled={!selected || !confirmedOutline.trim() || busy === "draft-job" || modelCallBlocked || positionMissing}>
                 根据确认提纲生成正文
               </button>
               <div className="button-row">
@@ -1703,12 +1745,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     <button type="button" disabled={!draft} onClick={() => navigator.clipboard.writeText(draft)}>
                       复制正文
                     </button>
-                    <button type="button" disabled={!selected || !draft || busy === "revision" || modelCallBlocked} onClick={generateRevision}>
+                    <button type="button" disabled={!selected || !draft || busy === "revision" || modelCallBlocked || positionMissing} onClick={generateRevision}>
                       润色/改写正文
                     </button>
                     <button
                       type="button"
-                      disabled={!selected || !draft || busy === "memory"}
+                      disabled={!selected || !draft || busy === "memory" || positionMissing}
                       onClick={async () => {
                         if (!selected || !draft) return;
                         setBusy("memory");

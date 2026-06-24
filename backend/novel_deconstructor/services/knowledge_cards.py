@@ -44,6 +44,8 @@ CARD_PREFIXES = {
     "memory": "MEM",
     "outline": "MEM",
     "draft": "MEM",
+    "ChapterOutline": "CHO",
+    "ChapterHandoff": "CHH",
     "character_state": "MEM",
     "foreshadowing": "MEM",
     "continuity_note": "MEM",
@@ -180,6 +182,8 @@ def normalize_card_type(value: str | None, fallback: str = "writing_rule") -> st
         "InformationPattern": "information_pattern",
         "ChapterAnalysis": "chapter_analysis",
         "Memory": "memory",
+        "ChapterOutline": "ChapterOutline",
+        "ChapterHandoff": "ChapterHandoff",
         "WorldbuildingFact": "worldbuilding",
     }
     if cleaned in aliases:
@@ -195,11 +199,11 @@ def normalize_scope_level(value: str | None, default: str = "global") -> str:
 
 def select_preferred_card_types(stage: str) -> list[str]:
     mapping = {
-        "outline": ["writing_rule", "conflict_pattern", "emotion_module", "chapter_analysis"],
-        "draft": ["writing_rule", "emotion_module", "style_pattern", "anti_pattern", "memory"],
-        "revision": ["anti_pattern", "style_pattern", "writing_rule", "memory"],
-        "continue": ["memory", "chapter_analysis", "writing_rule", "emotion_module"],
-        "continuation": ["memory", "chapter_analysis", "writing_rule", "emotion_module"],
+        "outline": ["writing_rule", "conflict_pattern", "emotion_module", "chapter_analysis", "ChapterHandoff", "ChapterOutline"],
+        "draft": ["writing_rule", "emotion_module", "style_pattern", "anti_pattern", "memory", "ChapterHandoff", "ChapterOutline"],
+        "revision": ["anti_pattern", "style_pattern", "writing_rule", "memory", "ChapterHandoff", "ChapterOutline"],
+        "continue": ["memory", "chapter_analysis", "writing_rule", "emotion_module", "ChapterHandoff", "ChapterOutline"],
+        "continuation": ["memory", "chapter_analysis", "writing_rule", "emotion_module", "ChapterHandoff", "ChapterOutline"],
         "worldbuilding_check": ["worldbuilding", "memory", "character", "location", "faction", "rule"],
     }
     return mapping.get((stage or "").strip(), ["writing_rule", "emotion_module", "anti_pattern", "memory"])
@@ -1146,6 +1150,7 @@ def search_knowledge_cards(
         "diversity_buckets": diversity_buckets,
         "stage": stage,
         "top_k": limit,
+        "warnings": [],
     }
     return results, debug
 
@@ -1586,7 +1591,7 @@ def _default_retrievable(raw: dict[str, Any], library_type: str, status: str, is
     if library_type not in {"writing_guide", "worldbuilding", "memory"}:
         return False
     if status == "raw_extracted":
-        return library_type in {"writing_guide", "worldbuilding"}
+        return False
     if not is_canonical or status not in RETRIEVABLE_STATUSES:
         return False
     return True
@@ -1606,12 +1611,12 @@ def _scope_markdown_dir(card: KnowledgeCard) -> Path:
 
 
 def _card_status_filter_reason(card: KnowledgeCard, *, include_raw: bool = False) -> str | None:
-    if not bool(card.retrievable):
-        return "not_retrievable"
     if card.status in BLOCKED_STATUSES:
         return "blocked_status"
     if card.status == "raw_extracted":
         return None if include_raw else "raw_hidden"
+    if not bool(card.retrievable):
+        return "not_retrievable"
     if card.status not in RETRIEVABLE_STATUSES:
         return "inactive_status"
     if not bool(card.is_canonical) and not include_raw:
@@ -1660,6 +1665,14 @@ def _card_scope_filter_reason(
         current_chapter_index,
     ):
         return "scope"
+
+    if card.volume_index is not None and is_after(
+        card.volume_index,
+        card.chapter_index,
+        current_volume_index,
+        current_chapter_index,
+    ):
+        return "future"
 
     if scope_level == "global":
         return None
@@ -2252,7 +2265,7 @@ def _max_cards_per_type(limit: int, preferred_card_types: list[str]) -> int:
 def _card_type_search_cap(card: KnowledgeCard, max_per_type: int) -> int:
     if card.library_type in {"worldbuilding", "memory"}:
         return max_per_type + 1
-    if card.card_type in {"memory", "character", "location", "faction", "rule", "world_rule"}:
+    if card.card_type in {"ChapterOutline", "ChapterHandoff", "memory", "character", "location", "faction", "rule", "world_rule"}:
         return max_per_type + 1
     return max_per_type
 
@@ -2388,6 +2401,8 @@ def _card_type_label(card_type: str) -> str:
         "style_pattern": "文风模式",
         "information_pattern": "信息投放",
         "memory": "长期记忆",
+        "ChapterOutline": "章节提纲记忆",
+        "ChapterHandoff": "章节接力卡",
         "outline": "提纲记忆",
         "draft": "正文记忆",
         "character_state": "人物状态",

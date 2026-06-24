@@ -12,12 +12,15 @@ from novel_deconstructor.api.writing import (
     _maybe_supplement_section,
     _parse_target_chars_from_text,
     _plan_section_targets,
+    _prompt_card_filter_reason,
+    confirm_draft_memory,
+    confirm_outline_memory,
     count_cjk_chars,
     count_non_space_chars,
 )
 from novel_deconstructor.config import get_settings
-from novel_deconstructor.models import Base, KnowledgeBase, UserAPIKey
-from novel_deconstructor.schemas import WritingDraftRequest, WritingRevisionRequest
+from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, UserAPIKey
+from novel_deconstructor.schemas import WritingDraftRequest, WritingMemoryConfirmRequest, WritingRevisionRequest
 from novel_deconstructor.services.knowledge_cards import import_knowledge_package
 
 
@@ -33,6 +36,63 @@ def _session():
     db.add(kb)
     db.commit()
     return db, kb
+
+
+def _add_card(
+    db,
+    kb,
+    card_id,
+    *,
+    library_type="writing_guide",
+    card_type="writing_rule",
+    title="Test card",
+    content="test beacon",
+    status="approved",
+    scope_level="global",
+    volume_index=None,
+    chapter_index=None,
+    reveal_at_volume_index=None,
+    reveal_at_chapter_index=None,
+    valid_from_volume_index=None,
+    valid_from_chapter_index=None,
+    retrievable=True,
+    is_canonical=True,
+    priority=0,
+):
+    card = KnowledgeCard(
+        knowledge_base_id=kb.id,
+        card_id=card_id,
+        library_type=library_type,
+        card_type=card_type,
+        title=title,
+        content=content,
+        summary=content[:240],
+        tags_json="[]",
+        source_ref_json="{}",
+        use_when_json='["draft", "outline", "revision"]',
+        avoid="",
+        confidence=1.0,
+        status=status,
+        source_kind="test",
+        package_id="",
+        is_canonical=is_canonical,
+        merged_into_card_id=None,
+        merged_from_ids_json=f'["{card_id}"]',
+        evidence_count=1,
+        content_fingerprint=card_id,
+        scope_level=scope_level,
+        volume_index=volume_index,
+        chapter_index=chapter_index,
+        reveal_at_volume_index=reveal_at_volume_index,
+        reveal_at_chapter_index=reveal_at_chapter_index,
+        valid_from_volume_index=valid_from_volume_index,
+        valid_from_chapter_index=valid_from_chapter_index,
+        retrievable=retrievable,
+        priority=priority,
+    )
+    db.add(card)
+    db.commit()
+    return card
 
 
 def test_plan_section_targets_balances_long_text():
@@ -171,3 +231,220 @@ def test_agent_runtime_api_key_is_not_persisted_or_echoed(tmp_path, monkeypatch)
     assert db.query(UserAPIKey).count() == 0
     assert runtime_key not in (result.prompt_preview or "")
     assert runtime_key not in result.content
+
+
+def test_prompt_preview_includes_current_writing_position(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="Draft the current scene.",
+        confirmed_outline="Goal, pressure, choice.",
+        dry_run=True,
+        current_volume_index=1,
+        current_chapter_index=2,
+        top_k=3,
+    )
+
+    result = asyncio.run(_generate_with_cards(db, kb, payload, stage="draft", confirmed_outline=payload.confirmed_outline))
+
+    assert result.prompt_preview
+    assert "[CURRENT WRITING POSITION]" in result.prompt_preview
+    assert "Current volume: 1" in result.prompt_preview
+    assert "Current chapter: 2" in result.prompt_preview
+    assert "[RETRIEVAL POLICY]" in result.prompt_preview
+
+
+def test_writing_request_schema_receives_current_position():
+    payload = WritingDraftRequest.model_validate(
+        {
+            "knowledge_base_ids": [1],
+            "task": "Draft with synced position.",
+            "confirmed_outline": "Goal, pressure, choice.",
+            "current_volume_index": 1,
+            "current_chapter_index": 2,
+        }
+    )
+
+    assert payload.current_volume_index == 1
+    assert payload.current_chapter_index == 2
+    assert payload.include_raw_knowledge is False
+    assert payload.include_future_knowledge is False
+
+
+def test_confirm_outline_writes_chapter_outline_memory_and_card(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    memory = confirm_outline_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Approved outline",
+            content="Goal: enter the archive.\nConflict: the gate rejects the key.\nEmotion: pressure becomes resolve.",
+            tags=["test"],
+            volume_index=1,
+            chapter_index=2,
+            priority=3,
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    card = db.query(KnowledgeCard).filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id == f"MEM-{memory.id:03d}").one()
+    data = json.loads(memory.content)
+
+    assert memory.memory_type == "ChapterOutline"
+    assert data["planned_events"]
+    assert memory.scope_level == "chapter"
+    assert memory.reveal_at_volume_index == 1
+    assert memory.reveal_at_chapter_index == 2
+    assert memory.valid_from_volume_index == 1
+    assert memory.valid_from_chapter_index == 2
+    assert memory.priority == 60
+    assert card.card_type == "ChapterOutline"
+    assert card.retrievable is True
+    assert card.status == "approved"
+
+
+def test_confirm_draft_writes_handoff_visible_next_chapter(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    draft_text = "The scene ends with the archive door open and the marker burning. " * 80
+    memory = confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Confirmed draft",
+            content=draft_text,
+            volume_index=1,
+            chapter_index=1,
+            priority=5,
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    card = db.query(KnowledgeCard).filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id == f"MEM-{memory.id:03d}").one()
+    data = json.loads(memory.content)
+
+    assert memory.memory_type == "ChapterHandoff"
+    assert "ending_state" in data
+    assert draft_text not in memory.content
+    assert len(memory.content) < len(draft_text)
+    assert memory.reveal_at_volume_index == 1
+    assert memory.reveal_at_chapter_index == 2
+    assert memory.valid_from_volume_index == 1
+    assert memory.valid_from_chapter_index == 2
+    assert memory.priority == 90
+    assert card.card_type == "ChapterHandoff"
+    assert card.reveal_at_chapter_index == 2
+    assert card.valid_from_chapter_index == 2
+
+
+def test_raw_evidence_is_hidden_by_default_and_debug_only_in_prompt(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    raw_card = _add_card(
+        db,
+        kb,
+        "RAW-001",
+        content="raw evidence beacon should only appear in debug dry-run",
+        status="raw_extracted",
+        retrievable=False,
+        is_canonical=False,
+    )
+    hidden_payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="Use raw evidence beacon.",
+        confirmed_outline="Check raw handling.",
+        dry_run=True,
+        current_volume_index=1,
+        current_chapter_index=1,
+        include_raw_knowledge=False,
+        top_k=10,
+    )
+    debug_payload = hidden_payload.model_copy(update={"include_raw_knowledge": True})
+    unsafe_payload = hidden_payload.model_copy(update={"include_raw_knowledge": True, "dry_run": False})
+
+    hidden_result = asyncio.run(_generate_with_cards(db, kb, hidden_payload, stage="draft", confirmed_outline=hidden_payload.confirmed_outline))
+    debug_result = asyncio.run(_generate_with_cards(db, kb, debug_payload, stage="draft", confirmed_outline=debug_payload.confirmed_outline))
+
+    assert all(item.id != "RAW-001" for item in hidden_result.used_knowledge)
+    assert any(item.id == "RAW-001" for item in debug_result.used_knowledge)
+    assert "raw evidence beacon" in (debug_result.prompt_preview or "")
+    assert _prompt_card_filter_reason(raw_card, unsafe_payload) == "raw_debug_only"
+
+
+def test_prompt_safety_drops_future_handoff_even_when_future_retrieval_requested(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Chapter one draft",
+            content="The ending handoff says the sealed map is discovered. " * 40,
+            volume_index=1,
+            chapter_index=1,
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+    early_payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="Continue with continuity handoff.",
+        confirmed_outline="The current chapter must not know the next chapter handoff.",
+        dry_run=True,
+        current_volume_index=1,
+        current_chapter_index=1,
+        include_future_knowledge=True,
+        top_k=10,
+    )
+    next_payload = early_payload.model_copy(update={"current_chapter_index": 2, "include_future_knowledge": False})
+
+    early_result = asyncio.run(_generate_with_cards(db, kb, early_payload, stage="draft", confirmed_outline=early_payload.confirmed_outline))
+    next_result = asyncio.run(_generate_with_cards(db, kb, next_payload, stage="draft", confirmed_outline=next_payload.confirmed_outline))
+
+    assert all(item.card_type != "ChapterHandoff" for item in early_result.used_knowledge)
+    assert early_result.retrieval_debug is not None
+    assert any("prompt_dropped" in warning and "future" in warning for warning in early_result.retrieval_debug.warnings)
+    assert any(item.card_type == "ChapterHandoff" for item in next_result.used_knowledge)
+    assert next_result.prompt_preview and "[PREVIOUS CHAPTER HANDOFF]" in next_result.prompt_preview
+
+
+def test_future_worldbuilding_is_dropped_before_final_prompt(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_card(
+        db,
+        kb,
+        "WB-FUTURE",
+        library_type="worldbuilding",
+        card_type="worldbuilding",
+        title="Future city",
+        content="future city leak beacon should not enter the current prompt",
+        scope_level="global",
+        reveal_at_volume_index=1,
+        reveal_at_chapter_index=3,
+        priority=100,
+    )
+    payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="Mention future city leak beacon.",
+        confirmed_outline="Current chapter cannot know future worldbuilding.",
+        dry_run=True,
+        current_volume_index=1,
+        current_chapter_index=2,
+        include_future_knowledge=True,
+        top_k=10,
+    )
+
+    result = asyncio.run(_generate_with_cards(db, kb, payload, stage="draft", confirmed_outline=payload.confirmed_outline))
+
+    assert all(item.id != "WB-FUTURE" for item in result.used_knowledge)
+    assert result.prompt_preview and "future city leak beacon should not enter the current prompt" not in result.prompt_preview
+    assert result.retrieval_debug is not None
+    assert any("WB-FUTURE" in warning and "future_reveal" in warning for warning in result.retrieval_debug.warnings)

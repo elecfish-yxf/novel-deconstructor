@@ -763,8 +763,49 @@ th {
 }
 
 .selected-work-card {
+  display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   align-items: center;
+  padding: 16px;
+  border-left: 4px solid #0f766e;
+}
+
+.position-command-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 420px);
+  gap: 18px;
+  align-items: center;
+  padding: 16px;
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.position-command-panel h2 {
+  font-size: 28px;
+  line-height: 1.15;
+  margin: 0;
+  color: #111827;
+}
+
+.position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.debug-toggle {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  padding: 10px 11px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fff7ed;
+}
+
+.compact-alert {
+  margin-top: -8px;
+  margin-bottom: 0;
 }
 
 .agent-sidebar h2,
@@ -785,9 +826,18 @@ th {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 16px;
   align-items: start;
+  min-height: 0;
+}
+
+.agent-two-col > .panel,
+.agent-two-col > form.panel {
+  min-height: 0;
+  max-height: calc(100vh - 230px);
+  overflow-y: auto;
 }
 
 .knowledge-workbench {
+  order: 2;
   padding: 0;
   overflow: hidden;
   display: grid;
@@ -1114,8 +1164,9 @@ th {
 }
 
 .writing-flow {
+  order: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.05fr) minmax(340px, 1.1fr);
   gap: 16px;
   align-items: start;
 }
@@ -1151,7 +1202,7 @@ th {
 }
 
 .memory-panel {
-  min-height: 100%;
+  min-height: 0;
 }
 
 .memory-list article p {
@@ -1279,9 +1330,12 @@ th {
 
   .agent-layout,
   .knowledge-workbench,
-  .generation-result-panel {
+  .generation-result-panel,
+  .agent-two-col > .panel,
+  .agent-two-col > form.panel {
     min-height: 0;
     max-height: none;
+    overflow: visible;
   }
 
   .knowledge-card-grid,
@@ -1299,7 +1353,12 @@ th {
   .agent-two-col,
   .markdown-doc-layout,
   .writing-flow,
+  .position-command-panel,
   .path-picker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .position-grid {
     grid-template-columns: 1fr;
   }
 }

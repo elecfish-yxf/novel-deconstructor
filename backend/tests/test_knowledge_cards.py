@@ -142,7 +142,9 @@ Build expectation, delay it, then release the emotion through action.
     assert result["card_types"]["anti_pattern"] == 1
     cards = db.query(KnowledgeCard).order_by(KnowledgeCard.card_id).all()
     assert {card.card_type for card in cards} == {"conflict_pattern", "anti_pattern", "emotion_module"}
-    assert all(card.retrievable for card in cards)
+    assert all(card.status == "raw_extracted" for card in cards)
+    assert all(card.is_canonical is False for card in cards)
+    assert all(card.retrievable is False for card in cards)
     assert all(Path(card.markdown_path).exists() for card in cards)
     assert (tmp_path / "knowledge" / kb.workspace_id / "1" / "knowledge_docs" / "_imports").exists()
 
@@ -183,7 +185,7 @@ def test_markdown_import_compacts_large_card_groups_for_rag(tmp_path, monkeypatc
         f"# Large Guide\n\n{sections}",
         source_name="large-guide.md",
         library_type="writing_guide",
-        status="raw_extracted",
+        status="approved",
     )
 
     compact = db.query(KnowledgeCard).filter(KnowledgeCard.source_kind == "rag_compact").one()

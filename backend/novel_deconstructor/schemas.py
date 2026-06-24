@@ -608,6 +608,7 @@ class RetrievalDebug(BaseModel):
     diversity_buckets: dict[str, int] = Field(default_factory=dict)
     stage: str | None = None
     top_k: int | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RAGSearchResponse(BaseModel):

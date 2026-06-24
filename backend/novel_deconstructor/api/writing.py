@@ -45,6 +45,8 @@ from ..schemas import (
     WritingRevisionRequest,
 )
 from ..services.knowledge_cards import (
+    BLOCKED_STATUSES,
+    RETRIEVABLE_STATUSES,
     card_to_read,
     delete_markdown_doc,
     export_card_markdown,
@@ -89,6 +91,14 @@ SECTION_MIN_COMPLETION_RATIO = 0.8
 MAX_SECTION_SUPPLEMENTS = 2
 RAG_PROMPT_CARD_LIMIT = 60
 DRAFT_GENERATION_JOBS: dict[str, dict[str, Any]] = {}
+FORCED_CONTEXT_CARD_TYPES = {
+    "ChapterOutline",
+    "ChapterHandoff",
+    "character_state",
+    "relationship_state",
+    "foreshadowing",
+    "volume_summary",
+}
 
 
 @router.get("/memories", response_model=list[WritingMemoryRead])
@@ -168,29 +178,31 @@ def confirm_outline_memory(
     db: Session = Depends(get_db),
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    _require_chapter_position(payload.volume_index, payload.chapter_index)
+    outline_content = _chapter_outline_memory_content(payload)
     return _create_memory_record(
         db,
         kb,
         workspace_id=workspace_id,
-        memory_type="outline",
-        title=payload.title,
-        content=payload.content,
-        tags=payload.tags,
-        source_ref=payload.source_ref,
+        memory_type="ChapterOutline",
+        title=_chapter_outline_title(payload),
+        content=outline_content,
+        tags=_unique_texts(["ChapterOutline", "outline", "approved", *payload.tags]),
+        source_ref=_memory_source_ref(payload, raw_content_chars=len(payload.content)),
         source="confirmed_outline",
-        scope_level=payload.scope_level,
+        scope_level="chapter",
         volume_index=payload.volume_index,
         volume_title=payload.volume_title,
         chapter_index=payload.chapter_index,
         chapter_title=payload.chapter_title,
-        valid_from_volume_index=payload.valid_from_volume_index,
-        valid_from_chapter_index=payload.valid_from_chapter_index,
+        valid_from_volume_index=payload.valid_from_volume_index or payload.volume_index,
+        valid_from_chapter_index=payload.valid_from_chapter_index or payload.chapter_index,
         valid_until_volume_index=payload.valid_until_volume_index,
         valid_until_chapter_index=payload.valid_until_chapter_index,
-        reveal_at_volume_index=payload.reveal_at_volume_index,
-        reveal_at_chapter_index=payload.reveal_at_chapter_index,
-        retrievable=payload.retrievable,
-        priority=payload.priority,
+        reveal_at_volume_index=payload.reveal_at_volume_index or payload.volume_index,
+        reveal_at_chapter_index=payload.reveal_at_chapter_index or payload.chapter_index,
+        retrievable=True,
+        priority=max(payload.priority, 60),
     )
 
 
@@ -202,29 +214,32 @@ def confirm_draft_memory(
     db: Session = Depends(get_db),
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    _require_chapter_position(payload.volume_index, payload.chapter_index)
+    next_volume, next_chapter = _next_chapter_position(payload.volume_index, payload.chapter_index)
+    handoff_content = _chapter_handoff_memory_content(payload, next_volume=next_volume, next_chapter=next_chapter)
     return _create_memory_record(
         db,
         kb,
         workspace_id=workspace_id,
-        memory_type="draft",
-        title=payload.title,
-        content=payload.content,
-        tags=payload.tags,
-        source_ref=payload.source_ref,
+        memory_type="ChapterHandoff",
+        title=_chapter_handoff_title(payload, next_volume=next_volume, next_chapter=next_chapter),
+        content=handoff_content,
+        tags=_unique_texts(["ChapterHandoff", "handoff", "continuity", "approved", *payload.tags]),
+        source_ref=_memory_source_ref(payload, raw_content_chars=len(payload.content)),
         source="confirmed_draft",
-        scope_level=payload.scope_level,
+        scope_level="chapter",
         volume_index=payload.volume_index,
         volume_title=payload.volume_title,
         chapter_index=payload.chapter_index,
         chapter_title=payload.chapter_title,
-        valid_from_volume_index=payload.valid_from_volume_index,
-        valid_from_chapter_index=payload.valid_from_chapter_index,
+        valid_from_volume_index=payload.valid_from_volume_index or next_volume,
+        valid_from_chapter_index=payload.valid_from_chapter_index or next_chapter,
         valid_until_volume_index=payload.valid_until_volume_index,
         valid_until_chapter_index=payload.valid_until_chapter_index,
-        reveal_at_volume_index=payload.reveal_at_volume_index,
-        reveal_at_chapter_index=payload.reveal_at_chapter_index,
-        retrievable=payload.retrievable,
-        priority=payload.priority,
+        reveal_at_volume_index=payload.reveal_at_volume_index or next_volume,
+        reveal_at_chapter_index=payload.reveal_at_chapter_index or next_chapter,
+        retrievable=True,
+        priority=max(payload.priority, 90),
     )
 
 
@@ -788,6 +803,129 @@ def _create_memory_record(
     return memory
 
 
+def _require_chapter_position(volume_index: int | None, chapter_index: int | None) -> None:
+    if not volume_index or not chapter_index:
+        raise HTTPException(status_code=400, detail="确认章节 Memory 前必须提供 current_volume_index / current_chapter_index")
+
+
+def _next_chapter_position(volume_index: int | None, chapter_index: int | None) -> tuple[int | None, int | None]:
+    if not volume_index or not chapter_index:
+        return volume_index, chapter_index
+    return volume_index, chapter_index + 1
+
+
+def _chapter_outline_title(payload: WritingMemoryConfirmRequest) -> str:
+    if payload.volume_index and payload.chapter_index:
+        return f"Volume {payload.volume_index} Chapter {payload.chapter_index} Outline"
+    return payload.title
+
+
+def _chapter_handoff_title(payload: WritingMemoryConfirmRequest, *, next_volume: int | None, next_chapter: int | None) -> str:
+    if payload.volume_index and payload.chapter_index and next_volume and next_chapter:
+        return f"Handoff from Volume {payload.volume_index} Chapter {payload.chapter_index} to Chapter {next_chapter}"
+    return payload.title
+
+
+def _memory_source_ref(payload: WritingMemoryConfirmRequest, *, raw_content_chars: int) -> dict[str, Any]:
+    return {
+        **payload.source_ref,
+        "raw_content_chars": raw_content_chars,
+        "volume_index": payload.volume_index,
+        "chapter_index": payload.chapter_index,
+    }
+
+
+def _chapter_outline_memory_content(payload: WritingMemoryConfirmRequest) -> str:
+    lines = _content_lines(payload.content)
+    planned_events = _list_candidates(lines, fallback=payload.content, limit=8)
+    data = {
+        "chapter_goal": _clip(_first_text_block(lines, payload.content), 600),
+        "planned_events": planned_events,
+        "expected_conflict": _keyword_excerpt(lines, ["冲突", "阻力", "压力", "对抗", "危机"]) or "待从确认提纲中承接。",
+        "expected_emotion_chain": _keyword_excerpt(lines, ["情绪", "爽点", "期待", "释放", "余波"]) or "待从确认提纲中承接。",
+        "required_worldbuilding": _list_candidates(_keyword_lines(lines, ["设定", "世界观", "规则", "地点", "势力", "人物"]), fallback="", limit=6),
+        "continuity_requirements": _list_candidates(_keyword_lines(lines, ["承接", "连续", "伏笔", "章尾", "下一章", "状态"]), fallback="", limit=6),
+        "confirmed_outline_excerpt": _clip(payload.content, 1200),
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _chapter_handoff_memory_content(
+    payload: WritingMemoryConfirmRequest,
+    *,
+    next_volume: int | None,
+    next_chapter: int | None,
+) -> str:
+    lines = _content_lines(payload.content)
+    ending = _tail_excerpt(payload.content, 700)
+    data = {
+        "chapter_summary": _clip(_first_text_block(lines, payload.content), 700),
+        "ending_state": ending or "待从已确认正文结尾承接。",
+        "character_state_delta": _list_candidates(_keyword_lines(lines, ["他", "她", "主角", "人物", "状态", "选择", "决定", "意识到"]), fallback="", limit=6),
+        "relationship_delta": _list_candidates(_keyword_lines(lines, ["关系", "信任", "误解", "同盟", "敌意", "靠近"]), fallback="", limit=6),
+        "new_worldbuilding_facts": _list_candidates(_keyword_lines(lines, ["规则", "设定", "城市", "组织", "地点", "世界", "制度"]), fallback="", limit=6),
+        "active_foreshadowing": _list_candidates(_keyword_lines(lines, ["伏笔", "悬念", "秘密", "异常", "疑问", "尚未", "未解"]), fallback="", limit=6),
+        "resolved_items": _list_candidates(_keyword_lines(lines, ["解决", "完成", "确认", "明白", "结束"]), fallback="", limit=5),
+        "next_chapter_hooks": _list_candidates(_keyword_lines(lines, ["下一章", "章尾", "钩子", "继续", "必须", "将要"]), fallback=ending, limit=6),
+        "do_not_forget": _unique_texts(
+            [
+                f"Next visible position: Volume {next_volume} Chapter {next_chapter}" if next_volume and next_chapter else "",
+                *_list_candidates(_keyword_lines(lines, ["不要忘", "记住", "承接", "连续", "伏笔", "状态"]), fallback="", limit=5),
+            ]
+        ),
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _content_lines(content: str) -> list[str]:
+    return [line.strip(" \t-*>#。；;") for line in (content or "").splitlines() if line.strip(" \t-*>#。；;")]
+
+
+def _first_text_block(lines: list[str], fallback: str) -> str:
+    for line in lines:
+        if len(line) >= 8:
+            return line
+    return fallback.strip()
+
+
+def _keyword_lines(lines: list[str], keywords: list[str]) -> list[str]:
+    return [line for line in lines if any(keyword.lower() in line.lower() for keyword in keywords)]
+
+
+def _keyword_excerpt(lines: list[str], keywords: list[str]) -> str:
+    matches = _keyword_lines(lines, keywords)
+    return _clip("；".join(matches[:3]), 500) if matches else ""
+
+
+def _list_candidates(lines: list[str], *, fallback: str, limit: int) -> list[str]:
+    items = [_clip(line, 220) for line in lines if line]
+    if not items and fallback:
+        items = [_clip(part, 220) for part in re.split(r"[。！？!?\n]+", fallback) if part.strip()]
+    return _unique_texts(items)[:limit]
+
+
+def _tail_excerpt(content: str, max_chars: int) -> str:
+    compact = "\n".join(_content_lines(content))
+    if len(compact) <= max_chars:
+        return compact
+    return compact[-max_chars:].strip()
+
+
+def _unique_texts(items: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = re.sub(r"\s+", " ", (item or "").strip())
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(normalized)
+    return unique
+
+
 def _job_or_404(job_id: str, workspace_id: str, work_id: int) -> dict[str, Any]:
     job = DRAFT_GENERATION_JOBS.get(job_id)
     if not job or job.get("workspace_id") != workspace_id or job.get("work_id") != work_id:
@@ -886,6 +1024,7 @@ async def _generate_with_cards(
         include_future=payload.include_future_knowledge,
         include_raw=payload.include_raw_knowledge,
     )
+    results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
     if payload.knowledge_mode == "strict" and not results:
         return WritingGenerateResponse(
             content="现有知识卡不足，无法在严格知识模式下生成可靠内容。",
@@ -896,7 +1035,7 @@ async def _generate_with_cards(
             prompt_preview=None,
         )
 
-    cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
+    cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
     oh_story_kernel = _oh_story_writing_kernel(db)
     system_prompt = _system_prompt(payload.knowledge_mode, oh_story_kernel, stage=stage)
     user_prompt = _build_card_agent_prompt(stage, payload, cards, confirmed_outline)
@@ -1000,6 +1139,7 @@ async def _generate_long_draft_with_cards(
         "diversity_buckets": {},
         "stage": "draft",
         "top_k": payload.top_k or settings.retrieval_top_k,
+        "warnings": [],
     }
 
     for index, section_target in enumerate(section_targets, start=1):
@@ -1017,8 +1157,9 @@ async def _generate_long_draft_with_cards(
             include_future=payload.include_future_knowledge,
             include_raw=payload.include_raw_knowledge,
         )
+        results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
+        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
         _merge_retrieval_debug(aggregate_debug, debug)
-        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
         user_prompt = _long_section_prompt(payload, cards, confirmed_outline, focus, index, len(section_targets), section_target, previous_tail)
@@ -1118,8 +1259,9 @@ async def _generate_long_draft_with_cards(
             include_future=payload.include_future_knowledge,
             include_raw=payload.include_raw_knowledge,
         )
+        results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
+        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
         _merge_retrieval_debug(aggregate_debug, debug)
-        cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
         padding_prompt = _long_padding_prompt(payload, cards, confirmed_outline, content, padding_target)
@@ -1187,14 +1329,269 @@ async def _generate_long_draft_with_cards(
     )
 
 
+def _augment_results_with_priority_context(
+    db: Session,
+    knowledge_base_id: int,
+    results: list[dict[str, Any]],
+    payload: WritingGenerateRequest,
+    debug: dict[str, Any],
+) -> list[dict[str, Any]]:
+    warnings = debug.setdefault("warnings", [])
+    if payload.current_volume_index is None or payload.current_chapter_index is None:
+        warning = "missing_current_writing_position: only global writing_guide is safe; fill Volume and Chapter for scoped memory"
+        if warning not in warnings:
+            warnings.append(warning)
+        return results
+
+    existing_ids = {item["id"] for item in results}
+    cards = (
+        db.query(KnowledgeCard)
+        .filter(
+            KnowledgeCard.knowledge_base_id == knowledge_base_id,
+            KnowledgeCard.library_type == "memory",
+            KnowledgeCard.card_type.in_(FORCED_CONTEXT_CARD_TYPES),
+        )
+        .all()
+    )
+    safe_cards = [card for card in cards if _prompt_card_filter_reason(card, payload) is None]
+    buckets = _priority_context_buckets(safe_cards, payload)
+    ordered_cards = [
+        *buckets["current_outline"][:3],
+        *buckets["previous_handoff"][:6],
+        *buckets["character_state"][:6],
+        *buckets["relationship_state"][:6],
+        *buckets["foreshadowing"][:6],
+        *buckets["volume_summary"][:3],
+    ]
+
+    forced_results: list[dict[str, Any]] = []
+    forced_ids: list[str] = []
+    for index, card in enumerate(ordered_cards):
+        if card.card_id in existing_ids:
+            continue
+        forced_results.append(_result_from_card(card, 120 - index))
+        forced_ids.append(card.card_id)
+        existing_ids.add(card.card_id)
+
+    if forced_ids:
+        selected_ids = [*forced_ids, *debug.get("selected_card_ids", [])]
+        debug["selected_card_ids"] = list(dict.fromkeys(selected_ids))
+        selected_scope = dict(debug.get("selected_card_scope", {}))
+        selected_scope.update({card.card_id: _card_scope_label(card) for card in ordered_cards if card.card_id in forced_ids})
+        debug["selected_card_scope"] = selected_scope
+        debug["selected_count"] = len(debug["selected_card_ids"])
+        warning = f"forced_priority_context:{','.join(forced_ids)}"
+        if warning not in warnings:
+            warnings.append(warning)
+    return [*forced_results, *results]
+
+
+def _priority_context_buckets(cards: list[KnowledgeCard], payload: WritingGenerateRequest) -> dict[str, list[KnowledgeCard]]:
+    buckets = {
+        "current_outline": [],
+        "previous_handoff": [],
+        "character_state": [],
+        "relationship_state": [],
+        "foreshadowing": [],
+        "volume_summary": [],
+    }
+    for card in cards:
+        if card.card_type == "ChapterOutline":
+            if _is_current_chapter_card(card, payload):
+                buckets["current_outline"].append(card)
+            continue
+        if card.card_type == "ChapterHandoff":
+            buckets["previous_handoff"].append(card)
+            continue
+        if card.card_type in buckets:
+            buckets[card.card_type].append(card)
+
+    for key, value in buckets.items():
+        reverse = key != "current_outline"
+        value.sort(key=_priority_context_sort_key, reverse=reverse)
+    return buckets
+
+
+def _priority_context_sort_key(card: KnowledgeCard) -> tuple[int, int, int, datetime]:
+    return (
+        card.volume_index or 0,
+        card.chapter_index or 0,
+        card.priority or 0,
+        card.updated_at or card.created_at or datetime.min,
+    )
+
+
+def _result_from_card(card: KnowledgeCard, score: float) -> dict[str, Any]:
+    return {
+        "id": card.card_id,
+        "library_type": card.library_type,
+        "card_type": card.card_type,
+        "title": card.title,
+        "score": round(score, 4),
+        "source_ref": _json_dict_text(card.source_ref_json),
+        "content_preview": _clip(card.content, 320),
+        "tags": _json_list_text(card.tags_json),
+        "status": card.status,
+        "scope_level": card.scope_level or "global",
+        "volume_index": card.volume_index,
+        "chapter_index": card.chapter_index,
+    }
+
+
+def _card_scope_label(card: KnowledgeCard) -> str:
+    scope_level = _normalized_scope_level(card)
+    if scope_level == "global":
+        return "global"
+    if scope_level == "volume":
+        return f"volume:{card.volume_index}" if card.volume_index is not None else "volume:unknown"
+    volume = card.volume_index if card.volume_index is not None else "unknown"
+    chapter = card.chapter_index if card.chapter_index is not None else "unknown"
+    return f"chapter:{volume}/{chapter}"
+
+
+def _json_list_text(value: str | None) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _json_dict_text(value: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _prompt_cards_for_results(
     db: Session,
     knowledge_base_id: int,
     results: list[dict[str, Any]],
+    *,
+    payload: WritingGenerateRequest | None = None,
+    debug: dict[str, Any] | None = None,
 ) -> tuple[list[KnowledgeCard], list[dict[str, Any]]]:
     prompt_results = results[:RAG_PROMPT_CARD_LIMIT]
     cards = _cards_for_search_results(db, knowledge_base_id, prompt_results)
+    if payload is not None:
+        cards, prompt_results = _prompt_safe_cards(cards, prompt_results, payload, debug)
     return cards, _results_for_prompt_cards(prompt_results, cards)
+
+
+def _prompt_safe_cards(
+    cards: list[KnowledgeCard],
+    prompt_results: list[dict[str, Any]],
+    payload: WritingGenerateRequest,
+    debug: dict[str, Any] | None,
+) -> tuple[list[KnowledgeCard], list[dict[str, Any]]]:
+    results_by_id = {item["id"]: item for item in prompt_results}
+    safe_cards: list[KnowledgeCard] = []
+    warnings: list[str] = []
+    for card in cards:
+        reason = _prompt_card_filter_reason(card, payload)
+        if reason:
+            warnings.append(f"prompt_dropped:{card.card_id}:{reason}")
+            continue
+        safe_cards.append(card)
+
+    safe_ids = {card.card_id for card in safe_cards}
+    safe_results = [results_by_id[card.card_id] for card in safe_cards if card.card_id in results_by_id]
+    if debug is not None:
+        debug["selected_card_ids"] = [card.card_id for card in safe_cards]
+        debug["selected_card_scope"] = {
+            card_id: scope
+            for card_id, scope in debug.get("selected_card_scope", {}).items()
+            if card_id in safe_ids
+        }
+        debug["selected_count"] = len(safe_cards)
+        if warnings:
+            existing_warnings = debug.setdefault("warnings", [])
+            for warning in warnings:
+                if warning not in existing_warnings:
+                    existing_warnings.append(warning)
+    return safe_cards, safe_results
+
+
+def _prompt_card_filter_reason(card: KnowledgeCard, payload: WritingGenerateRequest) -> str | None:
+    if card.status in BLOCKED_STATUSES:
+        return "blocked_status"
+    if card.status == "raw_extracted":
+        if not (payload.include_raw_knowledge and payload.dry_run):
+            return "raw_debug_only"
+    elif not bool(card.retrievable):
+        return "not_retrievable"
+    elif card.status not in RETRIEVABLE_STATUSES:
+        return "inactive_status"
+    if not bool(card.is_canonical) and not (card.status == "raw_extracted" and payload.include_raw_knowledge and payload.dry_run):
+        return "not_canonical"
+
+    current_volume = payload.current_volume_index
+    current_chapter = payload.current_chapter_index
+    if current_volume is None or current_chapter is None:
+        if card.library_type == "writing_guide" and _normalized_scope_level(card) == "global":
+            return None
+        return "missing_position_scope"
+
+    return _prompt_scope_filter_reason(card, current_volume, current_chapter)
+
+
+def _prompt_scope_filter_reason(card: KnowledgeCard, current_volume: int, current_chapter: int) -> str | None:
+    if _position_after(card.reveal_at_volume_index, card.reveal_at_chapter_index, current_volume, current_chapter):
+        return "future_reveal"
+    if _position_after(card.valid_from_volume_index, card.valid_from_chapter_index, current_volume, current_chapter):
+        return "future_valid_from"
+    if _position_before(card.valid_until_volume_index, card.valid_until_chapter_index, current_volume, current_chapter):
+        return "expired_scope"
+    if _position_after(card.volume_index, card.chapter_index, current_volume, current_chapter):
+        return "future_position"
+
+    scope_level = _normalized_scope_level(card)
+    if scope_level == "global":
+        return None
+    if scope_level == "volume":
+        if card.volume_index is None:
+            return "unknown_volume_scope"
+        return None if card.volume_index <= current_volume else "future_volume"
+    if card.volume_index is None or card.chapter_index is None:
+        return "unknown_chapter_scope"
+    if card.volume_index < current_volume:
+        return None
+    if card.volume_index == current_volume and card.chapter_index <= current_chapter:
+        return None
+    return "future_chapter"
+
+
+def _position_after(
+    volume_index: int | None,
+    chapter_index: int | None,
+    current_volume: int,
+    current_chapter: int,
+) -> bool:
+    if volume_index is None and chapter_index is None:
+        return False
+    compare_volume = current_volume if volume_index is None else volume_index
+    compare_chapter = 0 if chapter_index is None else chapter_index
+    return (compare_volume, compare_chapter) > (current_volume, current_chapter)
+
+
+def _position_before(
+    volume_index: int | None,
+    chapter_index: int | None,
+    current_volume: int,
+    current_chapter: int,
+) -> bool:
+    if volume_index is None and chapter_index is None:
+        return False
+    compare_volume = current_volume if volume_index is None else volume_index
+    compare_chapter = 999999 if chapter_index is None else chapter_index
+    return (compare_volume, compare_chapter) < (current_volume, current_chapter)
+
+
+def _normalized_scope_level(card: KnowledgeCard) -> str:
+    value = (card.scope_level or "global").strip().lower()
+    return value if value in {"global", "volume", "chapter"} else "global"
 
 
 def _cards_for_search_results(db: Session, knowledge_base_id: int, results: list[dict[str, Any]]) -> list[KnowledgeCard]:
@@ -1270,31 +1667,87 @@ def _build_card_agent_prompt(
     cards: list[KnowledgeCard],
     confirmed_outline: str,
 ) -> str:
+    return _build_structured_card_agent_prompt(stage, payload, cards, confirmed_outline)
+
+
+def _build_structured_card_agent_prompt(
+    stage: str,
+    payload: WritingGenerateRequest,
+    cards: list[KnowledgeCard],
+    confirmed_outline: str,
+) -> str:
     worldbuilding = [card for card in cards if card.library_type == "worldbuilding"]
     memory = [card for card in cards if card.library_type == "memory"]
+    previous_handoff = [card for card in memory if card.card_type == "ChapterHandoff"]
+    current_outline = [card for card in memory if card.card_type == "ChapterOutline" and _is_current_chapter_card(card, payload)]
+    character_states = [card for card in memory if card.card_type == "character_state"]
+    relationship_states = [card for card in memory if card.card_type == "relationship_state"]
+    foreshadowing = [card for card in memory if card.card_type == "foreshadowing"]
+    volume_summaries = [card for card in memory if card.card_type == "volume_summary"]
+    classified_memory_ids = {
+        card.card_id
+        for card in [*previous_handoff, *current_outline, *character_states, *relationship_states, *foreshadowing, *volume_summaries]
+    }
+    other_memory = [card for card in memory if card.card_id not in classified_memory_ids]
     anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
     writing_guide = [card for card in cards if card.library_type == "writing_guide" and card.card_type != "anti_pattern"]
     output_rule = {
-        "outline": "只输出章节提纲，不要写正文。提纲要能直接进入下一步正文生成。",
-        "draft": "只输出小说正文，不要输出提纲、表格、写作说明或引用编号。",
-        "revision": "只输出修改后的文本，不要输出修改说明、清单、表格或引用编号。",
-    }.get(stage, "只输出当前任务要求的正文内容，不要输出检索过程、写作说明或引用编号。")
-    target_chars = payload.target_chars if payload.target_chars else "未指定"
-    return f"""[STORY FACTS / WORLDBUILDING]
-用户确认的原创人物、地点、势力、规则和世界观设定。它们是硬约束，优先级最高。
-{_format_card_context(worldbuilding) or "未检索到用户确认的 worldbuilding。不要沿用拆书来源作品的世界观、人物、势力、地名或专名。"}
+        "outline": "Only output a chapter outline. Do not write prose yet. The outline must be directly usable for draft generation.",
+        "draft": "Only output novel prose. Do not output outlines, tables, writing notes, retrieval notes, or citation IDs.",
+        "revision": "Only output the revised prose. Do not output revision notes, lists, tables, or citation IDs.",
+    }.get(stage, "Only output the content requested by the current task. Do not output retrieval notes, writing notes, or citation IDs.")
+    target_chars = payload.target_chars if payload.target_chars else "UNSPECIFIED"
+    raw_policy = "enabled for explicit debug mode" if payload.include_raw_knowledge else "disabled"
+    future_policy = "explicitly requested, but prompt input is still safety-filtered" if payload.include_future_knowledge else "disabled"
+    return f"""[CURRENT WRITING POSITION]
+Current volume: {_position_value(payload.current_volume_index)}
+Current chapter: {_position_value(payload.current_chapter_index)}
+
+[RETRIEVAL POLICY]
+- Use only global knowledge, current/prior volume knowledge, and chapters up to the current writing position.
+- Do not use future volume or future chapter knowledge.
+- Raw Evidence is {raw_policy}; future knowledge is {future_policy}.
+- Treat writing_guide as technique, not story fact. Story facts and memory override writing_guide.
+
+[STORY FACTS / WORLDBUILDING]
+User-confirmed original characters, places, factions, rules, and worldbuilding. These are hard constraints.
+{_format_card_context(worldbuilding) or "No user-confirmed worldbuilding was retrieved. Do not borrow names, places, factions, or unique settings from source works."}
+
+[PREVIOUS CHAPTER HANDOFF]
+Continuity cards from already confirmed chapters. Use them to preserve ending state, unresolved hooks, and next-chapter carryover.
+{_format_card_context(previous_handoff) or "No previous chapter handoff was retrieved."}
+
+[CURRENT CHAPTER OUTLINE]
+The approved outline memory for the current chapter, when available.
+{_format_card_context(current_outline) or "No approved ChapterOutline card matched the current chapter."}
+
+[ACTIVE CHARACTER STATES]
+Current character state memory that is visible at this writing position.
+{_format_card_context(character_states) or "No character_state memory was retrieved."}
+
+[ACTIVE RELATIONSHIP STATES]
+Current relationship state memory that is visible at this writing position.
+{_format_card_context(relationship_states) or "No relationship_state memory was retrieved."}
+
+[ACTIVE FORESHADOWING]
+Visible foreshadowing and unresolved setup that should be preserved or paid off.
+{_format_card_context(foreshadowing) or "No foreshadowing memory was retrieved."}
+
+[CURRENT VOLUME SUMMARY]
+Approved summary memory for the current volume and prior visible volume context.
+{_format_card_context(volume_summaries) or "No volume_summary memory was retrieved."}
 
 [PROJECT MEMORY]
-已确认提纲、已写正文、人物状态、伏笔、连续性和当前作品上下文。它们高于写作技巧指南。
-{_format_card_context(memory) or "暂无可用 memory。"}
+Other confirmed continuity memory for this work.
+{_format_card_context(other_memory) or "No additional project memory was retrieved."}
 
 [WRITING GUIDE]
-拆书或手动沉淀出的结构、冲突、情绪链、节奏、语言和风格规则。只指导写法，不提供故事事实。
-{_format_card_context(writing_guide) or "未检索到 writing_guide。"}
+Technique, structure, pacing, conflict, emotion chain, language, and style guidance. These guide execution only.
+{_format_card_context(writing_guide) or "No writing_guide cards were retrieved."}
 
 [ANTI PATTERNS]
-本次生成需要避免的问题，例如 AI 味、解释腔、机械对白、硬讲设定和来源作品式桥段。
-{_format_card_context(anti_patterns) or "暂无 anti_pattern。"}
+Problems to avoid in this generation.
+{_format_card_context(anti_patterns) or "No anti_pattern cards were retrieved."}
 
 [CURRENT TASK]
 Stage: {stage}
@@ -1303,17 +1756,31 @@ User request:
 {payload.task}
 
 Confirmed outline:
-{confirmed_outline or "（空）"}
+{confirmed_outline or "(empty)"}
 
 Current context:
-{payload.current_content or "（空）"}
+{payload.current_content or "(empty)"}
 
 [OUTPUT REQUIREMENTS]
 - {output_rule}
-- worldbuilding 和 memory 高于 writing_guide；若写作规则与当前故事事实冲突，以 worldbuilding / memory 为准。
-- writing_guide 只能作为写法参考，不能复制来源作品的人名、地名、专名、势力、世界观和标志性桥段。
-- 正文或润色结果中不要暴露知识卡名称、检索过程、评分或引用编号。
-- 可以内化召回规则，但不要机械逐条复述。"""
+- Worldbuilding and memory take precedence over writing_guide if there is a conflict.
+- Do not copy source-work names, places, factions, worldbuilding, or signature passages from writing_guide cards.
+- Do not expose card names, retrieval process, scores, or citation IDs in the prose.
+- Internalize the retrieved rules naturally; do not mechanically restate them."""
+
+
+def _is_current_chapter_card(card: KnowledgeCard, payload: WritingGenerateRequest) -> bool:
+    if payload.current_volume_index is None or payload.current_chapter_index is None:
+        return False
+    if card.volume_index is not None and card.volume_index != payload.current_volume_index:
+        return False
+    if card.chapter_index is not None and card.chapter_index != payload.current_chapter_index:
+        return False
+    return True
+
+
+def _position_value(value: int | None) -> str:
+    return str(value) if value is not None else "UNKNOWN"
 
 
 def _format_card_context(cards: list[KnowledgeCard]) -> str:
@@ -1622,6 +2089,8 @@ def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> Non
     target["expanded_terms"] = list(dict.fromkeys(expanded_terms))
     selected_ids = [*target.get("selected_card_ids", []), *debug.get("selected_card_ids", [])]
     target["selected_card_ids"] = list(dict.fromkeys(selected_ids))
+    warnings = [*target.get("warnings", []), *debug.get("warnings", [])]
+    target["warnings"] = list(dict.fromkeys(warnings))
     selected_scope = dict(target.get("selected_card_scope", {}))
     selected_scope.update(debug.get("selected_card_scope", {}))
     target["selected_card_scope"] = selected_scope

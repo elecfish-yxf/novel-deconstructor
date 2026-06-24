@@ -211,6 +211,27 @@ KnowledgeCard / Markdown / Canonical Card 的关系：
 
 ## Agent Retrieval Protocol
 
+Writing Agent requests now share one explicit writing position across outline, draft, revision, RAG preview, and Memory confirmation. Confirmed outlines are persisted as `ChapterOutline` cards at the current volume/chapter. Confirmed drafts are distilled into `ChapterHandoff` cards that become visible from the next chapter, so continuation can inherit the prior ending without exposing future chapters. Raw Evidence remains off by default and is intended only for debug inspection.
+
+Current writing position is a core context field:
+
+- `current_volume_index` and `current_chapter_index` must travel from the page payload into the writing API, RAG retrieval, retrieval debug, and final prompt.
+- The final prompt includes `[CURRENT WRITING POSITION]` and `[RETRIEVAL POLICY]`, explicitly forbidding future volume or future chapter knowledge.
+- If the position is missing, scoped story knowledge is not treated as safe by default; only global `writing_guide` can be used safely and retrieval debug returns a warning.
+
+Chapter memory inheritance:
+
+- Confirmed outlines are saved as approved, canonical, retrievable `ChapterOutline` Memory cards visible from their own chapter.
+- Confirmed drafts are summarized into approved, canonical, retrievable `ChapterHandoff` Memory cards. A Chapter 1 handoff becomes visible from Chapter 2, so Chapter 1 cannot see its own ending handoff.
+- Before outline or draft generation, the context builder prioritizes current chapter outline, previous chapter handoff, active character state, active relationship state, active foreshadowing, current volume summary, global worldbuilding, global writing guide, and anti-patterns.
+
+Raw Evidence and scope-safe RAG:
+
+- Raw Evidence defaults to `status=raw_extracted`, `is_canonical=false`, and `retrievable=false`.
+- Normal writing RAG only uses canonical, retrievable, reviewed/approved cards.
+- `include_raw` / `include_raw_knowledge` is for explicit debug inspection. Raw cards are allowed into the final writing prompt only in dry-run debug mode.
+- Final prompt assembly performs a second safety pass and drops future chapter, future volume, blocked, inactive, noncanonical, and raw cards that are not allowed for the current request.
+
 Agent 不应简单读取所有知识，而应按任务类型优先召回不同内容：
 
 | Task | Preferred Knowledge |
