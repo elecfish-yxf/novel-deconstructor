@@ -246,6 +246,19 @@ export type KnowledgeCard = {
   merged_from_ids: string[];
   evidence_count: number;
   content_fingerprint: string;
+  scope_level: string;
+  volume_index?: number | null;
+  volume_title?: string | null;
+  chapter_index?: number | null;
+  chapter_title?: string | null;
+  valid_from_volume_index?: number | null;
+  valid_from_chapter_index?: number | null;
+  valid_until_volume_index?: number | null;
+  valid_until_chapter_index?: number | null;
+  reveal_at_volume_index?: number | null;
+  reveal_at_chapter_index?: number | null;
+  retrievable: boolean;
+  priority: number;
   created_at: string;
   updated_at: string;
 };
@@ -332,6 +345,9 @@ export type UsedKnowledge = {
   content_preview?: string;
   tags?: string[];
   status?: string | null;
+  scope_level?: string | null;
+  volume_index?: number | null;
+  chapter_index?: number | null;
 };
 
 export type RAGSearchResult = UsedKnowledge & {
@@ -362,6 +378,15 @@ export type RetrievalDebug = {
   expanded_terms?: string[];
   preferred_card_types: string[];
   total_candidates: number;
+  current_volume_index?: number | null;
+  current_chapter_index?: number | null;
+  candidate_count_before_scope_filter?: number;
+  candidate_count_after_scope_filter?: number;
+  filtered_by_status_count?: number;
+  filtered_by_scope_count?: number;
+  filtered_by_future_count?: number;
+  selected_card_ids?: string[];
+  selected_card_scope?: Record<string, string>;
   selected_count: number;
   filtered_duplicate_count?: number;
   diversity_buckets?: Record<string, number>;
@@ -438,6 +463,11 @@ export type WritingMemory = {
   tags: string[];
   source_ref: Record<string, unknown>;
   source: string;
+  scope_level: string;
+  volume_index?: number | null;
+  chapter_index?: number | null;
+  retrievable: boolean;
+  priority: number;
   created_at: string;
   updated_at: string;
 };
@@ -662,7 +692,21 @@ export const api = {
     }),
   searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
     request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
-  searchWorkRAG: (workId: number, payload: { stage: string; query: string; top_k?: number; library_type?: string; include_inactive?: boolean }) =>
+  searchWorkRAG: (
+    workId: number,
+    payload: {
+      stage: string;
+      query: string;
+      top_k?: number;
+      library_type?: string;
+      include_inactive?: boolean;
+      current_volume_index?: number | null;
+      current_chapter_index?: number | null;
+      include_future?: boolean;
+      include_raw?: boolean;
+      allowed_scope_levels?: string[];
+    },
+  ) =>
     request<{ results: RAGSearchResult[]; retrieval_debug: RetrievalDebug }>(`/api/writing/works/${workId}/rag/search`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -676,11 +720,20 @@ export const api = {
     tags?: string[];
     source_ref?: Record<string, unknown>;
     source?: string;
+    scope_level?: string;
+    volume_index?: number | null;
+    chapter_index?: number | null;
   }) =>
     request<WritingMemory>("/api/writing/memories", { method: "POST", body: JSON.stringify(payload) }),
-  confirmOutlineMemory: (workId: number, payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown> }) =>
+  confirmOutlineMemory: (
+    workId: number,
+    payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown>; scope_level?: string; volume_index?: number | null; chapter_index?: number | null },
+  ) =>
     request<WritingMemory>(`/api/writing/works/${workId}/memory/confirm-outline`, { method: "POST", body: JSON.stringify(payload) }),
-  confirmDraftMemory: (workId: number, payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown> }) =>
+  confirmDraftMemory: (
+    workId: number,
+    payload: { title: string; content: string; tags?: string[]; source_ref?: Record<string, unknown>; scope_level?: string; volume_index?: number | null; chapter_index?: number | null },
+  ) =>
     request<WritingMemory>(`/api/writing/works/${workId}/memory/confirm-draft`, { method: "POST", body: JSON.stringify(payload) }),
   deleteWritingMemory: (id: number) => request<{ ok: boolean }>(`/api/writing/memories/${id}`, { method: "DELETE" }),
   generateOutline: (payload: {
@@ -720,6 +773,8 @@ export const api = {
       api_key?: string;
       dry_run?: boolean;
       top_k?: number;
+      current_volume_index?: number | null;
+      current_chapter_index?: number | null;
     },
   ) =>
     request<WritingGenerateResult>(
@@ -742,6 +797,8 @@ export const api = {
       dry_run?: boolean;
       top_k?: number;
       target_chars?: number;
+      current_volume_index?: number | null;
+      current_chapter_index?: number | null;
     },
   ) =>
     request<WritingGenerateResult>(
@@ -764,6 +821,8 @@ export const api = {
       dry_run?: boolean;
       top_k?: number;
       target_chars?: number;
+      current_volume_index?: number | null;
+      current_chapter_index?: number | null;
     },
   ) =>
     request<WritingDraftJob>(
@@ -790,6 +849,8 @@ export const api = {
       dry_run?: boolean;
       top_k?: number;
       target_chars?: number;
+      current_volume_index?: number | null;
+      current_chapter_index?: number | null;
     },
   ) =>
     request<WritingGenerateResult>(

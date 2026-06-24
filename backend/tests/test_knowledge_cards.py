@@ -162,6 +162,7 @@ def test_search_knowledge_cards_expands_query_and_keeps_diverse_results(tmp_path
                 source_kind="test",
                 package_id="",
                 is_canonical=True,
+                retrievable=True,
                 evidence_count=evidence_count,
                 content_fingerprint=content_fingerprint(title if card_id != "AP-2" else "Avoid exposition dump", content, "", tags),
             )
@@ -311,3 +312,152 @@ def test_delete_markdown_doc_removes_file_and_soft_deletes_card(tmp_path, monkey
     assert result["status"] == "deleted"
     assert card.status == "deleted"
     assert not path.exists()
+
+
+def _add_scoped_card(
+    db,
+    kb,
+    card_id: str,
+    *,
+    library_type: str = "writing_guide",
+    card_type: str = "writing_rule",
+    content: str = "scope beacon",
+    scope_level: str = "global",
+    volume_index: int | None = None,
+    chapter_index: int | None = None,
+    status: str = "approved",
+    is_canonical: bool = True,
+    retrievable: bool = True,
+    reveal_at_chapter_index: int | None = None,
+) -> KnowledgeCard:
+    card = KnowledgeCard(
+        knowledge_base_id=kb.id,
+        card_id=card_id,
+        library_type=library_type,
+        card_type=card_type,
+        title=card_id,
+        content=content,
+        summary=content,
+        tags_json=json.dumps(["scope", "beacon", library_type]),
+        source_ref_json="{}",
+        use_when_json='["draft"]',
+        avoid="",
+        confidence=0.9,
+        status=status,
+        source_kind="test",
+        package_id="",
+        is_canonical=is_canonical,
+        retrievable=retrievable,
+        scope_level=scope_level,
+        volume_index=volume_index,
+        chapter_index=chapter_index,
+        reveal_at_volume_index=volume_index if reveal_at_chapter_index is not None else None,
+        reveal_at_chapter_index=reveal_at_chapter_index,
+        evidence_count=1,
+        content_fingerprint=content_fingerprint(card_id, content, "", ["scope", "beacon", library_type]),
+    )
+    db.add(card)
+    db.commit()
+    return card
+
+
+def test_scoped_rag_blocks_future_chapters_and_volumes(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_scoped_card(db, kb, "GUIDE", content="scope beacon guide", scope_level="global")
+    _add_scoped_card(db, kb, "MEM-004", library_type="memory", card_type="memory", content="scope beacon memory", scope_level="chapter", volume_index=1, chapter_index=4)
+    _add_scoped_card(db, kb, "MEM-006", library_type="memory", card_type="memory", content="scope beacon future chapter", scope_level="chapter", volume_index=1, chapter_index=6)
+    _add_scoped_card(db, kb, "MEM-V2", library_type="memory", card_type="memory", content="scope beacon future volume", scope_level="chapter", volume_index=2, chapter_index=1)
+
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="draft",
+        query="scope beacon memory guide",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=5,
+    )
+
+    ids = {item["id"] for item in results}
+    assert "GUIDE" in ids
+    assert "MEM-004" in ids
+    assert "MEM-006" not in ids
+    assert "MEM-V2" not in ids
+    assert debug["filtered_by_future_count"] >= 2
+
+
+def test_scoped_rag_hides_raw_and_inactive_statuses_by_default(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_scoped_card(db, kb, "RAW", content="blocked beacon raw", status="raw_extracted", is_canonical=False, retrievable=True)
+    for status in ["deprecated", "superseded", "deleted", "merged"]:
+        _add_scoped_card(db, kb, f"BAD-{status}", content="blocked beacon status", status=status)
+
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="draft",
+        query="blocked beacon",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=5,
+    )
+
+    assert results == []
+    assert debug["filtered_by_status_count"] == 5
+
+
+def test_reveal_at_hides_worldbuilding_until_reveal_chapter(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_scoped_card(
+        db,
+        kb,
+        "WB-SECRET",
+        library_type="worldbuilding",
+        card_type="worldbuilding",
+        content="secret city reveal beacon",
+        scope_level="global",
+        volume_index=1,
+        reveal_at_chapter_index=8,
+    )
+
+    early, _ = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="worldbuilding_check",
+        query="secret city reveal beacon",
+        top_k=5,
+        current_volume_index=1,
+        current_chapter_index=5,
+    )
+    revealed, _ = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="worldbuilding_check",
+        query="secret city reveal beacon",
+        top_k=5,
+        current_volume_index=1,
+        current_chapter_index=8,
+    )
+
+    assert early == []
+    assert [item["id"] for item in revealed] == ["WB-SECRET"]
+
+
+def test_missing_position_only_returns_global_writing_guide(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_scoped_card(db, kb, "GUIDE", content="missing position beacon", scope_level="global")
+    _add_scoped_card(db, kb, "MEM-GLOBAL", library_type="memory", card_type="memory", content="missing position beacon", scope_level="global")
+    _add_scoped_card(db, kb, "WB-GLOBAL", library_type="worldbuilding", card_type="worldbuilding", content="missing position beacon", scope_level="global")
+
+    results, debug = search_knowledge_cards(db, [kb.id], stage="draft", query="missing position beacon", top_k=10)
+
+    assert [item["id"] for item in results] == ["GUIDE"]
+    assert debug["filtered_by_scope_count"] == 2

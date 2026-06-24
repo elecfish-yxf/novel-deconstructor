@@ -20,7 +20,7 @@ MODE_LABELS = {
     "language_style": "语言风格",
     "ai_bad_patterns": "AI 味检查",
 }
-KNOWLEDGE_PACKAGE_SCHEMA_VERSION = "0.1.0"
+KNOWLEDGE_PACKAGE_SCHEMA_VERSION = "0.2.0"
 AGENT_RETRIEVAL_PROTOCOL = {
     "outline": ["structure_pattern", "conflict_pattern", "emotion_module"],
     "draft": ["style_pattern", "dialogue_rule", "emotion_module", "anti_pattern"],
@@ -431,9 +431,16 @@ def _chapter_analysis_card(chunk: ChapterChunk, results: list[AnalysisResult], s
     emotion_text = _section(primary, ("情绪", "爽点", "可复现模块"))
     information_text = _section(primary, ("信息投放",)) or texts.get("information_delivery", "")
     character_text = _section(primary, ("人物", "关系变化")) or texts.get("character_growth", "")
+    scope = _chunk_scope(chunk)
     return {
         "chapter_id": chunk.id,
         "chapter_title": chunk.title,
+        "scope_level": "chapter",
+        **scope,
+        "status": "raw_extracted",
+        "is_canonical": False,
+        "retrievable": False,
+        "priority": 0,
         "summary": _first_highlight(primary, fallback=f"{chunk.title} 的逐章拆解结果。"),
         "opening_state": _compact(_section(primary, ("开头状态",)), 360),
         "ending_state": _compact(_section(primary, ("结尾状态",)), 360),
@@ -450,6 +457,7 @@ def _chapter_analysis_card(chunk: ChapterChunk, results: list[AnalysisResult], s
             "source_file": source_file.original_filename,
             "chapter_index": chunk.chapter_index,
             "chapter_id": chunk.id,
+            **scope,
             "analysis_modes": sorted(texts.keys()),
             "markdown_paths": [Path(result.markdown_path or "").name for result in results if result.markdown_path],
         },
@@ -468,6 +476,10 @@ def _writing_rule_cards(results: list[AnalysisResult], chunks_by_id: dict[str, C
                     "id": f"WR-{index:03d}",
                     "type": "writing_rule",
                     "title": _card_title(section, f"{MODE_LABELS.get(result.mode, result.mode)} 写作规则"),
+                    "scope_level": "global",
+                    "is_canonical": False,
+                    "retrievable": False,
+                    "priority": 0,
                     "rule": _compact(section, 900),
                     "use_when": _use_when_for_mode(result.mode),
                     "avoid": "不要照搬原文专名、桥段、角色关系或独特设定；只复用结构功能和写作方法。",
@@ -498,6 +510,11 @@ def _emotion_module_cards(
                 "id": f"EM-{index:03d}",
                 "type": "emotion_module",
                 "name": _card_title(section, f"{chunk.title} 情绪模块"),
+                "scope_level": "global",
+                "status": "raw_extracted",
+                "is_canonical": False,
+                "retrievable": False,
+                "priority": 0,
                 "emotion_chain": _compact(section, 500),
                 "scene_function": f"来源章节：{chunk.title}；适合复用其情绪推进功能，不复用具体素材。",
                 "reusable_steps": _list_items(section, 6),
@@ -507,6 +524,7 @@ def _emotion_module_cards(
                     "source_file": source_file.original_filename,
                     "chapter_id": chunk.id,
                     "chapter_title": chunk.title,
+                    **_chunk_scope(chunk),
                 },
             }
         )
@@ -530,6 +548,11 @@ def _conflict_pattern_cards(
                 "id": f"CP-{index:03d}",
                 "type": "conflict_pattern",
                 "name": _card_title(section, f"{chunk.title} 冲突模式"),
+                "scope_level": "global",
+                "status": "raw_extracted",
+                "is_canonical": False,
+                "retrievable": False,
+                "priority": 0,
                 "conflict_type": _compact(_first_matching_line(section, ("外部冲突", "内部冲突", "关系冲突", "信息", "资源")), 160),
                 "trigger": _compact(_first_matching_line(section, ("触发", "开端", "目标", "主要冲突")), 220),
                 "escalation": _compact(_first_matching_line(section, ("升级", "推进", "加压")), 220),
@@ -540,6 +563,7 @@ def _conflict_pattern_cards(
                     "source_file": source_file.original_filename,
                     "chapter_id": chunk.id,
                     "chapter_title": chunk.title,
+                    **_chunk_scope(chunk),
                 },
             }
         )
@@ -558,6 +582,11 @@ def _anti_pattern_cards(results: list[AnalysisResult], chunks_by_id: dict[str, C
                     "id": f"AP-{index:03d}",
                     "type": "anti_pattern",
                     "name": _card_title(section, f"{MODE_LABELS.get(result.mode, result.mode)} 反模式"),
+                    "scope_level": "global",
+                    "status": "raw_extracted",
+                    "is_canonical": False,
+                    "retrievable": False,
+                    "priority": 0,
                     "problem": _compact(section, 500),
                     "why_bad": "机械模仿会削弱原创性，或把拆书结果误用为原作复刻。",
                     "fix_strategy": "保留功能位、冲突链和情绪链，替换人物、设定、场景、台词和具体桥段。",
@@ -656,6 +685,30 @@ def _card_source(project_name: str, result: AnalysisResult, chunk: ChapterChunk 
         "chapter": chunk.id if chunk else result.chunk_id,
         "chapter_title": chunk.title if chunk else "",
         "analysis_mode": result.mode,
+        **(_chunk_scope(chunk) if chunk else {}),
+    }
+
+
+def _chunk_scope(chunk: ChapterChunk) -> dict:
+    try:
+        metadata = json.loads(chunk.metadata_json or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    volume_index = metadata.get("volume_index")
+    chapter_index = metadata.get("chapter_index", chunk.chapter_index)
+    try:
+        volume_index = int(volume_index) if volume_index is not None else 1
+    except (TypeError, ValueError):
+        volume_index = 1
+    try:
+        chapter_index = int(chapter_index) if chapter_index is not None else chunk.chapter_index
+    except (TypeError, ValueError):
+        chapter_index = chunk.chapter_index
+    return {
+        "volume_index": volume_index,
+        "volume_title": metadata.get("volume_title") or "Volume 1",
+        "chapter_index": chapter_index,
+        "chapter_title": metadata.get("chapter_title") or chunk.title,
     }
 
 

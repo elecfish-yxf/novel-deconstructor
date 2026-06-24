@@ -122,6 +122,19 @@ def create_memory(
         tags=payload.tags,
         source_ref=payload.source_ref,
         source=payload.source,
+        scope_level=payload.scope_level,
+        volume_index=payload.volume_index,
+        volume_title=payload.volume_title,
+        chapter_index=payload.chapter_index,
+        chapter_title=payload.chapter_title,
+        valid_from_volume_index=payload.valid_from_volume_index,
+        valid_from_chapter_index=payload.valid_from_chapter_index,
+        valid_until_volume_index=payload.valid_until_volume_index,
+        valid_until_chapter_index=payload.valid_until_chapter_index,
+        reveal_at_volume_index=payload.reveal_at_volume_index,
+        reveal_at_chapter_index=payload.reveal_at_chapter_index,
+        retrievable=payload.retrievable,
+        priority=payload.priority,
     )
 
 
@@ -164,6 +177,19 @@ def confirm_outline_memory(
         tags=payload.tags,
         source_ref=payload.source_ref,
         source="confirmed_outline",
+        scope_level=payload.scope_level,
+        volume_index=payload.volume_index,
+        volume_title=payload.volume_title,
+        chapter_index=payload.chapter_index,
+        chapter_title=payload.chapter_title,
+        valid_from_volume_index=payload.valid_from_volume_index,
+        valid_from_chapter_index=payload.valid_from_chapter_index,
+        valid_until_volume_index=payload.valid_until_volume_index,
+        valid_until_chapter_index=payload.valid_until_chapter_index,
+        reveal_at_volume_index=payload.reveal_at_volume_index,
+        reveal_at_chapter_index=payload.reveal_at_chapter_index,
+        retrievable=payload.retrievable,
+        priority=payload.priority,
     )
 
 
@@ -185,6 +211,19 @@ def confirm_draft_memory(
         tags=payload.tags,
         source_ref=payload.source_ref,
         source="confirmed_draft",
+        scope_level=payload.scope_level,
+        volume_index=payload.volume_index,
+        volume_title=payload.volume_title,
+        chapter_index=payload.chapter_index,
+        chapter_title=payload.chapter_title,
+        valid_from_volume_index=payload.valid_from_volume_index,
+        valid_from_chapter_index=payload.valid_from_chapter_index,
+        valid_until_volume_index=payload.valid_until_volume_index,
+        valid_until_chapter_index=payload.valid_until_chapter_index,
+        reveal_at_volume_index=payload.reveal_at_volume_index,
+        reveal_at_chapter_index=payload.reveal_at_chapter_index,
+        retrievable=payload.retrievable,
+        priority=payload.priority,
     )
 
 
@@ -454,6 +493,11 @@ def rag_search(
         top_k=payload.top_k,
         library_type=payload.library_type,
         include_inactive=payload.include_inactive,
+        current_volume_index=payload.current_volume_index,
+        current_chapter_index=payload.current_chapter_index,
+        include_future=payload.include_future,
+        include_raw=payload.include_raw,
+        allowed_scope_levels=payload.allowed_scope_levels,
     )
     return RAGSearchResponse(results=results, retrieval_debug=debug)
 
@@ -698,6 +742,19 @@ def _create_memory_record(
     tags: list[str],
     source_ref: dict[str, Any],
     source: str,
+    scope_level: str = "chapter",
+    volume_index: int | None = None,
+    volume_title: str | None = None,
+    chapter_index: int | None = None,
+    chapter_title: str | None = None,
+    valid_from_volume_index: int | None = None,
+    valid_from_chapter_index: int | None = None,
+    valid_until_volume_index: int | None = None,
+    valid_until_chapter_index: int | None = None,
+    reveal_at_volume_index: int | None = None,
+    reveal_at_chapter_index: int | None = None,
+    retrievable: bool = True,
+    priority: int = 0,
 ) -> WritingMemory:
     memory = WritingMemory(
         knowledge_base_id=knowledge_base.id,
@@ -708,6 +765,19 @@ def _create_memory_record(
         tags_json=json.dumps(tags, ensure_ascii=False),
         source_ref_json=json.dumps(source_ref, ensure_ascii=False),
         source=source,
+        scope_level=scope_level,
+        volume_index=volume_index,
+        volume_title=volume_title,
+        chapter_index=chapter_index,
+        chapter_title=chapter_title,
+        valid_from_volume_index=valid_from_volume_index,
+        valid_from_chapter_index=valid_from_chapter_index,
+        valid_until_volume_index=valid_until_volume_index,
+        valid_until_chapter_index=valid_until_chapter_index,
+        reveal_at_volume_index=reveal_at_volume_index,
+        reveal_at_chapter_index=reveal_at_chapter_index,
+        retrievable=retrievable,
+        priority=priority,
     )
     db.add(memory)
     db.commit()
@@ -810,6 +880,10 @@ async def _generate_with_cards(
         stage=stage,
         query=query,
         top_k=payload.top_k or settings.retrieval_top_k,
+        current_volume_index=payload.current_volume_index,
+        current_chapter_index=payload.current_chapter_index,
+        include_future=payload.include_future_knowledge,
+        include_raw=payload.include_raw_knowledge,
     )
     if payload.knowledge_mode == "strict" and not results:
         return WritingGenerateResponse(
@@ -912,6 +986,15 @@ async def _generate_long_draft_with_cards(
         "expanded_terms": [],
         "preferred_card_types": [],
         "total_candidates": 0,
+        "current_volume_index": payload.current_volume_index,
+        "current_chapter_index": payload.current_chapter_index,
+        "candidate_count_before_scope_filter": 0,
+        "candidate_count_after_scope_filter": 0,
+        "filtered_by_status_count": 0,
+        "filtered_by_scope_count": 0,
+        "filtered_by_future_count": 0,
+        "selected_card_ids": [],
+        "selected_card_scope": {},
         "selected_count": 0,
         "filtered_duplicate_count": 0,
         "diversity_buckets": {},
@@ -929,6 +1012,10 @@ async def _generate_long_draft_with_cards(
             stage="draft",
             query=query,
             top_k=payload.top_k or settings.retrieval_top_k,
+            current_volume_index=payload.current_volume_index,
+            current_chapter_index=payload.current_chapter_index,
+            include_future=payload.include_future_knowledge,
+            include_raw=payload.include_raw_knowledge,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
         cards = _cards_for_search_results(db, knowledge_base.id, results)
@@ -1027,6 +1114,10 @@ async def _generate_long_draft_with_cards(
             stage="draft",
             query=padding_query,
             top_k=payload.top_k or settings.retrieval_top_k,
+            current_volume_index=payload.current_volume_index,
+            current_chapter_index=payload.current_chapter_index,
+            include_future=payload.include_future_knowledge,
+            include_raw=payload.include_raw_knowledge,
         )
         _merge_retrieval_debug(aggregate_debug, debug)
         cards = _cards_for_search_results(db, knowledge_base.id, results)
@@ -1507,10 +1598,25 @@ def _merge_used_knowledge(target: dict[str, dict[str, Any]], items: list[dict[st
 
 def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> None:
     target["total_candidates"] = int(target.get("total_candidates", 0)) + int(debug.get("total_candidates", 0))
+    for key in [
+        "candidate_count_before_scope_filter",
+        "candidate_count_after_scope_filter",
+        "filtered_by_status_count",
+        "filtered_by_scope_count",
+        "filtered_by_future_count",
+    ]:
+        target[key] = int(target.get(key, 0)) + int(debug.get(key, 0))
+    target["current_volume_index"] = debug.get("current_volume_index", target.get("current_volume_index"))
+    target["current_chapter_index"] = debug.get("current_chapter_index", target.get("current_chapter_index"))
     preferred = [*target.get("preferred_card_types", []), *debug.get("preferred_card_types", [])]
     target["preferred_card_types"] = list(dict.fromkeys(preferred))
     expanded_terms = [*target.get("expanded_terms", []), *debug.get("expanded_terms", [])]
     target["expanded_terms"] = list(dict.fromkeys(expanded_terms))
+    selected_ids = [*target.get("selected_card_ids", []), *debug.get("selected_card_ids", [])]
+    target["selected_card_ids"] = list(dict.fromkeys(selected_ids))
+    selected_scope = dict(target.get("selected_card_scope", {}))
+    selected_scope.update(debug.get("selected_card_scope", {}))
+    target["selected_card_scope"] = selected_scope
     target["filtered_duplicate_count"] = int(target.get("filtered_duplicate_count", 0)) + int(debug.get("filtered_duplicate_count", 0))
     buckets = dict(target.get("diversity_buckets", {}))
     for card_type, count in debug.get("diversity_buckets", {}).items():

@@ -151,6 +151,66 @@ def ensure_schema_upgrades() -> None:
             "content_fingerprint",
             "ALTER TABLE knowledge_cards ADD COLUMN content_fingerprint VARCHAR(64) NOT NULL DEFAULT ''",
         )
+        add_column_if_missing(
+            "knowledge_cards",
+            "scope_level",
+            "ALTER TABLE knowledge_cards ADD COLUMN scope_level VARCHAR(16) NOT NULL DEFAULT 'global'",
+        )
+        add_column_if_missing("knowledge_cards", "volume_index", "ALTER TABLE knowledge_cards ADD COLUMN volume_index INTEGER")
+        add_column_if_missing("knowledge_cards", "volume_title", "ALTER TABLE knowledge_cards ADD COLUMN volume_title VARCHAR(512)")
+        add_column_if_missing("knowledge_cards", "chapter_index", "ALTER TABLE knowledge_cards ADD COLUMN chapter_index INTEGER")
+        add_column_if_missing("knowledge_cards", "chapter_title", "ALTER TABLE knowledge_cards ADD COLUMN chapter_title VARCHAR(512)")
+        add_column_if_missing("knowledge_cards", "valid_from_volume_index", "ALTER TABLE knowledge_cards ADD COLUMN valid_from_volume_index INTEGER")
+        add_column_if_missing("knowledge_cards", "valid_from_chapter_index", "ALTER TABLE knowledge_cards ADD COLUMN valid_from_chapter_index INTEGER")
+        add_column_if_missing("knowledge_cards", "valid_until_volume_index", "ALTER TABLE knowledge_cards ADD COLUMN valid_until_volume_index INTEGER")
+        add_column_if_missing("knowledge_cards", "valid_until_chapter_index", "ALTER TABLE knowledge_cards ADD COLUMN valid_until_chapter_index INTEGER")
+        add_column_if_missing("knowledge_cards", "reveal_at_volume_index", "ALTER TABLE knowledge_cards ADD COLUMN reveal_at_volume_index INTEGER")
+        add_column_if_missing("knowledge_cards", "reveal_at_chapter_index", "ALTER TABLE knowledge_cards ADD COLUMN reveal_at_chapter_index INTEGER")
+        add_column_if_missing(
+            "knowledge_cards",
+            "retrievable",
+            "ALTER TABLE knowledge_cards ADD COLUMN retrievable BOOLEAN NOT NULL DEFAULT 0",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "priority",
+            "ALTER TABLE knowledge_cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+        )
+        add_column_if_missing(
+            "writing_memories",
+            "scope_level",
+            "ALTER TABLE writing_memories ADD COLUMN scope_level VARCHAR(16) NOT NULL DEFAULT 'chapter'",
+        )
+        add_column_if_missing("writing_memories", "volume_index", "ALTER TABLE writing_memories ADD COLUMN volume_index INTEGER")
+        add_column_if_missing("writing_memories", "volume_title", "ALTER TABLE writing_memories ADD COLUMN volume_title VARCHAR(512)")
+        add_column_if_missing("writing_memories", "chapter_index", "ALTER TABLE writing_memories ADD COLUMN chapter_index INTEGER")
+        add_column_if_missing("writing_memories", "chapter_title", "ALTER TABLE writing_memories ADD COLUMN chapter_title VARCHAR(512)")
+        add_column_if_missing("writing_memories", "valid_from_volume_index", "ALTER TABLE writing_memories ADD COLUMN valid_from_volume_index INTEGER")
+        add_column_if_missing("writing_memories", "valid_from_chapter_index", "ALTER TABLE writing_memories ADD COLUMN valid_from_chapter_index INTEGER")
+        add_column_if_missing("writing_memories", "valid_until_volume_index", "ALTER TABLE writing_memories ADD COLUMN valid_until_volume_index INTEGER")
+        add_column_if_missing("writing_memories", "valid_until_chapter_index", "ALTER TABLE writing_memories ADD COLUMN valid_until_chapter_index INTEGER")
+        add_column_if_missing("writing_memories", "reveal_at_volume_index", "ALTER TABLE writing_memories ADD COLUMN reveal_at_volume_index INTEGER")
+        add_column_if_missing("writing_memories", "reveal_at_chapter_index", "ALTER TABLE writing_memories ADD COLUMN reveal_at_chapter_index INTEGER")
+        add_column_if_missing(
+            "writing_memories",
+            "retrievable",
+            "ALTER TABLE writing_memories ADD COLUMN retrievable BOOLEAN NOT NULL DEFAULT 1",
+        )
+        add_column_if_missing(
+            "writing_memories",
+            "priority",
+            "ALTER TABLE writing_memories ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+        )
+        if "retrievable" in table_columns("knowledge_cards"):
+            connection.execute(
+                text(
+                    "UPDATE knowledge_cards "
+                    "SET retrievable = 1 "
+                    "WHERE library_type = 'writing_guide' "
+                    "AND is_canonical = 1 "
+                    "AND status IN ('approved', 'reviewed')"
+                )
+            )
         if settings.app_database_url.startswith("mysql"):
             if "tags_json" in table_columns("writing_memories"):
                 connection.execute(text("UPDATE writing_memories SET tags_json = '[]' WHERE tags_json IS NULL"))

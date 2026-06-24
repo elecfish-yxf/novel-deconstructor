@@ -1,6 +1,7 @@
 from pathlib import Path
+import json
 
-from novel_deconstructor.services.chapter_splitter import is_chapter_heading, split_text_file
+from novel_deconstructor.services.chapter_splitter import is_chapter_heading, is_volume_heading, split_text_file
 
 
 def test_chinese_heading_detection():
@@ -12,6 +13,9 @@ def test_chinese_heading_detection():
     assert is_chapter_heading("卷一 风起")
     assert is_chapter_heading("楔子")
     assert is_chapter_heading("CHAPTER 01")
+    assert is_volume_heading("Volume 1")
+    assert is_volume_heading("Book 2")
+    assert is_volume_heading("上卷")
     assert not is_chapter_heading("她看着窗外，觉得今天有点奇怪。")
 
 
@@ -89,3 +93,21 @@ def test_split_by_size_when_no_headings(tmp_path: Path):
 
     assert len(artifacts) == 3
     assert artifacts[0].title.startswith("自动分块")
+    assert artifacts[0].metadata["volume_index"] == 1
+    assert artifacts[0].metadata["volume_title"] == "Volume 1"
+
+
+def test_volume_heading_adds_metadata_without_empty_chapter(tmp_path: Path):
+    raw = tmp_path / "raw.txt"
+    raw.write_text("Volume 1\n\nChapter 1\nBody one\nVolume 2\n\nChapter 1\nBody two\n", encoding="utf-8")
+
+    artifacts = split_text_file(raw, tmp_path / "chunks", source_file_id=1, max_chars=1000, overlap_chars=100)
+
+    assert len(artifacts) == 2
+    assert [item.title for item in artifacts] == ["Chapter 1", "Chapter 1"]
+    assert artifacts[0].metadata["volume_index"] == 1
+    assert artifacts[0].metadata["volume_title"] == "Volume 1"
+    assert artifacts[1].metadata["volume_index"] == 2
+    assert artifacts[1].metadata["volume_title"] == "Volume 2"
+    metadata = json.loads(artifacts[0].metadata_path.read_text(encoding="utf-8"))
+    assert metadata["chapter_title"] == "Chapter 1"

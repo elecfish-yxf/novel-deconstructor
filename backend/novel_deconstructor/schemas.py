@@ -401,6 +401,19 @@ class KnowledgeCardRead(ORMModel):
     merged_from_ids: list[str] = Field(default_factory=list)
     evidence_count: int = 1
     content_fingerprint: str = ""
+    scope_level: str = "global"
+    volume_index: int | None = None
+    volume_title: str | None = None
+    chapter_index: int | None = None
+    chapter_title: str | None = None
+    valid_from_volume_index: int | None = None
+    valid_from_chapter_index: int | None = None
+    valid_until_volume_index: int | None = None
+    valid_until_chapter_index: int | None = None
+    reveal_at_volume_index: int | None = None
+    reveal_at_chapter_index: int | None = None
+    retrievable: bool = False
+    priority: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -416,6 +429,19 @@ class KnowledgeCardUpdate(BaseModel):
     confidence: float | None = None
     status: str | None = None
     is_canonical: bool | None = None
+    scope_level: str | None = None
+    volume_index: int | None = None
+    volume_title: str | None = None
+    chapter_index: int | None = None
+    chapter_title: str | None = None
+    valid_from_volume_index: int | None = None
+    valid_from_chapter_index: int | None = None
+    valid_until_volume_index: int | None = None
+    valid_until_chapter_index: int | None = None
+    reveal_at_volume_index: int | None = None
+    reveal_at_chapter_index: int | None = None
+    retrievable: bool | None = None
+    priority: int | None = None
 
 
 class KnowledgeMergeRequest(BaseModel):
@@ -530,6 +556,11 @@ class RAGSearchRequest(BaseModel):
     top_k: int = 8
     library_type: str | None = None
     include_inactive: bool = False
+    current_volume_index: int | None = None
+    current_chapter_index: int | None = None
+    include_future: bool = False
+    include_raw: bool = False
+    allowed_scope_levels: list[str] | None = None
 
 
 class UsedKnowledge(BaseModel):
@@ -542,6 +573,9 @@ class UsedKnowledge(BaseModel):
     content_preview: str = ""
     tags: list[str] = Field(default_factory=list)
     status: str | None = None
+    scope_level: str | None = None
+    volume_index: int | None = None
+    chapter_index: int | None = None
 
 
 class RAGSearchResult(UsedKnowledge):
@@ -556,6 +590,15 @@ class RetrievalDebug(BaseModel):
     expanded_terms: list[str] = Field(default_factory=list)
     preferred_card_types: list[str] = Field(default_factory=list)
     total_candidates: int = 0
+    current_volume_index: int | None = None
+    current_chapter_index: int | None = None
+    candidate_count_before_scope_filter: int = 0
+    candidate_count_after_scope_filter: int = 0
+    filtered_by_status_count: int = 0
+    filtered_by_scope_count: int = 0
+    filtered_by_future_count: int = 0
+    selected_card_ids: list[str] = Field(default_factory=list)
+    selected_card_scope: dict[str, str] = Field(default_factory=dict)
     selected_count: int = 0
     filtered_duplicate_count: int = 0
     diversity_buckets: dict[str, int] = Field(default_factory=dict)
@@ -582,6 +625,10 @@ class WritingGenerateRequest(BaseModel):
     top_k: int | None = None
     stage: str | None = None
     target_chars: int | None = None
+    current_volume_index: int | None = None
+    current_chapter_index: int | None = None
+    include_future_knowledge: bool = False
+    include_raw_knowledge: bool = False
 
 
 class WritingOutlineRequest(WritingGenerateRequest):
@@ -604,6 +651,19 @@ class WritingMemoryCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     source_ref: dict[str, Any] = Field(default_factory=dict)
     source: str = "manual"
+    scope_level: str = "chapter"
+    volume_index: int | None = None
+    volume_title: str | None = None
+    chapter_index: int | None = None
+    chapter_title: str | None = None
+    valid_from_volume_index: int | None = None
+    valid_from_chapter_index: int | None = None
+    valid_until_volume_index: int | None = None
+    valid_until_chapter_index: int | None = None
+    reveal_at_volume_index: int | None = None
+    reveal_at_chapter_index: int | None = None
+    retrievable: bool = True
+    priority: int = 0
 
 
 class WritingMemoryConfirmRequest(BaseModel):
@@ -611,6 +671,19 @@ class WritingMemoryConfirmRequest(BaseModel):
     content: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
     source_ref: dict[str, Any] = Field(default_factory=dict)
+    scope_level: str = "chapter"
+    volume_index: int | None = None
+    volume_title: str | None = None
+    chapter_index: int | None = None
+    chapter_title: str | None = None
+    valid_from_volume_index: int | None = None
+    valid_from_chapter_index: int | None = None
+    valid_until_volume_index: int | None = None
+    valid_until_chapter_index: int | None = None
+    reveal_at_volume_index: int | None = None
+    reveal_at_chapter_index: int | None = None
+    retrievable: bool = True
+    priority: int = 0
 
 
 class WritingMemoryRead(ORMModel):
@@ -623,6 +696,19 @@ class WritingMemoryRead(ORMModel):
     tags: list[str] = Field(default_factory=list)
     source_ref: dict[str, Any] = Field(default_factory=dict)
     source: str
+    scope_level: str = "chapter"
+    volume_index: int | None = None
+    volume_title: str | None = None
+    chapter_index: int | None = None
+    chapter_title: str | None = None
+    valid_from_volume_index: int | None = None
+    valid_from_chapter_index: int | None = None
+    valid_until_volume_index: int | None = None
+    valid_until_chapter_index: int | None = None
+    reveal_at_volume_index: int | None = None
+    reveal_at_chapter_index: int | None = None
+    retrievable: bool = True
+    priority: int = 0
     created_at: datetime
     updated_at: datetime
 
