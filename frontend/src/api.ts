@@ -775,6 +775,8 @@ export const api = {
       top_k?: number;
       current_volume_index?: number | null;
       current_chapter_index?: number | null;
+      include_future_knowledge?: boolean;
+      include_raw_knowledge?: boolean;
     },
   ) =>
     request<WritingGenerateResult>(
@@ -799,6 +801,8 @@ export const api = {
       target_chars?: number;
       current_volume_index?: number | null;
       current_chapter_index?: number | null;
+      include_future_knowledge?: boolean;
+      include_raw_knowledge?: boolean;
     },
   ) =>
     request<WritingGenerateResult>(
@@ -823,6 +827,8 @@ export const api = {
       target_chars?: number;
       current_volume_index?: number | null;
       current_chapter_index?: number | null;
+      include_future_knowledge?: boolean;
+      include_raw_knowledge?: boolean;
     },
   ) =>
     request<WritingDraftJob>(
@@ -851,6 +857,8 @@ export const api = {
       target_chars?: number;
       current_volume_index?: number | null;
       current_chapter_index?: number | null;
+      include_future_knowledge?: boolean;
+      include_raw_knowledge?: boolean;
     },
   ) =>
     request<WritingGenerateResult>(

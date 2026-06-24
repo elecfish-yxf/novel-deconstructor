@@ -92,8 +92,68 @@ Build expectation, delay it, then release the emotion through action.
     assert result["card_types"]["anti_pattern"] == 1
     cards = db.query(KnowledgeCard).order_by(KnowledgeCard.card_id).all()
     assert {card.card_type for card in cards} == {"conflict_pattern", "anti_pattern", "emotion_module"}
+    assert all(card.retrievable for card in cards)
     assert all(Path(card.markdown_path).exists() for card in cards)
     assert (tmp_path / "knowledge" / kb.workspace_id / "1" / "knowledge_docs" / "_imports").exists()
+
+    hidden_results, hidden_debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="concrete obstacles escalation",
+        top_k=5,
+    )
+    assert hidden_results == []
+    assert hidden_debug["filtered_by_status_count"] == 3
+
+    raw_results, raw_debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="concrete obstacles escalation",
+        top_k=5,
+        include_raw=True,
+    )
+    assert raw_results
+    assert raw_debug["selected_count"] > 0
+
+
+def test_import_markdown_worldbuilding_is_retrievable_when_approved(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    markdown = """# Story Bible
+
+## Rain district
+
+The rain district oath beacon binds every courier to return before dawn.
+"""
+
+    import_markdown_knowledge_source(
+        db,
+        kb,
+        markdown,
+        source_name="story-bible.md",
+        library_type="worldbuilding",
+        status="approved",
+    )
+
+    card = db.query(KnowledgeCard).one()
+    assert card.library_type == "worldbuilding"
+    assert card.is_canonical is True
+    assert card.retrievable is True
+
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="rain district oath beacon",
+        top_k=5,
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+    assert [item["id"] for item in results] == [card.card_id]
+    assert debug["selected_count"] == 1
 
 
 def test_search_knowledge_cards_uses_stage_preferences_and_status_filter(tmp_path, monkeypatch):
