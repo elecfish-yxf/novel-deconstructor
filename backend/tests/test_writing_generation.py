@@ -455,6 +455,117 @@ def test_confirm_draft_writes_handoff_visible_next_chapter(tmp_path, monkeypatch
     assert card.valid_from_chapter_index == 2
 
 
+def test_confirm_draft_updates_volume_continuity_memory(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+
+    confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Chapter one draft",
+            content="第一章结尾，林澈拿到黑色钥匙，但她发现钥匙正在发烫。下一章必须处理钥匙反应。",
+            volume_index=1,
+            chapter_index=1,
+            chapter_title="黑钥",
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    volume_memory = db.query(WritingMemory).filter(WritingMemory.memory_type == "volume_summary").one()
+    volume_data = json.loads(volume_memory.content)
+    volume_card = db.query(KnowledgeCard).filter(KnowledgeCard.card_id == f"MEM-{volume_memory.id:03d}").one()
+
+    assert volume_memory.source == "auto_volume_continuity"
+    assert volume_memory.scope_level == "volume"
+    assert volume_memory.volume_index == 1
+    assert volume_memory.valid_from_chapter_index == 2
+    assert volume_card.card_type == "volume_summary"
+    assert volume_data["chapter_handoff_count"] == 1
+    assert volume_data["continuity_chain"][0]["chapter_index"] == 1
+
+    confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(
+            title="Chapter two draft",
+            content="第二章中黑色钥匙打开地下门，林澈失去通讯。章尾她听见门内有人叫出她的真名。",
+            volume_index=1,
+            chapter_index=2,
+            chapter_title="地下门",
+        ),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    volume_memories = db.query(WritingMemory).filter(WritingMemory.memory_type == "volume_summary").all()
+    assert len(volume_memories) == 1
+    db.refresh(volume_memories[0])
+    updated_data = json.loads(volume_memories[0].content)
+    assert volume_memories[0].id == volume_memory.id
+    assert volume_memories[0].valid_from_chapter_index == 3
+    assert updated_data["chapter_handoff_count"] == 2
+    assert [item["chapter_index"] for item in updated_data["continuity_chain"]] == [1, 2]
+    assert any("不得只承接上一章" in item for item in updated_data["volume_continuity_requirements"])
+
+    payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="写第三章，继续处理门内声音。",
+        confirmed_outline="林澈进入地下门并追查叫出真名的人。",
+        dry_run=True,
+        current_volume_index=1,
+        current_chapter_index=3,
+        top_k=10,
+    )
+    result = asyncio.run(_generate_with_cards(db, kb, payload, stage="draft", confirmed_outline=payload.confirmed_outline))
+
+    assert any(item.card_type == "volume_summary" for item in result.used_knowledge)
+    assert result.prompt_preview and "CURRENT VOLUME SUMMARY" in result.prompt_preview
+    assert "VolumeContinuity" in result.prompt_preview
+    assert "chapter_handoff_count" in result.prompt_preview
+
+
+def test_chapter_delete_rebuilds_volume_continuity_memory(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, _kb = _session()
+
+    confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(title="Chapter one", content="第一章结尾，主角保留蓝色信物。", volume_index=1, chapter_index=1),
+        workspace_id="ws_a",
+        db=db,
+    )
+    confirm_draft_memory(
+        1,
+        WritingMemoryConfirmRequest(title="Chapter two", content="第二章结尾，蓝色信物裂开，露出地图。", volume_index=1, chapter_index=2),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    bulk_delete_writing_scope(
+        1,
+        WritingScopeBulkDeleteRequest(chapters=[WritingChapterRef(volume_index=1, chapter_index=2)]),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    volume_memory = db.query(WritingMemory).filter(WritingMemory.memory_type == "volume_summary").one()
+    data = json.loads(volume_memory.content)
+    assert data["chapter_handoff_count"] == 1
+    assert [item["chapter_index"] for item in data["continuity_chain"]] == [1]
+    assert "地图" not in volume_memory.content
+
+    bulk_delete_writing_scope(
+        1,
+        WritingScopeBulkDeleteRequest(chapters=[WritingChapterRef(volume_index=1, chapter_index=1)]),
+        workspace_id="ws_a",
+        db=db,
+    )
+
+    assert db.query(WritingMemory).filter(WritingMemory.memory_type == "volume_summary").count() == 0
+
+
 def test_raw_evidence_is_hidden_by_default_and_debug_only_in_prompt(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))

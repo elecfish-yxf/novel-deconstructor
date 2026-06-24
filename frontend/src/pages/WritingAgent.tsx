@@ -173,7 +173,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [chapterTitles, setChapterTitles] = useState<ChapterTitleMap>(() => readChapterTitles());
   const [chapterTitle, setChapterTitle] = useState(defaultChapterTitle(1));
   const [outlineTask, setOutlineTask] = useState("请基于世界观设定，结合写作技巧指南，为我生成一份原创小说第一章章节提纲。");
-  const [outlineContext, setOutlineContext] = useState("");
   const [outline, setOutline] = useState("");
   const [confirmedOutline, setConfirmedOutline] = useState("");
   const [draft, setDraft] = useState("");
@@ -591,7 +590,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     }
     if (changed) {
       clearTransientWritingState();
-      setOutlineContext("");
     }
   }
 
@@ -1264,7 +1262,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     try {
       const result = await api.generateWorkOutline(targetWorkId, {
         task: writingTaskPayload,
-        current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
@@ -1352,7 +1349,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
       const job = await api.createWorkDraftJob(targetWorkId, {
         task: `请根据用户已确认的章节提纲生成小说正文：${writingTaskPayload}`,
         confirmed_outline: confirmedOutline,
-        current_content: outlineContext,
         mode,
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
@@ -1569,9 +1565,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         chapter_index: currentPositionPayload.current_chapter_index,
       });
       if (selectedIdRef.current === targetWorkId) {
-        setMemories((items) => [saved, ...items]);
+        const nextMemories = await api.listWritingMemories(targetWorkId);
+        if (!nextMemories.some((item) => item.id === saved.id)) nextMemories.unshift(saved);
+        setMemories(nextMemories);
         await refreshKnowledgeCards(targetWorkId);
-        setMessage("正文已写入 Memory。");
+        setMessage("正文已保存，并自动更新章节接力卡和本卷累计承接。");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存正文 Memory 失败");
@@ -1908,10 +1906,6 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   <label>
                     写作请求
                     <textarea rows={4} value={outlineTask} onChange={(event) => setOutlineTask(event.target.value)} />
-                  </label>
-                  <label>
-                    补充上下文 / 已有正文
-                    <textarea rows={4} value={outlineContext} onChange={(event) => setOutlineContext(event.target.value)} />
                   </label>
                   <div className="mode-grid">
                     <label>

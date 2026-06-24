@@ -98,6 +98,7 @@ SECTION_MIN_COMPLETION_RATIO = 0.8
 MAX_SECTION_SUPPLEMENTS = 2
 RAG_PROMPT_CARD_LIMIT = 60
 DRAFT_GENERATION_JOBS: dict[str, dict[str, Any]] = {}
+AUTO_VOLUME_CONTINUITY_SOURCE = "auto_volume_continuity"
 FORCED_CONTEXT_CARD_TYPES = {
     "ChapterOutline",
     "ChapterHandoff",
@@ -244,7 +245,7 @@ def confirm_draft_memory(
     _require_chapter_position(payload.volume_index, payload.chapter_index)
     next_volume, next_chapter = _next_chapter_position(payload.volume_index, payload.chapter_index)
     handoff_content = _chapter_handoff_memory_content(payload, next_volume=next_volume, next_chapter=next_chapter)
-    return _create_memory_record(
+    handoff = _create_memory_record(
         db,
         kb,
         workspace_id=workspace_id,
@@ -268,6 +269,8 @@ def confirm_draft_memory(
         retrievable=True,
         priority=max(payload.priority, 90),
     )
+    _refresh_volume_continuity_memory(db, kb, workspace_id, payload.volume_index)
+    return handoff
 
 
 @router.post("/works/{work_id}/knowledge/import-package", response_model=KnowledgePackageImportResponse)
@@ -602,6 +605,8 @@ def bulk_delete_writing_scope(
     for memory in scoped_memories:
         db.delete(memory)
     db.commit()
+    for volume_index in sorted({volume for volume, _chapter in chapter_refs if volume not in volume_indices}):
+        _refresh_volume_continuity_memory(db, kb, workspace_id, volume_index)
 
     return WritingScopeBulkDeleteResponse(
         deleted_volumes=len(volume_indices),
@@ -1058,6 +1063,194 @@ def _chapter_handoff_memory_content(
         ),
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _refresh_volume_continuity_memory(
+    db: Session,
+    knowledge_base: KnowledgeBase,
+    workspace_id: str,
+    volume_index: int | None,
+) -> WritingMemory | None:
+    if not volume_index:
+        return None
+    existing = _auto_volume_continuity_memory(db, knowledge_base.id, workspace_id, volume_index)
+    handoffs = _latest_volume_handoff_memories(db, knowledge_base.id, workspace_id, volume_index)
+    if not handoffs:
+        if existing:
+            card = (
+                db.query(KnowledgeCard)
+                .filter(KnowledgeCard.knowledge_base_id == knowledge_base.id, KnowledgeCard.card_id == f"MEM-{existing.id:03d}")
+                .first()
+            )
+            if card:
+                delete_card_physical(db, knowledge_base, card)
+            db.delete(existing)
+            db.commit()
+        return None
+
+    latest_chapter = max((memory.chapter_index or 0) for memory in handoffs)
+    source_ref = {
+        "source": AUTO_VOLUME_CONTINUITY_SOURCE,
+        "volume_index": volume_index,
+        "latest_chapter_index": latest_chapter,
+        "handoff_memory_ids": [memory.id for memory in handoffs],
+    }
+    content = _volume_continuity_memory_content(handoffs, volume_index=volume_index)
+    tags = _unique_texts(["volume_summary", "volume_continuity", "continuity", "auto", "approved"])
+    volume_title = next((memory.volume_title for memory in handoffs if memory.volume_title), None)
+    if existing:
+        existing.title = _volume_continuity_title(volume_index)
+        existing.content = content
+        existing.tags_json = json.dumps(tags, ensure_ascii=False)
+        existing.source_ref_json = json.dumps(source_ref, ensure_ascii=False)
+        existing.source = AUTO_VOLUME_CONTINUITY_SOURCE
+        existing.scope_level = "volume"
+        existing.volume_index = volume_index
+        existing.volume_title = volume_title or existing.volume_title
+        existing.chapter_index = None
+        existing.chapter_title = None
+        existing.valid_from_volume_index = volume_index
+        existing.valid_from_chapter_index = latest_chapter + 1
+        existing.valid_until_volume_index = None
+        existing.valid_until_chapter_index = None
+        existing.reveal_at_volume_index = volume_index
+        existing.reveal_at_chapter_index = latest_chapter + 1
+        existing.retrievable = True
+        existing.priority = max(existing.priority or 0, 95)
+        db.commit()
+        db.refresh(existing)
+        sync_memory_card(db, knowledge_base, existing)
+        db.refresh(existing)
+        return existing
+
+    return _create_memory_record(
+        db,
+        knowledge_base,
+        workspace_id=workspace_id,
+        memory_type="volume_summary",
+        title=_volume_continuity_title(volume_index),
+        content=content,
+        tags=tags,
+        source_ref=source_ref,
+        source=AUTO_VOLUME_CONTINUITY_SOURCE,
+        scope_level="volume",
+        volume_index=volume_index,
+        volume_title=volume_title,
+        chapter_index=None,
+        valid_from_volume_index=volume_index,
+        valid_from_chapter_index=latest_chapter + 1,
+        reveal_at_volume_index=volume_index,
+        reveal_at_chapter_index=latest_chapter + 1,
+        retrievable=True,
+        priority=95,
+    )
+
+
+def _auto_volume_continuity_memory(db: Session, knowledge_base_id: int, workspace_id: str, volume_index: int) -> WritingMemory | None:
+    return (
+        db.query(WritingMemory)
+        .filter(
+            WritingMemory.workspace_id == workspace_id,
+            WritingMemory.knowledge_base_id == knowledge_base_id,
+            WritingMemory.memory_type == "volume_summary",
+            WritingMemory.source == AUTO_VOLUME_CONTINUITY_SOURCE,
+            WritingMemory.volume_index == volume_index,
+        )
+        .first()
+    )
+
+
+def _latest_volume_handoff_memories(db: Session, knowledge_base_id: int, workspace_id: str, volume_index: int) -> list[WritingMemory]:
+    memories = (
+        db.query(WritingMemory)
+        .filter(
+            WritingMemory.workspace_id == workspace_id,
+            WritingMemory.knowledge_base_id == knowledge_base_id,
+            WritingMemory.memory_type == "ChapterHandoff",
+            WritingMemory.volume_index == volume_index,
+        )
+        .order_by(WritingMemory.updated_at.desc(), WritingMemory.id.desc())
+        .all()
+    )
+    latest_by_chapter: dict[int, WritingMemory] = {}
+    for memory in memories:
+        if not memory.chapter_index:
+            continue
+        latest_by_chapter.setdefault(memory.chapter_index, memory)
+    return sorted(latest_by_chapter.values(), key=lambda item: (item.chapter_index or 0, item.id))
+
+
+def _volume_continuity_title(volume_index: int) -> str:
+    return f"Volume {volume_index} Continuity"
+
+
+def _volume_continuity_memory_content(handoffs: list[WritingMemory], *, volume_index: int) -> str:
+    chain: list[dict[str, Any]] = []
+    open_threads: list[str] = []
+    character_state: list[str] = []
+    relationship_state: list[str] = []
+    worldbuilding_facts: list[str] = []
+    continuity_requirements: list[str] = []
+    for memory in handoffs:
+        data = _json_object_text(memory.content)
+        chain.append(
+            {
+                "chapter_index": memory.chapter_index,
+                "chapter_title": memory.chapter_title,
+                "handoff_memory_id": memory.id,
+                "last_sentence": _clip(_json_scalar_text(data.get("last_sentence")), 180),
+                "ending_snapshot": _clip(_json_scalar_text(data.get("ending_snapshot")), 260),
+                "must_continue": _json_list_values(data.get("must_continue") or data.get("continuity_requirements"), limit=3, max_chars=180),
+                "open_threads": _json_list_values(data.get("open_threads") or data.get("active_foreshadowing"), limit=3, max_chars=160),
+            }
+        )
+        open_threads.extend(_json_list_values(data.get("open_threads") or data.get("active_foreshadowing"), limit=6, max_chars=180))
+        character_state.extend(_json_list_values(data.get("character_state_delta"), limit=6, max_chars=180))
+        relationship_state.extend(_json_list_values(data.get("relationship_delta"), limit=5, max_chars=180))
+        worldbuilding_facts.extend(_json_list_values(data.get("new_worldbuilding_facts"), limit=5, max_chars=180))
+        continuity_requirements.extend(_json_list_values(data.get("continuity_requirements") or data.get("must_continue"), limit=5, max_chars=200))
+
+    latest_chapter = max((memory.chapter_index or 0) for memory in handoffs)
+    data = {
+        "card_purpose": "VolumeContinuity",
+        "volume_index": volume_index,
+        "updated_through_chapter_index": latest_chapter,
+        "chapter_handoff_count": len(handoffs),
+        "continuity_chain": chain,
+        "active_open_threads": _unique_texts(open_threads)[:30],
+        "character_state_rollup": _unique_texts(character_state)[:30],
+        "relationship_state_rollup": _unique_texts(relationship_state)[:24],
+        "worldbuilding_rollup": _unique_texts(worldbuilding_facts)[:24],
+        "volume_continuity_requirements": _unique_texts(
+            [
+                f"本卷后续章节必须承接第 1 章到第 {latest_chapter} 章已经确认的因果链、人物状态、伏笔和情绪余波。",
+                "不得只承接上一章而忽略本卷早前已经建立的承诺、伤势、物品、关系变化和未解问题。",
+                "如果要跨场景或跳时间，必须交代从已确认章节链到新场景之间的因果过渡。",
+                *_unique_texts(continuity_requirements)[:24],
+            ]
+        )[:30],
+        "do_not_reset": [
+            "不得让本卷早前已经确认的状态在后续章节中无解释消失。",
+            "不得把后续章节写成与本卷前文因果链无关的独立开头。",
+            "不得重复介绍已经完成铺垫的核心人物、地点、规则和目标。",
+        ],
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _json_list_values(value: Any, *, limit: int, max_chars: int) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif value:
+        raw_items = [value]
+    else:
+        raw_items = []
+    items: list[str] = []
+    for item in raw_items:
+        text = _json_scalar_text(item)
+        if text:
+            items.append(_clip(text, max_chars))
+    return _unique_texts(items)[:limit]
 
 
 def _content_lines(content: str) -> list[str]:
@@ -1940,7 +2133,7 @@ Visible foreshadowing and unresolved setup that should be preserved or paid off.
 {_format_card_context(foreshadowing) or "No foreshadowing memory was retrieved."}
 
 [CURRENT VOLUME SUMMARY]
-Approved summary memory for the current volume and prior visible volume context.
+Approved cumulative continuity memory for the current volume and prior visible volume context. Use it to preserve the work's running cause-effect chain, not just the immediately previous chapter.
 {_format_card_context(volume_summaries) or "No volume_summary memory was retrieved."}
 
 [PROJECT MEMORY]
@@ -1972,6 +2165,7 @@ Current context:
 - Worldbuilding and memory take precedence over writing_guide if there is a conflict.
 - If a HANDOFF CONTINUITY LOCK is present, the opening must directly continue its last_sentence or ending_snapshot before introducing a new scene.
 - Preserve the handoff's character state, relationship state, unresolved hooks, props, injuries, promises, and emotional aftertaste.
+- Preserve the CURRENT VOLUME SUMMARY continuity chain so later chapters do not forget earlier confirmed events, relationships, foreshadowing, and worldbuilding.
 - Do not copy source-work names, places, factions, worldbuilding, or signature passages from writing_guide cards.
 - Do not expose card names, retrieval process, scores, or citation IDs in the prose.
 - Internalize the retrieved rules naturally; do not mechanically restate them."""
