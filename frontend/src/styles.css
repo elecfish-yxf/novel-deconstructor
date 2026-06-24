@@ -9,8 +9,15 @@
   box-sizing: border-box;
 }
 
+html,
+#root {
+  width: 100%;
+  min-width: 0;
+}
+
 body {
   margin: 0;
+  overflow-x: hidden;
 }
 
 button,
@@ -18,6 +25,14 @@ input,
 select,
 textarea {
   font: inherit;
+  max-width: 100%;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
 }
 
 button {
@@ -74,6 +89,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
@@ -147,6 +163,7 @@ nav button.active {
   padding: 28px;
   max-width: 1380px;
   width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
@@ -1351,6 +1368,7 @@ th {
 
   .workspace {
     overflow: visible;
+    max-width: none;
   }
 
   .agent-layout,
@@ -1385,6 +1403,153 @@ th {
 
   .position-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  button,
+  .button-link,
+  input,
+  select,
+  textarea {
+    min-height: 40px;
+  }
+
+  .app-shell {
+    min-height: 100dvh;
+  }
+
+  .sidebar {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .brand {
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .brand > div {
+    min-width: 0;
+  }
+
+  .brand strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  nav {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    margin: 0 -4px;
+    padding: 0 4px 2px;
+    scrollbar-width: none;
+  }
+
+  nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  nav button {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 10px;
+  }
+
+  .context-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 0;
+    padding: 10px;
+    gap: 6px 8px;
+    min-width: 0;
+  }
+
+  .context-panel span,
+  .context-panel strong {
+    min-width: 0;
+  }
+
+  .context-panel .sidebar-action {
+    grid-column: 1 / -1;
+  }
+
+  .workspace {
+    padding: 12px;
+  }
+
+  .page-head {
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .page-head h1 {
+    font-size: 24px;
+  }
+
+  .page-head p {
+    font-size: 14px;
+  }
+
+  .form-grid,
+  .config-form,
+  .compact-form,
+  .skill-editor,
+  .selected-work-card,
+  .position-command-panel {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .file-bulk-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .file-row-list {
+    padding-left: 8px;
+  }
+
+  .file-row-item {
+    align-items: flex-start;
+  }
+
+  .file-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .tab-row,
+  .filter-chip-row {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .tab-row button,
+  .filter-chip-row button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .table-wrap,
+  .preview-panel,
+  .log-panel {
+    overflow-x: auto;
   }
 }
 
@@ -2357,5 +2522,253 @@ th {
   .writing-editor-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .writing-agent-platform {
+    min-height: 100dvh;
+    background: #f5f6f8;
+  }
+
+  .writing-agent-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .writing-agent-header-left,
+  .writing-agent-header-right {
+    gap: 8px;
+  }
+
+  .writing-agent-logo {
+    width: 100%;
+  }
+
+  .writing-agent-logo span {
+    width: 28px;
+    height: 28px;
+  }
+
+  .writing-agent-work-switcher {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .writing-agent-work-switcher select {
+    width: 100%;
+  }
+
+  .writing-agent-top-nav {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .writing-agent-top-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .writing-agent-top-nav button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 9px 7px;
+  }
+
+  .writing-agent-search {
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .writing-icon-button {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+  }
+
+  .writing-agent-user {
+    display: none;
+  }
+
+  .writing-agent-status-strip {
+    padding: 6px 10px;
+  }
+
+  .writing-agent-shell {
+    gap: 10px;
+    padding: 10px;
+    background: #f5f6f8;
+  }
+
+  .writing-agent-left-panel,
+  .writing-agent-right-panel,
+  .writing-agent-editor {
+    width: 100% !important;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .writing-agent-left-panel,
+  .writing-agent-right-panel {
+    min-height: 0;
+  }
+
+  .writing-agent-left-panel {
+    max-height: 54dvh;
+  }
+
+  .writing-agent-left-scroll,
+  .writing-assistant-content {
+    max-height: 54dvh;
+  }
+
+  .writing-panel-head {
+    height: auto;
+    min-height: 44px;
+    align-items: flex-start;
+    padding: 9px 10px;
+  }
+
+  .writing-panel-head div {
+    justify-content: flex-end;
+  }
+
+  .writing-work-create,
+  .writing-work-tree,
+  .writing-volume-tree,
+  .writing-work-files {
+    padding: 10px;
+  }
+
+  .writing-volume-head {
+    align-items: flex-start;
+  }
+
+  .writing-chapter-list,
+  .writing-file-list {
+    padding-left: 0;
+  }
+
+  .writing-chapter-list button {
+    min-height: 52px;
+  }
+
+  .writing-file-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .writing-file-row {
+    align-items: flex-start;
+  }
+
+  .writing-file-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .writing-agent-editor {
+    min-width: 0;
+    min-height: 68dvh;
+  }
+
+  .writing-editor-titlebar {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .writing-editor-titlebar > input {
+    font-size: 18px;
+    min-height: 38px;
+  }
+
+  .writing-editor-position {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .writing-editor-position label {
+    flex: 1;
+    grid-template-columns: auto minmax(64px, 1fr);
+  }
+
+  .writing-editor-toolbar {
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    padding: 8px 10px;
+  }
+
+  .writing-editor-toolbar button,
+  .writing-word-count {
+    flex: 0 0 auto;
+  }
+
+  .writing-toolbar-divider {
+    display: none;
+  }
+
+  .writing-word-count {
+    margin-left: 0;
+  }
+
+  .writing-editor-surface {
+    min-height: 420px;
+    padding: 12px;
+  }
+
+  .writing-editor-surface textarea {
+    min-height: 420px;
+    font-size: 15px;
+  }
+
+  .writing-editor-footer {
+    padding: 10px;
+  }
+
+  .writing-editor-footer > div {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .writing-assistant-tabs button {
+    min-width: 72px;
+  }
+
+  .writing-assistant-content,
+  .writing-side-card {
+    padding: 10px;
+  }
+
+  .writing-card-import-head,
+  .writing-agent-platform .mode-grid,
+  .writing-agent-platform .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .writing-setting-upload {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .writing-agent-platform .tab-row,
+  .writing-agent-platform .filter-chip-row {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .writing-agent-platform .tab-row button,
+  .writing-agent-platform .filter-chip-row button {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 }

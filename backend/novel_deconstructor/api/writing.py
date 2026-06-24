@@ -977,21 +977,84 @@ def _chapter_handoff_memory_content(
     next_chapter: int | None,
 ) -> str:
     lines = _content_lines(payload.content)
-    ending = _tail_excerpt(payload.content, 700)
+    ending = _last_paragraphs(payload.content, count=3, max_chars=650) or _tail_excerpt(payload.content, 600)
+    last_sentence = _last_sentence(payload.content, max_chars=220)
+    open_threads = _unique_texts(
+        [
+            *_list_candidates(_keyword_lines(lines, ["伏笔", "悬念", "秘密", "异常", "疑问", "尚未", "未解", "线索"]), fallback="", limit=6),
+            *_list_candidates(_keyword_lines(lines, ["下一章", "章尾", "钩子", "继续", "必须", "将要", "转折"]), fallback="", limit=6),
+        ]
+    )[:8]
+    scene_anchor = {
+        "where_when": _clip(_keyword_excerpt(lines, ["地点", "城市", "房间", "门", "夜", "天", "现场", "走廊", "街", "archive"]), 180)
+        or "从 ending_snapshot 的最后场景继续判断。",
+        "pov_or_focus": _clip(_keyword_excerpt(lines, ["视角", "主角", "他", "她", "我", "他们", "人物"]), 180) or "延续上一章结尾正在行动或承压的人物焦点。",
+        "immediate_pressure": _clip(_keyword_excerpt(lines, ["危机", "压力", "阻力", "冲突", "追", "逃", "威胁", "选择", "决定"]), 180)
+        or (last_sentence or "承接上一章结尾的直接后果。"),
+    }
+    character_state = _list_candidates(_keyword_lines(lines, ["他", "她", "主角", "人物", "状态", "选择", "决定", "意识到", "受伤", "拿到", "失去"]), fallback="", limit=8)
+    relationship_state = _list_candidates(_keyword_lines(lines, ["关系", "信任", "误解", "同盟", "敌意", "靠近", "背叛", "保护"]), fallback="", limit=6)
+    worldbuilding_facts = _list_candidates(_keyword_lines(lines, ["规则", "设定", "城市", "组织", "地点", "世界", "制度", "能力", "物品"]), fallback="", limit=6)
+    continuation_requirements = _unique_texts(
+        [
+            f"Next visible position: Volume {next_volume} Chapter {next_chapter}" if next_volume and next_chapter else "",
+            f"下一章开头必须直接承接上一章最后一句：{last_sentence}" if last_sentence else "下一章开头必须承接上一章结尾的直接后果。",
+            "延续上一章结尾的时间、地点、人物目标、情绪余波和风险压力；如需跳时空，先给出清楚过渡。",
+            "先处理 ending_snapshot 中尚未完成的动作或反应，再推进新事件。",
+            *_list_candidates(_keyword_lines(lines, ["不要忘", "记住", "承接", "连续", "伏笔", "状态", "下一章"]), fallback="", limit=6),
+            *open_threads[:4],
+        ]
+    )
     data = {
-        "chapter_summary": _clip(_first_text_block(lines, payload.content), 700),
-        "ending_state": ending or "待从已确认正文结尾承接。",
-        "character_state_delta": _list_candidates(_keyword_lines(lines, ["他", "她", "主角", "人物", "状态", "选择", "决定", "意识到"]), fallback="", limit=6),
-        "relationship_delta": _list_candidates(_keyword_lines(lines, ["关系", "信任", "误解", "同盟", "敌意", "靠近"]), fallback="", limit=6),
-        "new_worldbuilding_facts": _list_candidates(_keyword_lines(lines, ["规则", "设定", "城市", "组织", "地点", "世界", "制度"]), fallback="", limit=6),
+        "card_purpose": "ChapterHandoff",
+        "source_position": {
+            "volume_index": payload.volume_index,
+            "volume_title": payload.volume_title,
+            "chapter_index": payload.chapter_index,
+            "chapter_title": payload.chapter_title,
+        },
+        "target_position": {
+            "volume_index": next_volume,
+            "chapter_index": next_chapter,
+        },
+        "chapter_summary": _clip(_first_text_block(lines, payload.content), 420),
+        "ending_snapshot": ending or "待从已确认正文结尾承接。",
+        "last_sentence": last_sentence,
+        "scene_anchor": scene_anchor,
+        "ending_state": {
+            "visible_situation": "见 ending_snapshot。" if ending else "待从已确认正文结尾承接。",
+            "immediate_pressure": scene_anchor["immediate_pressure"],
+            "emotional_aftertaste": _clip(_keyword_excerpt(lines, ["情绪", "恐惧", "愤怒", "期待", "爽点", "余波", "沉默", "震惊"]), 180)
+            or "延续上一章章尾情绪，不要重置为平静开场。",
+        },
+        "character_state_delta": character_state,
+        "relationship_delta": relationship_state,
+        "new_worldbuilding_facts": worldbuilding_facts,
         "active_foreshadowing": _list_candidates(_keyword_lines(lines, ["伏笔", "悬念", "秘密", "异常", "疑问", "尚未", "未解"]), fallback="", limit=6),
+        "open_threads": open_threads,
         "resolved_items": _list_candidates(_keyword_lines(lines, ["解决", "完成", "确认", "明白", "结束"]), fallback="", limit=5),
-        "next_chapter_hooks": _list_candidates(_keyword_lines(lines, ["下一章", "章尾", "钩子", "继续", "必须", "将要"]), fallback=ending, limit=6),
+        "next_chapter_hooks": _list_candidates(_keyword_lines(lines, ["下一章", "章尾", "钩子", "继续", "必须", "将要", "转折"]), fallback=_clip(last_sentence or ending, 180), limit=6),
+        "must_continue": continuation_requirements[:6],
+        "do_not_reset": [
+            "不得把下一章写成全新的无关开头。",
+            "不得重新介绍已经在上一章完成交代的人物、地点或目标。",
+            "不得无解释跳过上一章最后一句造成的动作后果、情绪余波或危险压力。",
+            "不得让已受伤、已获得、已失去、已暴露或已承诺的状态凭空消失。",
+        ],
+        "continuity_requirements": continuation_requirements[:8],
         "do_not_forget": _unique_texts(
             [
-                f"Next visible position: Volume {next_volume} Chapter {next_chapter}" if next_volume and next_chapter else "",
-                *_list_candidates(_keyword_lines(lines, ["不要忘", "记住", "承接", "连续", "伏笔", "状态"]), fallback="", limit=5),
+                *continuation_requirements[:4],
+                *character_state[:4],
+                *relationship_state[:3],
+                *worldbuilding_facts[:3],
             ]
+        ),
+        "handoff_prompt": _clip(
+            "下一章必须从上一章章尾的直接后果写起。"
+            f"上一章最后一句：{last_sentence or '见 ending_snapshot'}。"
+            "先回应人物反应、风险变化和未解线索，再开启新的场景推进。",
+            450,
         ),
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
@@ -1857,8 +1920,8 @@ User-confirmed original characters, places, factions, rules, and worldbuilding. 
 {_format_card_context(worldbuilding) or "No user-confirmed worldbuilding was retrieved. Do not borrow names, places, factions, or unique settings from source works."}
 
 [PREVIOUS CHAPTER HANDOFF]
-Continuity cards from already confirmed chapters. Use them to preserve ending state, unresolved hooks, and next-chapter carryover.
-{_format_card_context(previous_handoff) or "No previous chapter handoff was retrieved."}
+Continuity cards from already confirmed chapters. Treat every HANDOFF CONTINUITY LOCK as a hard next-chapter constraint, not optional inspiration.
+{_format_handoff_context(previous_handoff) or "No previous chapter handoff was retrieved."}
 
 [CURRENT CHAPTER OUTLINE]
 The approved outline memory for the current chapter, when available.
@@ -1907,6 +1970,8 @@ Current context:
 [OUTPUT REQUIREMENTS]
 - {output_rule}
 - Worldbuilding and memory take precedence over writing_guide if there is a conflict.
+- If a HANDOFF CONTINUITY LOCK is present, the opening must directly continue its last_sentence or ending_snapshot before introducing a new scene.
+- Preserve the handoff's character state, relationship state, unresolved hooks, props, injuries, promises, and emotional aftertaste.
 - Do not copy source-work names, places, factions, worldbuilding, or signature passages from writing_guide cards.
 - Do not expose card names, retrieval process, scores, or citation IDs in the prose.
 - Internalize the retrieved rules naturally; do not mechanically restate them."""
@@ -1931,6 +1996,88 @@ def _format_card_context(cards: list[KnowledgeCard]) -> str:
         f"[{card.card_id}] {card.library_type}/{card.card_type} | {card.title}\n{_clip(card.content, 1400)}"
         for card in cards
     )
+
+
+def _format_handoff_context(cards: list[KnowledgeCard]) -> str:
+    formatted: list[str] = []
+    for card in cards:
+        data = _json_object_text(card.content)
+        if not data:
+            formatted.append(f"[HANDOFF CONTINUITY LOCK] {card.card_id} | {card.title}\n{_clip(card.content, 1400)}")
+            continue
+        source = _format_handoff_position(data.get("source_position"))
+        target = _format_handoff_position(data.get("target_position"))
+        formatted.append(
+            "\n".join(
+                line
+                for line in [
+                    f"[HANDOFF CONTINUITY LOCK] {card.card_id} | {card.title}",
+                    f"Source -> Target: {source} -> {target}",
+                    f"Last sentence to continue: {_json_scalar_text(data.get('last_sentence')) or 'See ending snapshot.'}",
+                    f"Ending snapshot: {_clip(_json_scalar_text(data.get('ending_snapshot')) or _json_scalar_text(data.get('ending_state')), 1100)}",
+                    _format_handoff_list("Must continue", data.get("must_continue") or data.get("continuity_requirements"), limit=8),
+                    _format_handoff_list("Do not reset", data.get("do_not_reset"), limit=6),
+                    _format_handoff_list("Open threads", data.get("open_threads") or data.get("active_foreshadowing"), limit=6),
+                    _format_handoff_list("Character state", data.get("character_state_delta"), limit=6),
+                    _format_handoff_list("Relationship state", data.get("relationship_delta"), limit=5),
+                    f"Handoff instruction: {_clip(_json_scalar_text(data.get('handoff_prompt')), 700)}" if data.get("handoff_prompt") else "",
+                ]
+                if line
+            )
+        )
+    return "\n\n".join(formatted)
+
+
+def _json_object_text(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_scalar_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _json_scalar_text(item)
+            if text:
+                parts.append(f"{key}: {text}")
+        return "；".join(parts)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _json_scalar_text(item)
+            if text:
+                parts.append(text)
+        return "；".join(parts)
+    return str(value).strip()
+
+
+def _format_handoff_position(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "UNKNOWN"
+    volume = value.get("volume_index")
+    chapter = value.get("chapter_index")
+    volume_text = f"Volume {volume}" if volume is not None else "Volume UNKNOWN"
+    chapter_text = f"Chapter {chapter}" if chapter is not None else "Chapter UNKNOWN"
+    title = _json_scalar_text(value.get("chapter_title"))
+    return f"{volume_text} {chapter_text}{f' ({title})' if title else ''}"
+
+
+def _format_handoff_list(label: str, value: Any, *, limit: int) -> str:
+    if isinstance(value, list):
+        items = [_json_scalar_text(item) for item in value]
+    else:
+        items = [_json_scalar_text(value)]
+    items = _unique_texts([item for item in items if item])[:limit]
+    if not items:
+        return ""
+    return f"{label}:\n" + "\n".join(f"- {item}" for item in items)
 
 
 def _format_used_knowledge(items: list[dict[str, Any]]) -> str:

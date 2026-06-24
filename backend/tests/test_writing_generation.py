@@ -434,6 +434,15 @@ def test_confirm_draft_writes_handoff_visible_next_chapter(tmp_path, monkeypatch
 
     assert memory.memory_type == "ChapterHandoff"
     assert "ending_state" in data
+    assert data["source_position"]["volume_index"] == 1
+    assert data["source_position"]["chapter_index"] == 1
+    assert data["target_position"]["volume_index"] == 1
+    assert data["target_position"]["chapter_index"] == 2
+    assert data["last_sentence"]
+    assert data["ending_snapshot"]
+    assert data["must_continue"]
+    assert data["do_not_reset"]
+    assert any("最后一句" in item or "last" in item.lower() for item in data["continuity_requirements"])
     assert draft_text not in memory.content
     assert len(memory.content) < len(draft_text)
     assert memory.reveal_at_volume_index == 1
@@ -516,6 +525,9 @@ def test_prompt_safety_drops_future_handoff_even_when_future_retrieval_requested
     assert any("prompt_dropped" in warning and "future" in warning for warning in early_result.retrieval_debug.warnings)
     assert any(item.card_type == "ChapterHandoff" for item in next_result.used_knowledge)
     assert next_result.prompt_preview and "[PREVIOUS CHAPTER HANDOFF]" in next_result.prompt_preview
+    assert "[HANDOFF CONTINUITY LOCK]" in next_result.prompt_preview
+    assert "Last sentence to continue" in next_result.prompt_preview
+    assert "Do not reset" in next_result.prompt_preview
 
 
 def test_future_worldbuilding_is_dropped_before_final_prompt(tmp_path, monkeypatch):
