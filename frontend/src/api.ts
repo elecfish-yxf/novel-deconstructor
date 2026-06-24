@@ -363,6 +363,7 @@ export type LongGenerationSection = {
   status: string;
   focus: string;
   content: string;
+  continuity_state?: string;
   supplement_count?: number;
   cjk_chars?: number;
   non_space_chars?: number;

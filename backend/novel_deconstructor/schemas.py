@@ -746,6 +746,7 @@ class LongGenerationSection(BaseModel):
     status: str
     focus: str
     content: str = ""
+    continuity_state: str = ""
     supplement_count: int = 0
     cjk_chars: int = 0
     non_space_chars: int = 0

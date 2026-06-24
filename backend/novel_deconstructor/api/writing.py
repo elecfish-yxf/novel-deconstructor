@@ -1144,7 +1144,16 @@ async def _generate_long_draft_with_cards(
 
     for index, section_target in enumerate(section_targets, start=1):
         focus = focuses[index - 1]
-        previous_tail = _clip("\n\n".join([payload.current_content, *generated_parts]), 1800)
+        previous_content = "\n\n".join(item for item in [payload.current_content, *generated_parts] if item)
+        previous_tail = _tail_clip(previous_content, 2200)
+        continuity_state = _long_continuity_state(
+            payload,
+            confirmed_outline,
+            focuses,
+            index,
+            len(section_targets),
+            previous_content,
+        )
         query = "\n".join(item for item in [payload.task, confirmed_outline, focus, previous_tail] if item)
         results, debug = search_rag_cards(
             db,
@@ -1162,12 +1171,24 @@ async def _generate_long_draft_with_cards(
         _merge_retrieval_debug(aggregate_debug, debug)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
-        user_prompt = _long_section_prompt(payload, cards, confirmed_outline, focus, index, len(section_targets), section_target, previous_tail)
+        user_prompt = _long_section_prompt(
+            payload,
+            cards,
+            confirmed_outline,
+            focus,
+            index,
+            len(section_targets),
+            section_target,
+            previous_tail,
+            continuity_state,
+        )
         if index == 1:
             prompt_preview_parts.append(f"{system_prompt}\n\n{user_prompt}")
+        elif index == 2:
+            prompt_preview_parts.append(f"[SECOND SECTION CONTINUITY PREVIEW]\n{continuity_state}")
 
         if payload.dry_run:
-            section_content = _dry_run_long_section(index, len(section_targets), section_target, focus, used_knowledge)
+            section_content = _dry_run_long_section(index, len(section_targets), section_target, focus, used_knowledge, continuity_state)
         else:
             assert provider is not None
             request = LLMRequest(
@@ -1210,6 +1231,7 @@ async def _generate_long_draft_with_cards(
                 "status": "completed" if actual_chars >= int(section_target * SECTION_MIN_COMPLETION_RATIO) or payload.dry_run else "under_target",
                 "focus": focus,
                 "content": section_content,
+                "continuity_state": continuity_state,
                 "supplement_count": supplement_count,
                 "cjk_chars": section_stats["cjk_chars"],
                 "non_space_chars": section_stats["non_space_chars"],
@@ -1247,7 +1269,7 @@ async def _generate_long_draft_with_cards(
         if progress_callback:
             progress_callback({"status": "supplementing"})
         padding_target = min(DEFAULT_LONG_SECTION_CHARS, max(500, target_min - actual_chars))
-        padding_query = "\n".join([payload.task, confirmed_outline, "补齐整体字数，延展场景动作、对话互动、冲突升级、情绪余波和章尾牵引。", _clip(content, 1800)])
+        padding_query = "\n".join([payload.task, confirmed_outline, "补齐整体字数，延展场景动作、对话互动、冲突升级、情绪余波和章尾牵引。", _tail_clip(content, 1800)])
         results, debug = search_rag_cards(
             db,
             [knowledge_base.id],
@@ -1292,6 +1314,7 @@ async def _generate_long_draft_with_cards(
                 "status": "padding",
                 "focus": "整体补齐：补充场景动作、对话互动、冲突升级、情绪余波和章尾牵引。",
                 "content": padding_content,
+                "continuity_state": _long_padding_continuity_state(content),
                 "supplement_count": 0,
                 "cjk_chars": padding_stats["cjk_chars"],
                 "non_space_chars": padding_stats["non_space_chars"],
@@ -1902,6 +1925,76 @@ def _plan_section_focuses(confirmed_outline: str, task: str, section_count: int)
     return focuses
 
 
+def _long_continuity_state(
+    payload: WritingOutlineRequest | WritingDraftRequest,
+    confirmed_outline: str,
+    focuses: list[str],
+    index: int,
+    section_count: int,
+    previous_content: str,
+) -> str:
+    current_focus = focuses[index - 1] if 0 <= index - 1 < len(focuses) else _clip(payload.task, 220)
+    already_written = focuses[: max(index - 1, 0)]
+    upcoming = focuses[index:]
+    last_sentence = _last_sentence(previous_content)
+    recent_tail = _last_paragraphs(previous_content, count=3, max_chars=1600)
+    return f"""[SECTION CONTINUITY LOCK]
+Current section: {index} / {section_count}
+Chapter target position: Volume {_position_value(payload.current_volume_index)}, Chapter {_position_value(payload.current_chapter_index)}
+Whole-chapter task: {_clip(payload.task, 360)}
+Current section beat: {current_focus}
+Already written beats:
+{_format_bullets(already_written) or "- None yet; this is the opening section."}
+Upcoming beats:
+{_format_bullets(upcoming) or "- None; this section should move into the chapter ending without premature summary."}
+Continuity source:
+- Treat [RECENT STORY TAIL] as the only immediate past. Do not continue from the chapter opening unless it is also in the recent tail.
+- Keep POV, time flow, location, active props, injuries, promises, secrets, relationship tension, and unresolved actions consistent with the recent tail.
+- If a scene/time/location transition is necessary, bridge it on the page through action, sensory detail, or dialogue. Do not hard reset.
+
+[LAST SENTENCE TO CONTINUE]
+{last_sentence or "（本段是开头，没有上一句。）"}
+
+[RECENT STORY TAIL]
+{recent_tail or "（空）"}
+"""
+
+
+def _long_padding_continuity_state(existing_content: str) -> str:
+    return f"""[PADDING CONTINUITY LOCK]
+Continue only from the existing ending. The supplement must feel like the next paragraphs of the same chapter, not a separate generation.
+
+[LAST SENTENCE TO CONTINUE]
+{_last_sentence(existing_content) or "（空）"}
+
+[RECENT STORY TAIL]
+{_last_paragraphs(existing_content, count=3, max_chars=1600) or "（空）"}
+"""
+
+
+def _format_bullets(items: list[str], limit: int = 6) -> str:
+    compact = [_clip(item, 240) for item in items if item.strip()]
+    return "\n".join(f"- {item}" for item in compact[-limit:])
+
+
+def _last_paragraphs(text: str, *, count: int = 3, max_chars: int = 1600) -> str:
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n|\r?\n", text or "") if part.strip()]
+    if not paragraphs:
+        return ""
+    return _tail_clip("\n\n".join(paragraphs[-count:]), max_chars)
+
+
+def _last_sentence(text: str, max_chars: int = 260) -> str:
+    tail = _tail_clip(text or "", max(max_chars * 4, 900))
+    if not tail:
+        return ""
+    sentences = [part.strip() for part in re.split(r"(?<=[。！？!?；;])\s*", tail) if part.strip()]
+    if sentences:
+        return _tail_clip(sentences[-1], max_chars)
+    paragraphs = [part.strip() for part in tail.splitlines() if part.strip()]
+    return _tail_clip(paragraphs[-1], max_chars) if paragraphs else _tail_clip(tail, max_chars)
+
+
 def _long_section_prompt(
     payload: WritingOutlineRequest | WritingDraftRequest,
     cards: list[KnowledgeCard],
@@ -1911,6 +2004,7 @@ def _long_section_prompt(
     section_count: int,
     section_target: int,
     previous_tail: str,
+    continuity_state: str,
 ) -> str:
     base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline)
     return f"""{base}
@@ -1923,6 +2017,10 @@ def _long_section_prompt(
 - 不要重新开始整章，也不要跳到后续段落的核心内容。
 - 本段必须完成当前 focus，并与上一段自然衔接。
 - 如果本段不是最后一段，请留下自然推进空间，但不要输出写作说明。
+- 如果这是第 2 段或后续段落，第一句必须承接 [LAST SENTENCE TO CONTINUE] 的直接后果，禁止另起炉灶、重新介绍背景、重置人物目标或无原因跳时空。
+- 写作时把所有分段当成同一章的一次连续输出；不得输出“小标题”“第 N 段”“下面继续”等拼接痕迹。
+
+{continuity_state}
 
 [PREVIOUS GENERATED TAIL]
 {previous_tail or "（空）"}
@@ -1944,9 +2042,12 @@ def _long_padding_prompt(
 - 目标补充：约 {padding_target} 个中文字符。
 - 优先补充：场景动作、对话互动、冲突升级、情绪余波、信息投放、章尾牵引。
 - 不要重新开头，不要总结，不要输出写作说明。
+- 第一句必须承接已有正文最后一句的直接后果；不得重新进入同一场景，不得换一个看似相似的新开头。
+
+{_long_padding_continuity_state(existing_content)}
 
 [EXISTING CONTENT TAIL]
-{_clip(existing_content, 2200)}
+{_tail_clip(existing_content, 2200)}
 """
 
 
@@ -1978,12 +2079,16 @@ async def _maybe_supplement_section(
 要求：
 - 继续围绕当前 focus。
 - 保持人物状态、语气和节奏一致。
-- 不要重新开头。
+- 第一句必须承接 [LAST SENTENCE TO CONTINUE] 的直接后果。
+- 不要重新开头，不要重复本段已经写过的动作或解释。
 - 不要总结。
 - 不要输出写作说明。
 
+[LAST SENTENCE TO CONTINUE]
+{_last_sentence(section_content) or "（空）"}
+
 [已生成本段]
-{section_content}
+{_tail_clip(section_content, 1800)}
 """
         try:
             addition = await provider.complete(
@@ -2028,10 +2133,13 @@ async def _maybe_pad_section(
 这是第 {index} / {section_count} 段的补写。
 本段 focus：{focus}
 目标补充：约 {padding_target} 个中文字符。
-保持语气、节奏、人物状态一致；不要重新开头，不要总结，不要输出说明。
+保持语气、节奏、人物状态一致；第一句必须承接最后一句的直接后果；不要重新开头，不要总结，不要输出说明。
+
+[LAST SENTENCE TO CONTINUE]
+{_last_sentence(section_content) or "（空）"}
 
 [已生成本段]
-{section_content}
+{_tail_clip(section_content, 1800)}
 """
     try:
         addition = await provider.complete(
@@ -2051,7 +2159,14 @@ async def _maybe_pad_section(
     return f"{section_content.rstrip()}\n\n{addition.strip()}"
 
 
-def _dry_run_long_section(index: int, section_count: int, target_chars: int, focus: str, used_knowledge: list[dict[str, Any]]) -> str:
+def _dry_run_long_section(
+    index: int,
+    section_count: int,
+    target_chars: int,
+    focus: str,
+    used_knowledge: list[dict[str, Any]],
+    continuity_state: str = "",
+) -> str:
     knowledge = _format_used_knowledge(used_knowledge) or "无"
     return f"""# Dry-run 第 {index}/{section_count} 段
 
@@ -2061,6 +2176,8 @@ def _dry_run_long_section(index: int, section_count: int, target_chars: int, foc
 - 本段 focus：{focus}
 - 本段 used_knowledge：
 {knowledge}
+
+{continuity_state}
 """
 
 
@@ -2461,6 +2578,13 @@ def _clip(text: str, max_chars: int) -> str:
     if len(compact) <= max_chars:
         return compact
     return f"{compact[:max_chars].rstrip()}..."
+
+
+def _tail_clip(text: str, max_chars: int) -> str:
+    compact = text.strip()
+    if len(compact) <= max_chars:
+        return compact
+    return f"...{compact[-max_chars:].lstrip()}"
 
 
 def _outline_query(payload: WritingOutlineRequest) -> str:

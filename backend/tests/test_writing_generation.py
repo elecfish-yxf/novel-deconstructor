@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import novel_deconstructor.api.writing as writing_api
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -9,10 +10,13 @@ from novel_deconstructor.api.writing import (
     MAX_SECTION_SUPPLEMENTS,
     _char_stats,
     _generate_with_cards,
+    _generate_long_draft_with_cards,
+    _last_sentence,
     _maybe_supplement_section,
     _parse_target_chars_from_text,
     _plan_section_targets,
     _prompt_card_filter_reason,
+    _tail_clip,
     confirm_draft_memory,
     confirm_outline_memory,
     count_cjk_chars,
@@ -181,6 +185,71 @@ def test_long_draft_dry_run_returns_sections_and_generation_metadata(tmp_path, m
     assert all(section.status == "completed" for section in result.sections)
     assert all(section.supplement_count == 0 for section in result.sections)
     assert all(section.cjk_chars >= 0 and section.non_space_chars > 0 and section.estimated_tokens > 0 for section in result.sections)
+    assert all(section.continuity_state for section in result.sections)
+
+
+def test_long_generation_tail_clip_uses_recent_ending_not_opening():
+    text = "开头不应作为续写依据。\n\n" + ("中段推进。" * 600) + "她把铜钥匙攥进掌心，走廊尽头的灯忽然灭了。"
+
+    tail = _tail_clip(text, 220)
+
+    assert "开头不应作为续写依据" not in tail
+    assert "走廊尽头的灯忽然灭了" in tail
+    assert _last_sentence(text) == "她把铜钥匙攥进掌心，走廊尽头的灯忽然灭了。"
+
+
+def test_long_generation_next_section_prompt_inherits_previous_final_sentence(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+
+    class ContinuityProvider:
+        def __init__(self):
+            self.prompts = []
+            self.calls = 0
+
+        async def complete(self, request):
+            self.calls += 1
+            self.prompts.append(request.user_prompt)
+            if self.calls == 1:
+                return "开头不应作为第二段续写依据。\n\n" + ("她沿着档案馆长廊向前，听见墙内的齿轮一层层咬合。" * 140) + "她把铜钥匙攥进掌心，走廊尽头的灯忽然灭了。"
+            if self.calls == 2:
+                return ("黑暗没有停在门口，而是贴着她的肩膀继续往里压。" * 150) + "门后有人叫出了她的名字。"
+            return ("她没有回答，只把钥匙推入锁孔，听见另一侧传来更急的脚步声。" * 150) + "这一声让她意识到选择已经来不及撤回。"
+
+    provider = ContinuityProvider()
+    monkeypatch.setattr(writing_api, "_resolve_writing_model", lambda payload, settings: (provider, "fake-model"))
+
+    payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="写一章连续的档案馆潜入戏，要求每段自然承接。",
+        confirmed_outline="开场进入档案馆，目标是找到旧钥匙的记录。\n中段灯光熄灭，墙内机关开始运转。\n结尾门后有人叫出主角名字，迫使她做选择。",
+        dry_run=False,
+        target_chars=5200,
+        current_volume_index=1,
+        current_chapter_index=2,
+        top_k=3,
+    )
+
+    result = asyncio.run(
+        _generate_long_draft_with_cards(
+            db,
+            kb,
+            payload,
+            confirmed_outline=payload.confirmed_outline,
+            target_chars=payload.target_chars or 5200,
+        )
+    )
+
+    assert result.section_count == 3
+    assert len(provider.prompts) == 3
+    second_prompt = provider.prompts[1]
+    assert "[SECTION CONTINUITY LOCK]" in second_prompt
+    assert "[LAST SENTENCE TO CONTINUE]" in second_prompt
+    assert "她把铜钥匙攥进掌心，走廊尽头的灯忽然灭了。" in second_prompt
+    assert "开头不应作为第二段续写依据" not in second_prompt
+    assert "第一句必须承接 [LAST SENTENCE TO CONTINUE]" in second_prompt
+    assert result.sections[1].continuity_state
 
 
 def test_revision_dry_run_returns_prompt_preview_and_aligned_used_knowledge(tmp_path, monkeypatch):

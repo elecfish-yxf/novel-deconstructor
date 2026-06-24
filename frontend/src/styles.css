@@ -1163,6 +1163,24 @@ th {
   white-space: nowrap;
 }
 
+.section-continuity {
+  min-width: 0;
+}
+
+.section-continuity summary {
+  cursor: pointer;
+  color: #334155;
+  font-size: 12px;
+}
+
+.section-continuity pre {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .writing-flow {
   order: 1;
   display: grid;

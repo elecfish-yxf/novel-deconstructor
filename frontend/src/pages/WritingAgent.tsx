@@ -1503,6 +1503,12 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                         <small>
                           used_knowledge {section.used_knowledge.length} · supplement {section.supplement_count || 0} · cjk {section.cjk_chars || 0}
                         </small>
+                        {!!section.continuity_state && (
+                          <details className="section-continuity">
+                            <summary>连续性状态</summary>
+                            <pre>{section.continuity_state}</pre>
+                          </details>
+                        )}
                       </article>
                     ))}
                   </div>
