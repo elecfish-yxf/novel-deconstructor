@@ -137,6 +137,33 @@ def test_resolve_writing_model_supports_doubao():
     assert model == "doubao-seed-2-0-pro-260215"
 
 
+def test_resolve_writing_model_maps_doubao_display_alias_to_endpoint():
+    class Settings:
+        doubao_api_key = ""
+        ark_api_key = ""
+        doubao_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        doubao_model = "doubao-seed-2-0-pro-260215"
+        deepseek_api_key = ""
+        deepseek_base_url = "https://api.deepseek.com"
+        deepseek_model = "deepseek-v4-pro"
+        openai_api_key = ""
+        openai_base_url = "https://api.openai.com/v1"
+        openai_model = ""
+
+    provider, model = _resolve_writing_model(
+        WritingOutlineRequest(
+            task="generate outline",
+            model_provider="doubao",
+            model="doubao-seed-pro-2.0",
+            api_key="user-ark-key",
+        ),
+        Settings(),
+    )
+
+    assert isinstance(provider, DoubaoResponsesProvider)
+    assert model == "doubao-seed-2-0-pro-260215"
+
+
 def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
     class Settings:
         doubao_api_key = "server-key"

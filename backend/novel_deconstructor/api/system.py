@@ -8,6 +8,8 @@ from ..schemas import DirectoryPickRequest, DirectoryPickResponse
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
+DOUBAO_WRITING_MODEL_ID = "doubao-seed-pro-2.0"
+
 
 @router.get("/config/public")
 def public_config():
@@ -19,7 +21,7 @@ def public_config():
         "doubao_base_url": settings.doubao_base_url,
         "doubao_model": settings.doubao_model,
         "has_doubao_api_key": False,
-        "default_writing_model": settings.doubao_model,
+        "default_writing_model": DOUBAO_WRITING_MODEL_ID,
         "writing_models": [
             {
                 "id": "deepseek-v4-flash",
@@ -36,7 +38,7 @@ def public_config():
                 "available": True,
             },
             {
-                "id": settings.doubao_model,
+                "id": DOUBAO_WRITING_MODEL_ID,
                 "label": "豆包 Seed 2.0 Pro",
                 "provider": "doubao",
                 "model": settings.doubao_model,

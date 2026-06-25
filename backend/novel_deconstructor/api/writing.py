@@ -839,6 +839,21 @@ async def worldbuilding_draft(payload: WorldbuildingDraftRequest, workspace_id: 
     return WorldbuildingDraftResponse(content=content, citations=hits)
 
 
+DOUBAO_MODEL_ALIASES = {
+    "doubao-seed-pro-2.0",
+    "doubao-seed-2.0-pro",
+    "doubao-seed-2-0-pro",
+    "doubao-seed-2-0-pro-260215",
+}
+
+
+def _resolve_doubao_model(requested_model: str, settings) -> str:
+    model = (requested_model or "").strip()
+    if not model or model in DOUBAO_MODEL_ALIASES:
+        return settings.doubao_model
+    return model
+
+
 def _resolve_writing_model(payload: WritingGenerateRequest | WorldbuildingDraftRequest, settings) -> tuple[LLMProvider, str]:
     requested_provider = (payload.model_provider or "").strip().lower()
     requested_model = (payload.model or "").strip()
@@ -857,7 +872,7 @@ def _resolve_writing_model(payload: WritingGenerateRequest | WorldbuildingDraftR
     if requested_provider == "doubao":
         if not runtime_api_key:
             raise HTTPException(status_code=400, detail="缺少豆包 API Key。请在 Agent 写作页填写你自己的豆包 Ark API Key，或开启 dry-run。")
-        return DoubaoResponsesProvider(requested_base_url or settings.doubao_base_url, runtime_api_key), requested_model or settings.doubao_model
+        return DoubaoResponsesProvider(requested_base_url or settings.doubao_base_url, runtime_api_key), _resolve_doubao_model(requested_model, settings)
 
     if requested_provider == "deepseek":
         if not runtime_api_key:

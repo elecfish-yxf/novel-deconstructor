@@ -37,6 +37,7 @@ const KNOWLEDGE_GROUPS = [
 ] as const;
 
 type PositionValue = number | "";
+type OptionalNumberValue = number | "";
 type ChapterTitleMap = Record<string, string>;
 
 type ChapterRef = { volume_index: number; chapter_index: number };
@@ -46,6 +47,17 @@ function parsePositionInput(value: string): PositionValue {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return "";
   return Math.floor(parsed);
+}
+
+function parseOptionalNumberInput(value: string, min: number, max: number): OptionalNumberValue {
+  if (value.trim() === "") return "";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "";
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function resolveOptionalNumber(value: OptionalNumberValue, fallback: number) {
+  return typeof value === "number" ? value : fallback;
 }
 
 function formatSize(value: number) {
@@ -151,7 +163,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<RetrievalHit[]>([]);
   const [ragStage, setRagStage] = useState("draft");
-  const [ragTopK, setRagTopK] = useState(8);
+  const [ragTopK, setRagTopK] = useState<OptionalNumberValue>(8);
   const [currentVolumeIndex, setCurrentVolumeIndex] = useState<PositionValue>(1);
   const [currentChapterIndex, setCurrentChapterIndex] = useState<PositionValue>(1);
   const [debugRawKnowledge, setDebugRawKnowledge] = useState(false);
@@ -176,7 +188,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const [outline, setOutline] = useState("");
   const [confirmedOutline, setConfirmedOutline] = useState("");
   const [draft, setDraft] = useState("");
-  const [targetChars, setTargetChars] = useState(3000);
+  const [targetChars, setTargetChars] = useState<OptionalNumberValue>(3000);
   const [actualChars, setActualChars] = useState<number | null>(null);
   const [longSections, setLongSections] = useState<LongGenerationSection[]>([]);
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
@@ -272,6 +284,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
   const draftWordCount = useMemo(() => draft.replace(/\s/g, "").length, [draft]);
   const activeDraftJob = Boolean(draftJob && !["completed", "failed", "cancelled"].includes(draftJob.status));
   const writingTaskPayload = chapterTitle.trim() ? `${chapterTitle.trim()}\n\n${outlineTask}` : outlineTask;
+  const resolvedRagTopK = resolveOptionalNumber(ragTopK, 8);
+  const resolvedTargetChars = resolveOptionalNumber(targetChars, 3000);
   const volumeTree = useMemo(() => {
     const groups = new Map<number, Map<number, { chapter: number; title: string; memoryCount: number }>>();
     const ensureChapter = (volume: number, chapter: number, title?: string) => {
@@ -1008,7 +1022,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
     setBusy("rag-search");
     setError("");
     try {
-      const result = await api.searchWorkRAG(targetWorkId, { stage: ragStage, query, top_k: ragTopK, ...ragRetrievalPayload });
+      const result = await api.searchWorkRAG(targetWorkId, { stage: ragStage, query, top_k: resolvedRagTopK, ...ragRetrievalPayload });
       if (selectedIdRef.current === targetWorkId) {
         setRagResults(result.results);
         setRetrievalDebug(result.retrieval_debug);
@@ -1266,7 +1280,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
         dry_run: dryRun,
-        top_k: ragTopK,
+        top_k: resolvedRagTopK,
         ...generationRetrievalPayload,
       });
       if (selectedIdRef.current === targetWorkId) {
@@ -1353,8 +1367,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
         dry_run: dryRun,
-        top_k: ragTopK,
-        target_chars: targetChars,
+        top_k: resolvedRagTopK,
+        target_chars: resolvedTargetChars,
         ...generationRetrievalPayload,
       });
       storeDraftJobRef(targetWorkId, job.job_id);
@@ -1404,8 +1418,8 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
         knowledge_mode: knowledgeMode,
         ...selectedWritingModelPayload,
         dry_run: dryRun,
-        top_k: ragTopK,
-        target_chars: actualChars || targetChars,
+        top_k: resolvedRagTopK,
+        target_chars: actualChars || resolvedTargetChars,
         ...generationRetrievalPayload,
       });
       if (selectedIdRef.current === targetWorkId) {
@@ -1910,11 +1924,11 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                   <div className="mode-grid">
                     <label>
                       目标字数
-                      <input type="number" min={500} max={50000} step={500} value={targetChars} onChange={(event) => setTargetChars(Number(event.target.value) || 3000)} />
+                      <input type="number" min={500} max={50000} step={500} value={targetChars} onChange={(event) => setTargetChars(parseOptionalNumberInput(event.target.value, 500, 50000))} />
                     </label>
                     <label>
                       RAG top_k
-                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(parseOptionalNumberInput(event.target.value, 1, 200))} />
                     </label>
                   </div>
                   <div className="mode-grid">
@@ -2022,7 +2036,7 @@ export default function WritingAgent({ job }: { job?: Job | null }) {
                     </label>
                     <label>
                       top_k
-                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(Number(event.target.value) || 8)} />
+                      <input type="number" min={1} max={200} value={ragTopK} onChange={(event) => setRagTopK(parseOptionalNumberInput(event.target.value, 1, 200))} />
                     </label>
                   </div>
                   <button className="primary" disabled={!selected || busy === "rag-search" || positionMissing}>
