@@ -2225,9 +2225,6 @@ async def _generate_long_draft_with_cards(
     }
 
     for index, section_target in enumerate(section_targets, start=1):
-        # 每段生成前检查是否已被取消
-        if DRAFT_GENERATION_JOBS.get(job_id, {}).get("status") == "cancelled":
-            break
         focus = focuses[index - 1]
         previous_content = "\n\n".join(item for item in [payload.current_content, *generated_parts] if item)
         previous_tail = _tail_clip(previous_content, 2200)
