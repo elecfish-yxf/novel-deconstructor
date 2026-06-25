@@ -2296,6 +2296,58 @@ th {
   font-size: 12px;
 }
 
+.writing-field-hint {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Skeleton loading */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+/* Error boundary fallback */
+.error-boundary-fallback {
+  padding: 40px 20px;
+  text-align: center;
+}
+.error-boundary-fallback h2 { color: #dc2626; margin-bottom: 12px; }
+.error-boundary-fallback p { color: #64748b; margin-bottom: 16px; }
+.error-boundary-fallback button {
+  background: #2563eb; color: #fff; border: none; padding: 8px 20px;
+  border-radius: 6px; cursor: pointer; font-size: 14px;
+}
+
+/* Knowledge card pagination */
+.writing-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+}
+.writing-pagination button {
+  padding: 4px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+}
+.writing-pagination button:hover { background: #f3f4f6; }
+.writing-pagination button:disabled { opacity: 0.4; cursor: default; }
+.writing-pagination button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.writing-pagination span { color: #6b7280; font-size: 13px; }
+
 .writing-card-import {
   display: grid;
   gap: 10px;
@@ -2321,6 +2373,37 @@ th {
 .writing-card-import small {
   color: #64748b;
   line-height: 1.45;
+}
+
+.outline-node-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.outline-node-list > article {
+  border-left: 2px dashed #e5e7eb;
+  margin-left: 8px;
+  padding-left: 8px;
+}
+
+.outline-node-list details > summary {
+  cursor: pointer;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.outline-node-list pre {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f8fafc;
+  white-space: pre-wrap;
+}
+
+.writing-outline-preview {
+  margin-top: 8px;
 }
 
 .writing-setting-upload {

@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +9,7 @@ from novel_deconstructor.api.writing import (
     _draft_prompt,
     _oh_story_writing_kernel,
     _outline_output_rule,
+    _resolved_outline_scope,
     _outline_prompt,
     _outline_scope_block,
     _retrieval_queries,
@@ -31,8 +32,8 @@ def test_oh_story_kernel_reads_builtin_skill():
     db.add(
         DeconstructionSkill(
             key="oh_story_long_analyze_phase2",
-            name="oh-story 长篇拆文 Phase 2",
-            description="内置拆书与写作方法",
+            name="oh-story 闀跨瘒鎷嗘枃 Phase 2",
+            description="鍐呯疆鎷嗕功涓庡啓浣滄柟娉?,
             source="builtin:oh-story-codex",
             builtin=True,
             default_modes_json='["chapter_structure","conflict_analysis"]',
@@ -43,35 +44,35 @@ def test_oh_story_kernel_reads_builtin_skill():
 
     kernel = _oh_story_writing_kernel(db)
 
-    assert "oh-story 长篇拆文 Phase 2" in kernel
+    assert "oh-story 闀跨瘒鎷嗘枃 Phase 2" in kernel
     assert "chapter_structure" in kernel
     assert "Skill prompt: analyze chapter hooks" in kernel
-    assert "黄金三章" in kernel
-    assert "爽点循环" in kernel
+    assert "榛勯噾涓夌珷" in kernel
+    assert "鐖界偣寰幆" in kernel
 
 
 def test_writing_prompts_use_oh_story_without_mixing_worldbuilding():
-    kernel = "oh-story 写作内核：黄金三章 / 冲突推进 / 信息投放"
-    payload = WritingGenerateRequest(task="写第一章开头", mode="standard", knowledge_mode="reference")
+    kernel = "oh-story 鍐欎綔鍐呮牳锛氶粍閲戜笁绔?/ 鍐茬獊鎺ㄨ繘 / 淇℃伅鎶曟斁"
+    payload = WritingGenerateRequest(task="鍐欑涓€绔犲紑澶?, mode="standard", knowledge_mode="reference")
 
     system_prompt = _system_prompt(payload.knowledge_mode, kernel)
     user_prompt = _user_prompt(payload, [], kernel)
 
-    assert "拆书和写作都使用同一套 oh-story 内核" in system_prompt
-    assert "worldbuilding 负责故事事实" in system_prompt
+    assert "鎷嗕功鍜屽啓浣滈兘浣跨敤鍚屼竴濂?oh-story 鍐呮牳" in system_prompt
+    assert "worldbuilding 璐熻矗鏁呬簨浜嬪疄" in system_prompt
     assert kernel in user_prompt
-    assert "oh-story 写作内核（生成提纲时必须显式应用）" in user_prompt
-    assert "不要沿用拆书原作世界观" in user_prompt
-    assert "不要写正文" in user_prompt
-    assert "完整作品/多卷章节提纲" in user_prompt
+    assert "oh-story 鍐欎綔鍐呮牳锛堢敓鎴愭彁绾叉椂蹇呴』鏄惧紡搴旂敤锛? in user_prompt
+    assert "涓嶈娌跨敤鎷嗕功鍘熶綔涓栫晫瑙? in user_prompt
+    assert "涓嶈鍐欐鏂? in user_prompt
+    assert "瀹屾暣浣滃搧/澶氬嵎绔犺妭鎻愮翰" in user_prompt
 
 
 def test_outline_and_draft_prompts_are_separated():
-    kernel = "oh-story 写作内核：黄金三章 / 冲突推进 / 信息投放"
-    outline_payload = WritingOutlineRequest(task="生成第一章提纲", mode="standard", knowledge_mode="reference")
+    kernel = "oh-story 鍐欎綔鍐呮牳锛氶粍閲戜笁绔?/ 鍐茬獊鎺ㄨ繘 / 淇℃伅鎶曟斁"
+    outline_payload = WritingOutlineRequest(task="鐢熸垚绗竴绔犳彁绾?, mode="standard", knowledge_mode="reference")
     draft_payload = WritingDraftRequest(
-        task="生成第一章正文",
-        confirmed_outline="## 第一章提纲\n- 开头状态\n- 章尾牵引",
+        task="鐢熸垚绗竴绔犳鏂?,
+        confirmed_outline="## 绗竴绔犳彁绾瞈n- 寮€澶寸姸鎬乗n- 绔犲熬鐗靛紩",
         mode="standard",
         knowledge_mode="reference",
     )
@@ -80,38 +81,38 @@ def test_outline_and_draft_prompts_are_separated():
     draft_prompt = _draft_prompt(draft_payload, [], [], kernel)
     draft_system = _system_prompt("reference", kernel, stage="draft")
 
-    assert "不要写正文" in outline_prompt
-    assert "当前章节提纲" in outline_prompt
-    assert "oh-story 结构功能核对" in outline_prompt
-    assert "已确认章节提纲（必须作为正文蓝图）" in draft_prompt
-    assert "只输出小说正文，不要输出提纲" in draft_prompt
-    assert "不要输出表格，不要列 bullet" in draft_prompt
-    assert "正文里不要写 [资料1]" in draft_system
+    assert "涓嶈鍐欐鏂? in outline_prompt
+    assert "褰撳墠绔犺妭鎻愮翰" in outline_prompt
+    assert "oh-story 缁撴瀯鍔熻兘鏍稿" in outline_prompt
+    assert "宸茬‘璁ょ珷鑺傛彁绾诧紙蹇呴』浣滀负姝ｆ枃钃濆浘锛? in draft_prompt
+    assert "鍙緭鍑哄皬璇存鏂囷紝涓嶈杈撳嚭鎻愮翰" in draft_prompt
+    assert "涓嶈杈撳嚭琛ㄦ牸锛屼笉瑕佸垪 bullet" in draft_prompt
+    assert "姝ｆ枃閲屼笉瑕佸啓 [璧勬枡1]" in draft_system
 
 
 def test_worldbuilding_draft_prompt_uses_oh_story_as_structure_kernel():
-    kernel = "oh-story 写作内核：黄金三章 / 爽点循环"
-    payload = WorldbuildingDraftRequest(story_seed="边境城市里的见习修理师")
+    kernel = "oh-story 鍐欎綔鍐呮牳锛氶粍閲戜笁绔?/ 鐖界偣寰幆"
+    payload = WorldbuildingDraftRequest(story_seed="杈瑰鍩庡競閲岀殑瑙佷範淇悊甯?)
 
     prompt = _worldbuilding_prompt(payload, [], [], kernel)
 
     assert kernel in prompt
-    assert "原创世界观设定草案" in prompt
-    assert "支撑黄金三章、冲突推进、信息投放和情绪触动" in prompt
-    assert "禁止沿用拆书原作专名和独特设定" in prompt
+    assert "鍘熷垱涓栫晫瑙傝瀹氳崏妗? in prompt
+    assert "鏀拺榛勯噾涓夌珷銆佸啿绐佹帹杩涖€佷俊鎭姇鏀惧拰鎯呯华瑙﹀姩" in prompt
+    assert "绂佹娌跨敤鎷嗕功鍘熶綔涓撳悕鍜岀嫭鐗硅瀹? in prompt
 
 
 def test_agent_retrieval_queries_are_task_specific():
-    outline_queries = _retrieval_queries("outline", "生成第一章提纲")
-    draft_queries = _retrieval_queries("draft", "生成第一章正文")
-    worldbuilding_queries = _retrieval_queries("worldbuilding_draft", "雨夜异常街区")
+    outline_queries = _retrieval_queries("outline", "鐢熸垚绗竴绔犳彁绾?)
+    draft_queries = _retrieval_queries("draft", "鐢熸垚绗竴绔犳鏂?)
+    worldbuilding_queries = _retrieval_queries("worldbuilding_draft", "闆ㄥ寮傚父琛楀尯")
 
     assert AGENT_RETRIEVAL_PROTOCOL["outline"][:3] == ["structure_pattern", "conflict_pattern", "emotion_module"]
-    assert any("冲突推进" in query for query in outline_queries)
-    assert any("世界观" in query for query in outline_queries)
-    assert any("语言风格" in query for query in draft_queries)
-    assert any("AI味" in query for query in draft_queries)
-    assert any("不建议照搬" in query for query in worldbuilding_queries)
+    assert any("鍐茬獊鎺ㄨ繘" in query for query in outline_queries)
+    assert any("涓栫晫瑙? in query for query in outline_queries)
+    assert any("璇█椋庢牸" in query for query in draft_queries)
+    assert any("AI鍛? in query for query in draft_queries)
+    assert any("涓嶅缓璁収鎼? in query for query in worldbuilding_queries)
 
 
 def test_resolve_writing_model_supports_doubao():
@@ -129,7 +130,7 @@ def test_resolve_writing_model_supports_doubao():
 
     provider, model = _resolve_writing_model(
         WritingOutlineRequest(
-            task="生成提纲",
+            task="鐢熸垚鎻愮翰",
             model_provider="doubao",
             model="doubao-seed-2-0-pro-260215",
             api_key="user-ark-key",
@@ -168,17 +169,20 @@ def test_resolve_writing_model_maps_doubao_display_alias_to_endpoint():
     assert model == "doubao-seed-2-0-pro-260215"
 
 
-def test_outline_output_rule_respects_full_novel_scope():
-    payload = WritingOutlineRequest(task="请生成一份原创长篇小说章节提纲，设计三卷以上结构，每卷写明主题，每章包含章尾钩子。")
+def test_outline_output_rule_scopes_outline_levels():
+    chapter_payload = WritingOutlineRequest(task="生成当前章节开头提纲")
+    global_payload = WritingOutlineRequest(task="生成全书大纲")
+    volume_payload = WritingOutlineRequest(task="生成当前卷大纲")
 
-    rule = _outline_output_rule(payload)
-    scope = _outline_scope_block(payload)
+    assert _resolved_outline_scope(chapter_payload) == "chapter"
+    assert "CURRENT_CHAPTER" in _outline_scope_block(chapter_payload)
+    assert _resolved_outline_scope(global_payload) == "global"
+    assert "FULL_NOVEL" in _outline_scope_block(global_payload)
+    assert _resolved_outline_scope(volume_payload) == "volume"
+    assert "CURRENT_VOLUME" in _outline_scope_block(volume_payload)
 
-    assert "complete novel outline" in rule
-    assert "not just the current chapter" in rule
-    assert "FULL_NOVEL_OR_MULTI_VOLUME" in scope
-    assert "single-chapter outline is invalid" in scope
-
+    assert "Only output the current chapter outline" in _outline_output_rule(chapter_payload)
+    assert "full-book outline" in _outline_output_rule(global_payload)
 
 def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
     class Settings:
@@ -194,8 +198,8 @@ def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
         openai_model = ""
 
     with pytest.raises(HTTPException) as exc_info:
-        _resolve_writing_model(WritingOutlineRequest(task="生成提纲", model_provider="doubao"), Settings())
-    assert "Agent 写作页填写你自己的" in exc_info.value.detail
+        _resolve_writing_model(WritingOutlineRequest(task="鐢熸垚鎻愮翰", model_provider="doubao"), Settings())
+    assert "Agent 鍐欎綔椤靛～鍐欎綘鑷繁鐨? in exc_info.value.detail
 
 
 def test_writing_memory_is_scoped_to_workspace():
@@ -207,14 +211,15 @@ def test_writing_memory_is_scoped_to_workspace():
     db.commit()
 
     created = create_memory(
-        WritingMemoryCreate(knowledge_base_id=1, memory_type="outline", title="第一章提纲", content="已确认提纲"),
+        WritingMemoryCreate(knowledge_base_id=1, memory_type="outline", title="绗竴绔犳彁绾?, content="宸茬‘璁ゆ彁绾?),
         "ws_a",
         db,
     )
     memories = list_memories(1, "ws_a", db)
 
-    assert created.title == "第一章提纲"
+    assert created.title == "绗竴绔犳彁绾?
     assert len(memories) == 1
     assert memories[0].workspace_id == "ws_a"
     with pytest.raises(HTTPException):
         list_memories(1, "ws_b", db)
+

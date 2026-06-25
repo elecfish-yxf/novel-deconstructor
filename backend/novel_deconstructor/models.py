@@ -296,6 +296,7 @@ class KnowledgeBase(Base):
     documents = relationship("KnowledgeDocument", back_populates="knowledge_base", cascade="all, delete-orphan")
     cards = relationship("KnowledgeCard", back_populates="knowledge_base", cascade="all, delete-orphan")
     memories = relationship("WritingMemory", back_populates="knowledge_base", cascade="all, delete-orphan")
+    outlines = relationship("Outline", back_populates="knowledge_base", cascade="all, delete-orphan")
     workspace = relationship("Workspace", back_populates="knowledge_bases")
 
 
@@ -432,6 +433,42 @@ class WritingMemory(Base):
     def source_ref(self) -> dict:
         try:
             value = json.loads(self.source_ref_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+class Outline(Base):
+    """书→卷→章 三层提纲树。通过 parent_id 构建树形结构，seq 控制同级排序。"""
+
+    __tablename__ = "outlines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(80), ForeignKey("workspaces.id", ondelete="CASCADE"), default="anonymous", nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("outlines.id", ondelete="CASCADE"), nullable=True, index=True)
+    level = Column(String(16), default="chapter", nullable=False, index=True, comment="book / volume / chapter")
+    seq = Column(Integer, default=0, nullable=False, comment="同级排序序号")
+    volume_index = Column(Integer, nullable=True, index=True)
+    chapter_index = Column(Integer, nullable=True, index=True)
+    title = Column(String(512), default="", nullable=False)
+    content = Column(Text, nullable=True)
+    source = Column(String(64), default="ai_generated", nullable=False, comment="auto_generated / ai_generated / user_confirmed / manual")
+    status = Column(String(32), default="draft", nullable=False, index=True, comment="draft / confirmed / archived")
+    metadata_json = Column(Text, nullable=True)
+    content_fingerprint = Column(String(64), default="", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    knowledge_base = relationship("KnowledgeBase", foreign_keys=[knowledge_base_id])
+    workspace = relationship("Workspace")
+    parent = relationship("Outline", remote_side=[id], back_populates="children")
+    children = relationship("Outline", back_populates="parent", cascade="all, delete-orphan")
+
+    @property
+    def metadata_dict(self) -> dict:
+        try:
+            value = json.loads(self.metadata_json or "{}")
         except json.JSONDecodeError:
             return {}
         return value if isinstance(value, dict) else {}

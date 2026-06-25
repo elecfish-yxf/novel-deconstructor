@@ -658,6 +658,7 @@ class WritingGenerateRequest(BaseModel):
     current_content: str = ""
     mode: str = "fast"
     knowledge_mode: str = "reference"
+    scope_level: str = "chapter"
     model_provider: str | None = None
     model: str | None = None
     base_url: str | None = None
@@ -836,4 +837,53 @@ class WritingDraftJobRead(BaseModel):
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── Outline (书→卷→章 三层提纲树) ──
+
+class OutlineCreate(BaseModel):
+    knowledge_base_id: int
+    level: str = "chapter"
+    parent_id: int | None = None
+    seq: int = 0
+    volume_index: int | None = None
+    chapter_index: int | None = None
+    title: str = Field(min_length=1, max_length=512)
+    content: str = ""
+    source: str = "manual"
+    status: str = "draft"
+
+
+class OutlineUpdate(BaseModel):
+    parent_id: int | None = None
+    seq: int | None = None
+    volume_index: int | None = None
+    chapter_index: int | None = None
+    title: str | None = None
+    content: str | None = None
+    source: str | None = None
+    status: str | None = None
+
+
+class OutlineNode(BaseModel):
+    id: int
+    knowledge_base_id: int
+    level: str
+    seq: int
+    volume_index: int | None = None
+    chapter_index: int | None = None
+    title: str
+    content: str = ""
+    source: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    children: list["OutlineNode"] = Field(default_factory=list)
+
+
+class OutlineTree(BaseModel):
+    knowledge_base_id: int
+    book_node: OutlineNode | None = None
+    volume_nodes: list[OutlineNode] = Field(default_factory=list)
+    chapter_nodes: list[OutlineNode] = Field(default_factory=list)
 

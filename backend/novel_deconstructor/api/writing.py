@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..config import PROJECT_ROOT
 from ..config import get_settings
 from ..database import SessionLocal, get_db
-from ..models import DeconstructionSkill, KnowledgeBase, KnowledgeCard, WritingMemory
+from ..models import DeconstructionSkill, KnowledgeBase, KnowledgeCard, Outline, WritingMemory
 from ..schemas import (
     KnowledgeCardBulkDeleteRequest,
     KnowledgeCardRead,
@@ -49,6 +49,10 @@ from ..schemas import (
     WritingRevisionRequest,
     WritingScopeBulkDeleteRequest,
     WritingScopeBulkDeleteResponse,
+    OutlineCreate,
+    OutlineUpdate,
+    OutlineNode,
+    OutlineTree,
 )
 from ..services.knowledge_cards import (
     BLOCKED_STATUSES,
@@ -102,11 +106,19 @@ AUTO_VOLUME_CONTINUITY_SOURCE = "auto_volume_continuity"
 FORCED_CONTEXT_CARD_TYPES = {
     "ChapterOutline",
     "ChapterHandoff",
+    "book_outline",
+    "volume_outline",
     "character_state",
     "relationship_state",
     "foreshadowing",
     "volume_summary",
 }
+AUTO_VOLUME_OUTLINE_SOURCE = "auto_volume_outline"
+AUTO_NOVEL_OUTLINE_SOURCE = "auto_novel_outline"
+AUTO_BOOK_OUTLINE_SOURCE = "auto_book_outline"
+OUTLINE_CARD_TYPE_BOOK = "book_outline"
+OUTLINE_CARD_TYPE_VOLUME = "volume_outline"
+OUTLINE_CARD_TYPE_CHAPTER = "chapter_outline"
 
 
 @router.get("/memories", response_model=list[WritingMemoryRead])
@@ -273,6 +285,156 @@ def confirm_draft_memory(
     return handoff
 
 
+# ── Outline (书→卷→章 三层提纲树) API ──
+
+@router.get("/works/{work_id}/outlines", response_model=OutlineTree)
+def list_outlines(
+    work_id: int,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    """获取作品的完整提纲树（book→volume→chapter）。"""
+    _ensure_workspace_kb(db, workspace_id, work_id)
+    nodes = (
+        db.query(Outline)
+        .filter(Outline.knowledge_base_id == work_id)
+        .order_by(Outline.level, Outline.seq, Outline.volume_index, Outline.chapter_index)
+        .all()
+    )
+    node_map: dict[int, OutlineNode] = {}
+    for node in nodes:
+        node_map[node.id] = OutlineNode(
+            id=node.id,
+            knowledge_base_id=node.knowledge_base_id,
+            level=node.level,
+            seq=node.seq,
+            volume_index=node.volume_index,
+            chapter_index=node.chapter_index,
+            title=node.title,
+            content=node.content or "",
+            source=node.source,
+            status=node.status,
+            created_at=node.created_at,
+            updated_at=node.updated_at,
+        )
+
+    book_node = None
+    volume_nodes: list[OutlineNode] = []
+    chapter_nodes: list[OutlineNode] = []
+
+    for node in nodes:
+        onode = node_map[node.id]
+        if node.parent_id and node.parent_id in node_map:
+            node_map[node.parent_id].children.append(onode)
+        if node.level == "book":
+            book_node = onode
+        elif node.level == "volume":
+            volume_nodes.append(onode)
+        elif node.level == "chapter":
+            chapter_nodes.append(onode)
+
+    return OutlineTree(
+        knowledge_base_id=work_id,
+        book_node=book_node,
+        volume_nodes=volume_nodes,
+        chapter_nodes=chapter_nodes,
+    )
+
+
+@router.post("/works/{work_id}/outlines", response_model=OutlineNode)
+def create_outline(
+    work_id: int,
+    payload: OutlineCreate,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    """创建提纲节点。"""
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    node = Outline(
+        knowledge_base_id=kb.id,
+        workspace_id=workspace_id,
+        parent_id=payload.parent_id,
+        level=payload.level,
+        seq=payload.seq,
+        volume_index=payload.volume_index,
+        chapter_index=payload.chapter_index,
+        title=payload.title,
+        content=payload.content or "",
+        source=payload.source,
+        status=payload.status,
+    )
+    db.add(node)
+    db.commit()
+    db.refresh(node)
+    return _outline_to_node(node)
+
+
+@router.patch("/works/{work_id}/outlines/{node_id}", response_model=OutlineNode)
+def update_outline(
+    work_id: int,
+    node_id: int,
+    payload: OutlineUpdate,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    """更新提纲节点。"""
+    _ensure_workspace_kb(db, workspace_id, work_id)
+    node = db.query(Outline).filter(Outline.id == node_id, Outline.knowledge_base_id == work_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="提纲节点不存在")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(node, key, value)
+    db.commit()
+    db.refresh(node)
+    return _outline_to_node(node)
+
+
+@router.delete("/works/{work_id}/outlines/{node_id}")
+def delete_outline(
+    work_id: int,
+    node_id: int,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    """删除提纲节点（级联删除子节点）。"""
+    _ensure_workspace_kb(db, workspace_id, work_id)
+    node = db.query(Outline).filter(Outline.id == node_id, Outline.knowledge_base_id == work_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="提纲节点不存在")
+    db.delete(node)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/works/{work_id}/outlines/sync-from-cards")
+def sync_outlines_from_cards(
+    work_id: int,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    """从知识卡自动同步生成书卷大纲。"""
+    kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    result = sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    return result
+
+
+def _outline_to_node(node: Outline) -> OutlineNode:
+    return OutlineNode(
+        id=node.id,
+        knowledge_base_id=node.knowledge_base_id,
+        level=node.level,
+        seq=node.seq,
+        volume_index=node.volume_index,
+        chapter_index=node.chapter_index,
+        title=node.title,
+        content=node.content or "",
+        source=node.source,
+        status=node.status,
+        created_at=node.created_at,
+        updated_at=node.updated_at,
+    )
+
+
 @router.post("/works/{work_id}/knowledge/import-package", response_model=KnowledgePackageImportResponse)
 def import_package_to_work(
     work_id: int,
@@ -282,19 +444,20 @@ def import_package_to_work(
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     package = _load_package_payload(payload)
-    return KnowledgePackageImportResponse(
-        **import_knowledge_package(
-            db,
-            kb,
-            package,
-            library_type=payload.library_type,
-            status=payload.status,
-            merge_mode=payload.merge_mode,
-            auto_merge_threshold=payload.auto_merge_threshold,
-            review_threshold=payload.review_threshold,
-            generate_markdown=payload.generate_markdown,
-        )
+    result = import_knowledge_package(
+        db,
+        kb,
+        package,
+        library_type=payload.library_type,
+        status=payload.status,
+        merge_mode=payload.merge_mode,
+        auto_merge_threshold=payload.auto_merge_threshold,
+        review_threshold=payload.review_threshold,
+        generate_markdown=payload.generate_markdown,
     )
+    # 知识卡导入后自动同步书卷大纲
+    sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    return KnowledgePackageImportResponse(**result)
 
 
 @router.post("/works/{work_id}/knowledge/import-markdown", response_model=KnowledgeMarkdownImportResponse)
@@ -306,16 +469,17 @@ def import_markdown_to_work(
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     markdown, source_name = _load_markdown_payload(payload)
-    return KnowledgeMarkdownImportResponse(
-        **import_markdown_knowledge_source(
-            db,
-            kb,
-            markdown,
-            source_name=source_name,
-            library_type=payload.library_type,
-            status=payload.status,
-        )
+    result = import_markdown_knowledge_source(
+        db,
+        kb,
+        markdown,
+        source_name=source_name,
+        library_type=payload.library_type,
+        status=payload.status,
     )
+    # 知识卡导入后自动同步书卷大纲
+    sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    return KnowledgeMarkdownImportResponse(**result)
 
 
 @router.post("/works/{work_id}/knowledge/import-markdown-file", response_model=KnowledgeMarkdownImportResponse)
@@ -336,16 +500,17 @@ async def upload_markdown_to_work(
     if len(data) > max_bytes:
         raise HTTPException(status_code=413, detail="Markdown 文件超过上传大小限制")
     markdown = _decode_markdown_bytes(data, source_name)
-    return KnowledgeMarkdownImportResponse(
-        **import_markdown_knowledge_source(
-            db,
-            kb,
-            markdown,
-            source_name=source_name,
-            library_type=library_type,
-            status=status,
-        )
+    result = import_markdown_knowledge_source(
+        db,
+        kb,
+        markdown,
+        source_name=source_name,
+        library_type=library_type,
+        status=status,
     )
+    # 知识卡导入后自动同步书卷大纲
+    sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    return KnowledgeMarkdownImportResponse(**result)
 
 
 @router.get("/works/{work_id}/knowledge/cards", response_model=list[KnowledgeCardRead])
@@ -748,7 +913,11 @@ async def generate_outline(
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
     hits = _retrieve_for_agent_task(db, kb_ids, "outline", _outline_query(payload), settings.retrieval_top_k) if kb_ids else []
     if payload.knowledge_mode == "strict" and not hits:
-        return WritingGenerateResponse(content="现有知识库资料不足，无法在严格知识模式下生成可靠提纲。", citations=[])
+        pos = f"V{payload.current_volume_index}C{payload.current_chapter_index}" if payload.current_volume_index and payload.current_chapter_index else "未设置"
+        return WritingGenerateResponse(
+            content=f"严格知识模式：知识库检索结果为空（位置：{pos}，知识库：{kb_ids or '未选择'}）。\n\n请检查知识卡状态（需 approved/reviewed）、当前位置设置，或切换到「参考知识」模式。",
+            citations=[],
+        )
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WritingGenerateResponse(content=_dry_run_outline(payload, hits, memories), citations=hits)
@@ -782,7 +951,11 @@ async def generate_draft(
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
     hits = _retrieve_for_agent_task(db, kb_ids, "draft", _draft_query(payload), settings.retrieval_top_k) if kb_ids else []
     if payload.knowledge_mode == "strict" and not hits:
-        return WritingGenerateResponse(content="现有知识库资料不足，无法在严格知识模式下生成可靠正文。", citations=[])
+        pos = f"V{payload.current_volume_index}C{payload.current_chapter_index}" if payload.current_volume_index and payload.current_chapter_index else "未设置"
+        return WritingGenerateResponse(
+            content=f"严格知识模式：知识库检索结果为空（位置：{pos}，知识库：{kb_ids or '未选择'}）。\n\n请检查知识卡状态（需 approved/reviewed）、当前位置设置，或切换到「参考知识」模式。",
+            citations=[],
+        )
     memories = _recent_memories(db, workspace_id, kb_ids)
     if payload.dry_run:
         return WritingGenerateResponse(content=_dry_run_draft(payload, hits, memories), citations=hits)
@@ -1317,7 +1490,489 @@ def _unique_texts(items: list[str]) -> list[str]:
     return unique
 
 
-def _job_or_404(job_id: str, workspace_id: str, work_id: int) -> dict[str, Any]:
+def _split_generated_outline_by_layers(content: str) -> dict[str, Any]:
+    """将 LLM 生成的大纲 Markdown 拆分为书/卷/章三层。
+
+    返回:
+        {
+            "book_outline": str | None,       # # 全书大纲 内容
+            "volume_outlines": dict[int, str], # {volume_index: "## 第X卷 ..."}
+            "chapter_content": str,            # 仅章节层内容（给用户展示）
+        }
+    """
+    lines = content.splitlines()
+    result: dict[str, Any] = {
+        "book_outline": None,
+        "volume_outlines": {},
+        "chapter_content": "",
+    }
+
+    # 状态机提取
+    current_book_lines: list[str] = []
+    current_volume_lines: list[str] = []
+    current_volume_index: int | None = None
+    chapter_lines: list[str] = []
+    in_book = False
+    in_volume = False
+
+    book_header_pattern = re.compile(
+        r"^#{1,2}\s*(?:全书|全本|整部|整体|novel|book|作品)\s*(?:大纲|纲要|结构|框架|概览)?",
+        re.IGNORECASE,
+    )
+    volume_header_pattern = re.compile(
+        r"^#{1,3}\s*(?:第\s*[一二三四五六七八九十百千万\d]+\s*卷|volume\s*\d+|vol\.?\s*\d+)",
+        re.IGNORECASE,
+    )
+    chapter_header_pattern = re.compile(
+        r"^#{1,4}\s*(?:第\s*[一二三四五六七八九十百千万\d]+\s*章|chapter\s*\d+|ch\.?\s*\d+)",
+        re.IGNORECASE,
+    )
+
+    for line in lines:
+        stripped = line.strip()
+
+        if book_header_pattern.match(stripped):
+            # 进入书层
+            _flush_volume(current_volume_lines, current_volume_index, result)
+            in_book = True
+            in_volume = False
+            current_book_lines = [line]
+            continue
+
+        if volume_header_pattern.match(stripped):
+            _flush_volume(current_volume_lines, current_volume_index, result)
+            if in_book:
+                current_book_lines.append(line)
+            in_book = False
+            in_volume = True
+            current_volume_index = _extract_volume_number(stripped)
+            current_volume_lines = [line]
+            continue
+
+        if chapter_header_pattern.match(stripped):
+            _flush_volume(current_volume_lines, current_volume_index, result)
+            in_book = False
+            in_volume = False
+            current_volume_index = None
+            chapter_lines.append(line)
+            continue
+
+        if in_book:
+            current_book_lines.append(line)
+        elif in_volume:
+            current_volume_lines.append(line)
+        else:
+            chapter_lines.append(line)
+
+    _flush_volume(current_volume_lines, current_volume_index, result)
+
+    if current_book_lines:
+        book_text = "\n".join(current_book_lines).strip()
+        if len(book_text) > 20:
+            result["book_outline"] = book_text
+
+    result["chapter_content"] = "\n".join(chapter_lines).strip()
+    if not result["chapter_content"] and content.strip():
+        # 如果没有识别到章节层，返回原始内容
+        result["chapter_content"] = content.strip()
+
+    return result
+
+
+def _extract_volume_number(line: str) -> int | None:
+    """从行中提取卷号。"""
+    match = re.search(r"第\s*([一二三四五六七八九十百千万\d]+)\s*卷", line)
+    if match:
+        return _chinese_to_int(match.group(1))
+    match = re.search(r"volume\s*(\d+)", line, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _chinese_to_int(text: str) -> int:
+    """中文数字转整数。"""
+    mapping = {
+        "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+        "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+        "百": 100, "千": 1000, "万": 10000,
+    }
+    if text.isdigit():
+        return int(text)
+    result = 0
+    unit = 1
+    for char in reversed(text):
+        if char in mapping:
+            val = mapping[char]
+            if val >= 10:
+                unit = val
+                if result == 0:
+                    result = val
+            else:
+                result += val * (unit if unit >= 10 else 1)
+        else:
+            try:
+                return int(text)
+            except ValueError:
+                return 0
+    # 处理 "十五" 这种情况
+    if result == 0 and len(text) == 2:
+        tens = mapping.get(text[0], 0)
+        ones = mapping.get(text[1], 0)
+        if tens >= 10:
+            return tens + ones
+    return result
+
+
+def _flush_volume(lines: list[str], volume_index: int | None, result: dict[str, Any]) -> None:
+    if not lines or volume_index is None:
+        lines.clear()
+        return
+    text = "\n".join(lines).strip()
+    if len(text) > 10:
+        result["volume_outlines"][volume_index] = text
+    lines.clear()
+
+
+def _save_outline_layers_as_cards(
+    db: Session,
+    kb: KnowledgeBase,
+    workspace_id: str,
+    layers: dict[str, Any],
+) -> dict[str, Any]:
+    """将书层和卷层大纲保存为知识卡。返回创建的 card_id 列表。"""
+    saved: dict[str, Any] = {"book_card_id": None, "volume_card_ids": {}}
+
+    # 保存全书大纲卡
+    if layers.get("book_outline"):
+        book_content = str(layers["book_outline"])
+        book_card = _upsert_outline_card(
+            db, kb, workspace_id,
+            card_type=OUTLINE_CARD_TYPE_BOOK,
+            title="全书大纲",
+            content=book_content,
+            scope_level="global",
+            volume_index=None,
+            chapter_index=None,
+            priority=98,
+        )
+        if book_card:
+            saved["book_card_id"] = book_card.card_id
+
+    # 保存各卷大纲卡
+    volume_outlines: dict[int, str] = layers.get("volume_outlines", {})
+    for volume_index, vol_content in sorted(volume_outlines.items()):
+        vol_card = _upsert_outline_card(
+            db, kb, workspace_id,
+            card_type=OUTLINE_CARD_TYPE_VOLUME,
+            title=f"第{volume_index}卷大纲",
+            content=vol_content,
+            scope_level="volume",
+            volume_index=volume_index,
+            chapter_index=None,
+            priority=97,
+        )
+        if vol_card:
+            saved["volume_card_ids"][volume_index] = vol_card.card_id
+
+    db.commit()
+    return saved
+
+
+def _upsert_outline_card(
+    db: Session,
+    kb: KnowledgeBase,
+    workspace_id: str,
+    *,
+    card_type: str,
+    title: str,
+    content: str,
+    scope_level: str,
+    volume_index: int | None = None,
+    chapter_index: int | None = None,
+    priority: int = 95,
+) -> KnowledgeCard | None:
+    """创建或更新大纲类知识卡。通过 card_type + volume_index 定位已有卡片。"""
+    import hashlib
+
+    content_fp = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    source = AUTO_BOOK_OUTLINE_SOURCE if card_type == OUTLINE_CARD_TYPE_BOOK else AUTO_VOLUME_OUTLINE_SOURCE
+
+    query = db.query(KnowledgeCard).filter(
+        KnowledgeCard.knowledge_base_id == kb.id,
+        KnowledgeCard.card_type == card_type,
+        KnowledgeCard.source_kind == source,
+    )
+    if volume_index is not None:
+        query = query.filter(KnowledgeCard.volume_index == volume_index)
+    else:
+        query = query.filter(KnowledgeCard.scope_level == "global")
+
+    existing = query.first()
+    if existing and existing.content_fingerprint == content_fp:
+        return existing  # 内容未变化
+
+    if existing:
+        existing.title = title
+        existing.content = content
+        existing.summary = _clip(content, 240)
+        existing.content_fingerprint = content_fp
+        existing.status = "approved"
+        existing.is_canonical = True
+        existing.retrievable = True
+        existing.priority = max(existing.priority or 0, priority)
+        existing.updated_at = datetime.utcnow()
+        db.flush()
+        write_card_markdown(kb, existing)
+        return existing
+
+    # 新建卡片
+    card_id = _outline_card_id(db, kb, card_type, volume_index)
+    card = KnowledgeCard(
+        knowledge_base_id=kb.id,
+        card_id=card_id,
+        library_type="memory",
+        card_type=card_type,
+        title=title,
+        content=content,
+        summary=_clip(content, 240),
+        tags_json=json.dumps([card_type, "auto_generated", "approved"], ensure_ascii=False),
+        source_ref_json=json.dumps({"source": source, "generated_at": datetime.utcnow().isoformat()}, ensure_ascii=False),
+        use_when_json=json.dumps(["draft", "outline", "continue", "revision"], ensure_ascii=False),
+        avoid="",
+        confidence=1.0,
+        status="approved",
+        source_kind=source,
+        package_id="",
+        is_canonical=True,
+        merged_from_ids_json=json.dumps([card_id], ensure_ascii=False),
+        evidence_count=1,
+        content_fingerprint=content_fp,
+        scope_level=scope_level,
+        volume_index=volume_index,
+        chapter_index=chapter_index,
+        retrievable=True,
+        priority=priority,
+    )
+    card.markdown_path = str(card_markdown_path(kb, card))
+    db.add(card)
+    db.flush()
+    write_card_markdown(kb, card)
+    return card
+
+
+def _outline_card_id(db: Session, kb: KnowledgeBase, card_type: str, volume_index: int | None) -> str:
+    """生成大纲卡的唯一 ID。"""
+    existing = (
+        db.query(KnowledgeCard)
+        .filter(
+            KnowledgeCard.knowledge_base_id == kb.id,
+            KnowledgeCard.card_type == card_type,
+        )
+        .count()
+    )
+    if card_type == OUTLINE_CARD_TYPE_BOOK:
+        return f"BO-{existing + 1:03d}"
+    if volume_index is not None:
+        return f"VO-{volume_index:02d}-{existing + 1:03d}"
+    return f"AO-{existing + 1:03d}"
+
+
+def sync_book_volume_outlines_from_cards(
+    db: Session,
+    kb: KnowledgeBase,
+    workspace_id: str,
+) -> dict[str, Any]:
+    """根据现有知识卡内容，自动生成/更新书层和卷层大纲卡。
+
+    当知识卡被导入、修改或合并后调用此函数，以保持书卷大纲与知识卡内容同步。
+    """
+    cards = (
+        db.query(KnowledgeCard)
+        .filter(
+            KnowledgeCard.knowledge_base_id == kb.id,
+            KnowledgeCard.is_canonical.is_(True),
+            KnowledgeCard.status.in_(RETRIEVABLE_STATUSES),
+            KnowledgeCard.retrievable.is_(True),
+        )
+        .order_by(KnowledgeCard.library_type, KnowledgeCard.card_type)
+        .all()
+    )
+
+    if not cards:
+        return {"book_card_id": None, "volume_card_ids": {}, "message": "无可用知识卡，跳过书卷大纲生成。"}
+
+    # 分类汇总知识卡
+    worldbuilding_cards = [c for c in cards if c.library_type == "worldbuilding"]
+    writing_guide_cards = [c for c in cards if c.library_type == "writing_guide"]
+    memory_cards = [c for c in cards if c.library_type == "memory"]
+
+    # 按卷分组
+    volume_groups: dict[int, list[KnowledgeCard]] = {}
+    global_cards: list[KnowledgeCard] = []
+    for card in cards:
+        if card.scope_level == "global":
+            global_cards.append(card)
+        elif card.volume_index is not None:
+            volume_groups.setdefault(card.volume_index, []).append(card)
+
+    saved: dict[str, Any] = {"book_card_id": None, "volume_card_ids": {}}
+
+    # 生成全书大纲
+    book_outline = _build_book_outline_from_cards(
+        worldbuilding_cards, writing_guide_cards, memory_cards,
+        global_cards, volume_groups,
+    )
+    if book_outline:
+        book_card = _upsert_outline_card(
+            db, kb, workspace_id,
+            card_type=OUTLINE_CARD_TYPE_BOOK,
+            title="全书大纲（自动同步）",
+            content=book_outline,
+            scope_level="global",
+            priority=98,
+        )
+        if book_card:
+            saved["book_card_id"] = book_card.card_id
+
+    # 生成各卷大纲
+    for volume_index in sorted(volume_groups.keys()):
+        vol_cards = volume_groups[volume_index]
+        vol_outline = _build_volume_outline_from_cards(
+            volume_index, vol_cards, global_cards,
+            worldbuilding_cards, writing_guide_cards,
+        )
+        if vol_outline:
+            vol_card = _upsert_outline_card(
+                db, kb, workspace_id,
+                card_type=OUTLINE_CARD_TYPE_VOLUME,
+                title=f"第{volume_index}卷大纲（自动同步）",
+                content=vol_outline,
+                scope_level="volume",
+                volume_index=volume_index,
+                priority=97,
+            )
+            if vol_card:
+                saved["volume_card_ids"][volume_index] = vol_card.card_id
+
+    db.commit()
+    saved["message"] = f"书层大纲：{'已更新' if saved['book_card_id'] else '无变化'}；卷层大纲：{len(saved['volume_card_ids'])} 卷已同步。"
+    return saved
+
+
+def _build_book_outline_from_cards(
+    worldbuilding_cards: list[KnowledgeCard],
+    writing_guide_cards: list[KnowledgeCard],
+    memory_cards: list[KnowledgeCard],
+    global_cards: list[KnowledgeCard],
+    volume_groups: dict[int, list[KnowledgeCard]],
+) -> str:
+    """根据知识卡构建全书大纲文本。"""
+    lines: list[str] = []
+    lines.append("# 全书大纲")
+    lines.append("")
+    lines.append("> 本大纲由知识卡自动生成，随知识卡新增/修改同步更新。")
+    lines.append("")
+
+    # 世界观概览
+    wb_titles = [c.title for c in worldbuilding_cards[:10]]
+    if wb_titles:
+        lines.append("## 世界观设定概览")
+        for title in wb_titles:
+            lines.append(f"- {title}")
+        lines.append("")
+
+    # 写作技法概览
+    wg_types: dict[str, int] = {}
+    for c in writing_guide_cards:
+        wg_types[c.card_type] = wg_types.get(c.card_type, 0) + 1
+    if wg_types:
+        lines.append("## 写作技法概览")
+        lines.append(f"- 共 {sum(wg_types.values())} 条技法指南")
+        for ct, count in sorted(wg_types.items()):
+            lines.append(f"  - {ct}: {count} 条")
+        lines.append("")
+
+    # 全局设定卡
+    global_titles = [c.title for c in global_cards[:15]]
+    if global_titles:
+        lines.append("## 全局设定与规则")
+        for title in global_titles:
+            lines.append(f"- {title}")
+        lines.append("")
+
+    # 卷结构概览
+    if volume_groups:
+        lines.append("## 卷结构概览")
+        for vi in sorted(volume_groups.keys()):
+            vol_card_count = len(volume_groups[vi])
+            vol_titles = [c.title for c in volume_groups[vi][:5]]
+            lines.append(f"### 第{vi}卷")
+            lines.append(f"- 知识卡数量: {vol_card_count}")
+            for title in vol_titles:
+                lines.append(f"  - {title}")
+        lines.append("")
+
+    # Memory 关键信息
+    outline_memories = [c for c in memory_cards if c.card_type in ("ChapterOutline", "volume_summary")]
+    if outline_memories:
+        lines.append("## 已确认写作进展")
+        for mem in outline_memories[:10]:
+            pos = f"V{mem.volume_index}C{mem.chapter_index}" if mem.volume_index and mem.chapter_index else "全局"
+            lines.append(f"- [{pos}] {mem.title}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _build_volume_outline_from_cards(
+    volume_index: int,
+    vol_cards: list[KnowledgeCard],
+    global_cards: list[KnowledgeCard],
+    worldbuilding_cards: list[KnowledgeCard],
+    writing_guide_cards: list[KnowledgeCard],
+) -> str:
+    """根据知识卡构建某一卷的大纲文本。"""
+    lines: list[str] = []
+    lines.append(f"## 第{volume_index}卷大纲")
+    lines.append("")
+    lines.append(f"> 本卷大纲由知识卡自动生成，随知识卡新增/修改同步更新。")
+    lines.append("")
+
+    # 卷内卡分类
+    chapter_cards: dict[int, list[KnowledgeCard]] = {}
+    vol_global: list[KnowledgeCard] = []
+    for card in vol_cards:
+        if card.chapter_index is not None:
+            chapter_cards.setdefault(card.chapter_index, []).append(card)
+        else:
+            vol_global.append(card)
+
+    # 卷级设定
+    if vol_global:
+        lines.append("### 本卷级设定与规则")
+        for card in vol_global[:10]:
+            lines.append(f"- [{card.card_type}] {card.title}")
+        lines.append("")
+
+    # 相关全局设定
+    relevant_global = [c for c in global_cards if c.library_type == "worldbuilding"][:5]
+    if relevant_global:
+        lines.append("### 适用本卷的全局设定")
+        for card in relevant_global:
+            lines.append(f"- {card.title}")
+        lines.append("")
+
+    # 章节结构
+    if chapter_cards:
+        lines.append("### 章节结构")
+        for ci in sorted(chapter_cards.keys()):
+            ch_cards = chapter_cards[ci]
+            ch_titles = [c.title for c in ch_cards[:5]]
+            lines.append(f"- 第{ci}章: {', '.join(ch_titles) if ch_titles else '（无关键卡）'}")
+        lines.append("")
+
+    return "\n".join(lines)
     job = DRAFT_GENERATION_JOBS.get(job_id)
     if not job or job.get("workspace_id") != workspace_id or job.get("work_id") != work_id:
         raise HTTPException(status_code=404, detail="生成任务不存在")
@@ -1417,13 +2072,36 @@ async def _generate_with_cards(
     )
     results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
     if payload.knowledge_mode == "strict" and not results:
+        total = debug.get("total_candidates", 0)
+        before_scope = debug.get("candidate_count_before_scope_filter", 0)
+        after_scope = debug.get("candidate_count_after_scope_filter", 0)
+        by_status = debug.get("filtered_by_status_count", 0)
+        by_scope = debug.get("filtered_by_scope_count", 0)
+        by_future = debug.get("filtered_by_future_count", 0)
+        position = f"V{payload.current_volume_index}C{payload.current_chapter_index}" if payload.current_volume_index and payload.current_chapter_index else "未设置"
+        content = (
+            f"严格知识模式：当前知识库检索结果为空，无法生成可靠内容。\n\n"
+            f"诊断信息：\n"
+            f"- 知识库总卡数：{total}\n"
+            f"- 当前写作位置：{position}\n"
+            f"- 状态过滤掉：{by_status} 张（仅 approved/reviewed 状态可检索）\n"
+            f"- Scope 过滤掉：{by_scope} 张（与当前位置不匹配）\n"
+            f"- 未来卡过滤：{by_future} 张\n"
+            f"- 通过过滤的候选：{after_scope} 张\n\n"
+            f"解决建议：\n"
+            f"1. 检查知识卡状态是否为 approved/reviewed\n"
+            f"2. 确认当前 Volume/Chapter 位置设置正确\n"
+            f"3. 切换到「参考知识」模式可跳过此限制\n"
+            f"4. 导入更多知识卡或确认已有卡的状态"
+        )
         return WritingGenerateResponse(
-            content="现有知识卡不足，无法在严格知识模式下生成可靠内容。",
+            content=content,
             citations=[],
             stage=stage,
             used_knowledge=[],
             retrieval_debug=debug,
             prompt_preview=None,
+            warnings=[f"严格模式：{total} 张总卡 → {after_scope} 张通过过滤 → 0 张检索命中"],
         )
 
     cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
@@ -1471,6 +2149,14 @@ async def _generate_with_cards(
     except Exception as exc:  # noqa: BLE001
         label = {"outline": "提纲", "draft": "正文", "revision": "润色"}.get(stage, "内容")
         raise HTTPException(status_code=502, detail=f"{label}生成失败：{exc}") from exc
+
+    # 提纲阶段：自动分离书/卷/章三层，书卷层保存为知识卡，仅章节层返回给用户
+    outline_saved: dict[str, Any] = {}
+    if stage == "outline":
+        layers = _split_generated_outline_by_layers(content)
+        outline_saved = _save_outline_layers_as_cards(db, knowledge_base, knowledge_base.workspace_id, layers)
+        content = layers["chapter_content"]
+
     return WritingGenerateResponse(
         content=content,
         citations=[],
@@ -2144,6 +2830,8 @@ def _build_structured_card_agent_prompt(
 ) -> str:
     worldbuilding = [card for card in cards if card.library_type == "worldbuilding"]
     memory = [card for card in cards if card.library_type == "memory"]
+    book_outlines = [card for card in memory if card.card_type == OUTLINE_CARD_TYPE_BOOK]
+    volume_outlines = [card for card in memory if card.card_type == OUTLINE_CARD_TYPE_VOLUME]
     previous_handoff = [card for card in memory if card.card_type == "ChapterHandoff"]
     current_outline = [card for card in memory if card.card_type == "ChapterOutline" and _is_current_chapter_card(card, payload)]
     character_states = [card for card in memory if card.card_type == "character_state"]
@@ -2152,7 +2840,7 @@ def _build_structured_card_agent_prompt(
     volume_summaries = [card for card in memory if card.card_type == "volume_summary"]
     classified_memory_ids = {
         card.card_id
-        for card in [*previous_handoff, *current_outline, *character_states, *relationship_states, *foreshadowing, *volume_summaries]
+        for card in [*book_outlines, *volume_outlines, *previous_handoff, *current_outline, *character_states, *relationship_states, *foreshadowing, *volume_summaries]
     }
     other_memory = [card for card in memory if card.card_id not in classified_memory_ids]
     anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
@@ -2204,6 +2892,14 @@ Visible foreshadowing and unresolved setup that should be preserved or paid off.
 [CURRENT VOLUME SUMMARY]
 Approved cumulative continuity memory for the current volume and prior visible volume context. Use it to preserve the work's running cause-effect chain, not just the immediately previous chapter.
 {_format_card_context(volume_summaries) or "No volume_summary memory was retrieved."}
+
+[BOOK OUTLINE]
+The auto-generated full-novel outline based on all imported knowledge cards. Use this as the high-level structural framework for the entire work.
+{_format_card_context(book_outlines) or "No book outline card exists yet. Import knowledge cards to auto-generate one."}
+
+[VOLUME OUTLINES]
+Auto-generated per-volume outlines based on knowledge cards scoped to each volume.
+{_format_card_context(volume_outlines) or "No volume outline cards exist yet. Import knowledge cards to auto-generate them."}
 
 [PROJECT MEMORY]
 Other confirmed continuity memory for this work.

@@ -797,6 +797,7 @@ export const api = {
     payload: {
       knowledge_base_ids?: number[];
       task: string;
+      scope_level?: string;
       current_content?: string;
       mode?: string;
       knowledge_mode?: string;

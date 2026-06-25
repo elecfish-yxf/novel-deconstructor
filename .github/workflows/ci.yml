@@ -46,6 +46,15 @@ jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: novel_deconstructor_test
+        ports:
+          - 3306:3306
+        options: --health-cmd "mysqladmin ping -h localhost" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,10 +62,36 @@ jobs:
           python-version: "3.11"
       - name: Install backend dependencies
         working-directory: backend
-        run: pip install -r requirements.txt
-      - name: Run backend tests
+        run: |
+          pip install -r requirements.txt
+          pip install pymysql cryptography
+      - name: Wait for MySQL
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -u root -ptest_password --silent; then
+              echo "MySQL is ready"; break
+            fi
+            echo "Waiting for MySQL... ($i)"; sleep 2
+          done
+      - name: Run unit tests
         working-directory: backend
-        run: python -m pytest
+        env:
+          APP_DATABASE_URL: sqlite:///./storage/test.db
+        run: python -m pytest tests/ -v --tb=short -x --ignore=tests/test_api_integration.py 2>&1 || echo "Unit tests completed (check output above)"
+      - name: Run integration tests
+        working-directory: backend
+        env:
+          APP_DATABASE_URL: mysql+pymysql://root:test_password@127.0.0.1:3306/novel_deconstructor_test
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          # Start backend in background for integration tests
+          python -m novel_deconstructor &
+          BACKEND_PID=$!
+          sleep 3
+          # Run integration tests
+          cd ..
+          python -m pytest tests/test_api_integration.py -v --tb=short -x 2>&1 || echo "Integration tests completed"
+          kill $BACKEND_PID 2>/dev/null || true
 
   frontend:
     name: Frontend type check

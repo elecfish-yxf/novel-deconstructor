@@ -46,6 +46,8 @@ CARD_PREFIXES = {
     "draft": "MEM",
     "ChapterOutline": "CHO",
     "ChapterHandoff": "CHH",
+    "book_outline": "BO",
+    "volume_outline": "VO",
     "character_state": "MEM",
     "foreshadowing": "MEM",
     "continuity_note": "MEM",
