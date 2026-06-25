@@ -2364,6 +2364,7 @@ th {
   align-items: end;
 }
 
+.writing-card-divider { height: 1px; background: #bfdbfe; margin: 2px 0; }
 .writing-card-import-head > div {
   display: grid;
   gap: 3px;

@@ -20,7 +20,7 @@ export type VolumeTreeNode = {
 
 export type WritingTab = "outline" | "memory" | "worldbuilding" | "resources";
 export type MainNavTab = "memory" | "writing_guide" | "worldbuilding" | "history";
-export type ActiveKnowledgeTab = "cards" | "docs" | "result";
+export type ActiveKnowledgeTab = "cards" | "files" | "docs" | "result";
 
 // ── Actions ──
 
