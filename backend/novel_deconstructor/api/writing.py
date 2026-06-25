@@ -2084,6 +2084,43 @@ def _build_card_agent_prompt(
     return _build_structured_card_agent_prompt(stage, payload, cards, confirmed_outline)
 
 
+def _is_broad_outline_request(payload: WritingGenerateRequest) -> bool:
+    text = f"{payload.task}\n{payload.current_content}".lower()
+    broad_keywords = [
+        "全书",
+        "整本",
+        "整部",
+        "整个作品",
+        "长篇",
+        "多卷",
+        "三卷",
+        "3卷",
+        "卷末",
+        "每卷",
+        "每章",
+        "章节列表",
+        "章节目录",
+        "分卷",
+        "volume",
+        "volumes",
+        "full novel",
+        "novel outline",
+        "chapter list",
+    ]
+    return any(keyword in text for keyword in broad_keywords)
+
+
+def _outline_output_rule(payload: WritingGenerateRequest) -> str:
+    if _is_broad_outline_request(payload):
+        return (
+            "Output the complete novel outline requested by the user, not just the current chapter. "
+            "If the request asks for multi-volume structure, include the volume architecture, each volume's theme/conflict/relationship progress/worldbuilding progress/end hook, "
+            "and per-chapter entries with function, summary, conflict, relationship progress, worldbuilding keywords, state-change cause-effect chain, and ending hook. "
+            "Do not write prose; make the outline directly usable for later chapter-by-chapter draft generation."
+        )
+    return "Only output a current-chapter outline. Do not write prose yet. The outline must be directly usable for draft generation."
+
+
 def _build_structured_card_agent_prompt(
     stage: str,
     payload: WritingGenerateRequest,
@@ -2106,7 +2143,7 @@ def _build_structured_card_agent_prompt(
     anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
     writing_guide = [card for card in cards if card.library_type == "writing_guide" and card.card_type != "anti_pattern"]
     output_rule = {
-        "outline": "Only output a chapter outline. Do not write prose yet. The outline must be directly usable for draft generation.",
+        "outline": _outline_output_rule(payload),
         "draft": "Only output novel prose. Do not output outlines, tables, writing notes, retrieval notes, or citation IDs.",
         "revision": "Only output the revised prose. Do not output revision notes, lists, tables, or citation IDs.",
     }.get(stage, "Only output the content requested by the current task. Do not output retrieval notes, writing notes, or citation IDs.")
@@ -3018,7 +3055,8 @@ oh-story 写作内核（生成提纲时必须显式应用）：
 {writing_guide}
 
 输出要求：
-- 只输出“章节提纲”，不要写正文。
+- 只输出“提纲”，不要写正文；如果用户明确要求全书、多卷、分卷、章节列表或每章设计，必须输出完整作品/多卷章节提纲，不要压缩成当前单章。
+- 如果用户没有提出全书或多卷范围，才输出当前章节提纲。
 - 使用 Markdown。
 - 提纲要足够细，能直接交给下一步生成正文。
 - 必须包含：章节信息、开头状态、遇到阻力、小解决与信息释放、反应层与日常展开、结尾状态与章尾牵引、oh-story 结构功能核对、下一章可接方向、可复现写作模块。

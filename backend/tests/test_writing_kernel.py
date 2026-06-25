@@ -8,6 +8,7 @@ from novel_deconstructor.api.writing import (
     create_memory,
     _draft_prompt,
     _oh_story_writing_kernel,
+    _outline_output_rule,
     _outline_prompt,
     _retrieval_queries,
     _resolve_writing_model,
@@ -60,7 +61,8 @@ def test_writing_prompts_use_oh_story_without_mixing_worldbuilding():
     assert kernel in user_prompt
     assert "oh-story 写作内核（生成提纲时必须显式应用）" in user_prompt
     assert "不要沿用拆书原作世界观" in user_prompt
-    assert "只输出“章节提纲”，不要写正文" in user_prompt
+    assert "不要写正文" in user_prompt
+    assert "完整作品/多卷章节提纲" in user_prompt
 
 
 def test_outline_and_draft_prompts_are_separated():
@@ -77,7 +79,8 @@ def test_outline_and_draft_prompts_are_separated():
     draft_prompt = _draft_prompt(draft_payload, [], [], kernel)
     draft_system = _system_prompt("reference", kernel, stage="draft")
 
-    assert "只输出“章节提纲”，不要写正文" in outline_prompt
+    assert "不要写正文" in outline_prompt
+    assert "当前章节提纲" in outline_prompt
     assert "oh-story 结构功能核对" in outline_prompt
     assert "已确认章节提纲（必须作为正文蓝图）" in draft_prompt
     assert "只输出小说正文，不要输出提纲" in draft_prompt
@@ -162,6 +165,15 @@ def test_resolve_writing_model_maps_doubao_display_alias_to_endpoint():
 
     assert isinstance(provider, DoubaoResponsesProvider)
     assert model == "doubao-seed-2-0-pro-260215"
+
+
+def test_outline_output_rule_respects_full_novel_scope():
+    payload = WritingOutlineRequest(task="请生成一份原创长篇小说章节提纲，设计三卷以上结构，每卷写明主题，每章包含章尾钩子。")
+
+    rule = _outline_output_rule(payload)
+
+    assert "complete novel outline" in rule
+    assert "not just the current chapter" in rule
 
 
 def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
