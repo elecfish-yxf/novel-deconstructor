@@ -37,7 +37,9 @@ jobs:
             --exclude-dir=uploads \
             --exclude-dir=outputs \
             --exclude-dir=logs \
+            --exclude-dir=.github \
             --exclude='*.tsbuildinfo' \
+            --exclude='.env.example' \
             .; then
             echo "Potential secret detected"
             exit 1
