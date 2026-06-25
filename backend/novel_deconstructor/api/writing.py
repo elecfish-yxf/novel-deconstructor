@@ -57,6 +57,7 @@ from ..schemas import (
 from ..services.knowledge_cards import (
     BLOCKED_STATUSES,
     RETRIEVABLE_STATUSES,
+    card_markdown_path,
     card_to_read,
     delete_card_physical,
     delete_markdown_doc,
