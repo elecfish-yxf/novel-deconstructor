@@ -1,4 +1,4 @@
-import { Dispatch, ChangeEvent, useState, useMemo, useRef } from "react";
+import { Dispatch, ChangeEvent, useState, useMemo } from "react";
 import { WritingAction, WritingState } from "./types";
 import { KnowledgeBase, KnowledgeDocument, KnowledgeCard, KnowledgeMarkdownDoc, api } from "../../api";
 import { formatSize, compactSourceRef, documentTitle } from "./utils";
@@ -29,7 +29,8 @@ interface Props {
 
 export function KnowledgePanel({ state, dispatch, selected, documentsByType, selectedDocumentSet, selectedCardSet, selectedDocSet, selectedMemorySet, refreshKnowledgeCards, reloadWorkIfStillActive, load, ragRetrievalPayload, resolvedRagTopK, positionMissing, workspaceId, uploadType, packagePath, markdownSourcePath, knowledgeTypeLabel }: Props) {
   const [cardPage, setCardPage] = useState(1);
-  const mdFileRef = useRef<HTMLInputElement>(null);
+  const [pendingMdFiles, setPendingMdFiles] = useState<FileList | null>(null);
+  const [pendingDocFiles, setPendingDocFiles] = useState<FileList | null>(null);
 
   const cardFilterGroups = (() => {
     const visible = state.showRawCards ? state.cards : state.cards.filter((c) => c.is_canonical);
@@ -69,16 +70,23 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
   };
 
-  const uploadFiles = async (e: ChangeEvent<HTMLInputElement>) => {
-    if (!selected || !e.target.files?.length) return;
+  const handleDocFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) {
+      setPendingDocFiles(e.target.files);
+    }
+  };
+
+  const confirmDocUpload = async () => {
+    if (!selected || !pendingDocFiles?.length) return;
     dispatch({ type: "SET_BUSY", busy: "upload" });
     try {
-      const r = await api.uploadKnowledgeDocumentsAs(selected.id, e.target.files, uploadType);
+      const r = await api.uploadKnowledgeDocumentsAs(selected.id, pendingDocFiles, uploadType);
       dispatch({ type: "SET_MESSAGE", message: `${knowledgeTypeLabel(uploadType)}已上传：${r.message}` });
       await reloadWorkIfStillActive(selected.id);
+      setPendingDocFiles(null);
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "上传失败" });
-    } finally { e.target.value = ""; dispatch({ type: "SET_BUSY", busy: "" }); }
+    } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
   };
 
   const importPackage = async () => {
@@ -107,19 +115,26 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
   };
 
-  const importMarkdownFiles = async (e: ChangeEvent<HTMLInputElement>) => {
-    if (!selected || !e.target.files?.length) return;
+  const handleMdFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) {
+      setPendingMdFiles(e.target.files);
+    }
+  };
+
+  const confirmMdUpload = async () => {
+    if (!selected || !pendingMdFiles?.length) return;
     dispatch({ type: "SET_BUSY", busy: "import-md-files" });
     try {
-      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, e.target.files, uploadType, "raw_extracted");
+      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, pendingMdFiles, uploadType, "raw_extracted");
       const imported = results.reduce((t, r) => t + r.imported_count, 0);
       const skipped = results.reduce((t, r) => t + r.skipped_count, 0);
-      dispatch({ type: "SET_MESSAGE", message: `Markdown 文件已拆卡：导入 ${imported} 张，跳过 ${skipped} 项` });
+      dispatch({ type: "SET_MESSAGE", message: `Markdown 拆卡完成：导入 ${imported} 张，跳过 ${skipped} 项` });
       await refreshKnowledgeCards(selected.id);
       dispatch({ type: "SET_ACTIVE_KNOWLEDGE_TAB", tab: "cards" });
+      setPendingMdFiles(null);
     } catch (err) {
-      dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "Markdown 文件导入失败" });
-    } finally { e.target.value = ""; dispatch({ type: "SET_BUSY", busy: "" }); }
+      dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "Markdown 拆卡失败" });
+    } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
   };
 
   const deleteDocument = async (docId: number) => {
@@ -161,15 +176,54 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
             <option value="worldbuilding">世界观设定</option>
           </select>
         </div>
-        <label>文件上传（任何格式）<input type="file" multiple onChange={uploadFiles} disabled={state.busy === "upload"} /></label>
+
+        {/* 文件上传（知识库文档） */}
+        <label>知识库文件上传
+          <input type="file" multiple onChange={handleDocFileSelect} disabled={state.busy === "upload"} />
+        </label>
+        {pendingDocFiles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, color: "#2563eb" }}>
+              已选 {pendingDocFiles.length} 个文件：{Array.from(pendingDocFiles).map((f) => f.name).join(", ")}
+            </span>
+            <button className="primary" onClick={confirmDocUpload} disabled={state.busy === "upload"}>
+              确认上传
+            </button>
+            <button onClick={() => setPendingDocFiles(null)}>取消</button>
+          </div>
+        )}
+
         <div className="writing-card-divider" />
-        <label>知识包路径 <input value={packagePath} onChange={(e) => dispatch({ type: "SET_PACKAGE_PATH", path: e.target.value })} placeholder="如 demo_rain_lamp_street" /></label>
+
+        {/* 知识包路径 */}
+        <label>知识包路径
+          <input value={packagePath} onChange={(e) => dispatch({ type: "SET_PACKAGE_PATH", path: e.target.value })} placeholder="如 demo_rain_lamp_street" />
+        </label>
         <button onClick={importPackage} disabled={state.busy === "import-package" || !packagePath.trim()}>导入知识包</button>
+
         <div className="writing-card-divider" />
-        <label>Markdown 路径（拆卡）<input value={markdownSourcePath} onChange={(e) => dispatch({ type: "SET_MARKDOWN_SOURCE_PATH", path: e.target.value })} placeholder="本地 .md 文件路径" /></label>
+
+        {/* Markdown 路径拆卡 */}
+        <label>Markdown 路径（拆卡）
+          <input value={markdownSourcePath} onChange={(e) => dispatch({ type: "SET_MARKDOWN_SOURCE_PATH", path: e.target.value })} placeholder="本地 .md 文件路径" />
+        </label>
         <button onClick={importMD} disabled={state.busy === "import-md-path" || !markdownSourcePath.trim()}>路径拆卡</button>
-        <label style={{ marginTop: 6 }}>Markdown 文件上传（拆卡）<input ref={mdFileRef} type="file" accept=".md,.markdown" multiple onChange={importMarkdownFiles} disabled={state.busy === "import-md-files"} /></label>
-        <button onClick={() => mdFileRef.current?.click()} disabled={state.busy === "import-md-files"}>上传 .md 并拆卡</button>
+
+        {/* Markdown 文件上传拆卡 */}
+        <label>Markdown 文件上传（拆卡）
+          <input type="file" accept=".md,.markdown" multiple onChange={handleMdFileSelect} disabled={state.busy === "import-md-files"} />
+        </label>
+        {pendingMdFiles && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, color: "#2563eb" }}>
+              已选 {pendingMdFiles.length} 个文件：{Array.from(pendingMdFiles).map((f) => f.name).join(", ")}
+            </span>
+            <button className="primary" onClick={confirmMdUpload} disabled={state.busy === "import-md-files"}>
+              确认拆卡
+            </button>
+            <button onClick={() => setPendingMdFiles(null)}>取消</button>
+          </div>
+        )}
       </div>
 
       {/* Files tab — uploaded knowledge documents */}
