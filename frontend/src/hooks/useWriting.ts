@@ -1,5 +1,5 @@
-import { useCallback, useRef } from "react";
-import { api, WritingDraftJob } from "../api";
+import { useCallback } from "react";
+import { api, WritingDraftJob, WritingMemory } from "../api";
 import { WritingAction } from "../components/writing/types";
 
 /**
