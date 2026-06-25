@@ -124,20 +124,23 @@ export function useWritingOutline(
 
   const confirmOutline = useCallback(async (
     workId: number, outline: string, scope: string, chapterTitle: string,
-    scopePayload: Record<string, unknown>, memories: ReturnType<typeof import("../api").api.listWritingMemories> extends Promise<infer T> ? T : never[],
+    scopePayload: Record<string, unknown>, memories: WritingMemory[],
     refreshCards: (id?: number) => Promise<void>,
   ) => {
     dispatch({ type: "SET_BUSY", busy: "confirm-outline" });
     try {
-      dispatch({ type: "SET_CONFIRMED_OUTLINE", outline: outline });
       const label = scope === "chapter" ? (chapterTitle || "已确认提纲") : (scope === "volume" ? "全卷" : "全书");
       const saved = await api.confirmOutlineMemory(workId, {
         title: `${label} · 提纲`, content: outline, tags: ["outline"], ...scopePayload,
       });
-      dispatch({ type: "SET_MEMORIES", memories: [saved, ...(memories as any[])] });
-      await refreshCards(workId);
+      // 成功后才设置 confirmedOutline，防止 API 失败时状态不一致
+      dispatch({ type: "SET_CONFIRMED_OUTLINE", outline: outline });
+      dispatch({ type: "SET_MEMORIES", memories: [saved, ...memories] });
       dispatch({ type: "SET_MESSAGE", message: "提纲已确认。" });
+      // 刷新知识卡独立处理，不阻塞确认结果
+      try { await refreshCards(workId); } catch { /* 知识卡刷新失败不影响确认 */ }
     } catch (err) {
+      // API 失败时不清除任何已设置的状态，但也不会设置 confirmedOutline
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "确认提纲失败" });
     } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
   }, [dispatch, selectedIdRef]);

@@ -18,7 +18,6 @@ interface Props {
   modelCallBlocked: boolean;
   generateOutline: (e: FormEvent) => Promise<void>;
   confirmOutline: () => Promise<void>;
-  startDraftJob: () => Promise<void>;
 }
 
 function OutlineNodeList({ nodes }: { nodes: ParsedOutlineNode[] }) {
@@ -38,7 +37,7 @@ function OutlineNodeList({ nodes }: { nodes: ParsedOutlineNode[] }) {
   );
 }
 
-export function OutlinePanel({ state, dispatch, selected, writingModels, selectedWritingModel, selectedWritingModelPayload, writingTaskPayload, parsedOutline, resolvedRagTopK, resolvedTargetChars, generationRetrievalPayload, outlineScopePayload, outlineScopeLabel, outlineScopePositionMissing, modelCallBlocked, generateOutline, confirmOutline, startDraftJob }: Props) {
+export function OutlinePanel({ state, dispatch, selected, writingModels, selectedWritingModel, selectedWritingModelPayload, writingTaskPayload, parsedOutline, resolvedRagTopK, resolvedTargetChars, generationRetrievalPayload, outlineScopePayload, outlineScopeLabel, outlineScopePositionMissing, modelCallBlocked, generateOutline, confirmOutline }: Props) {
   return (
     <>
       <form className="writing-side-card" onSubmit={generateOutline}>

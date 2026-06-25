@@ -1532,7 +1532,11 @@ def _split_generated_outline_by_layers(content: str) -> dict[str, Any]:
         stripped = line.strip()
 
         if book_header_pattern.match(stripped):
-            # 进入书层
+            # 进入书层 — 先保存前一段书层内容
+            if current_book_lines:
+                book_text = "\n".join(current_book_lines).strip()
+                if len(book_text) > 20:
+                    result["book_outline"] = book_text
             _flush_volume(current_volume_lines, current_volume_index, result)
             in_book = True
             in_volume = False
@@ -1593,35 +1597,32 @@ def _extract_volume_number(line: str) -> int | None:
 def _chinese_to_int(text: str) -> int:
     """中文数字转整数。"""
     mapping = {
-        "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+        "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
         "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
         "百": 100, "千": 1000, "万": 10000,
     }
     if text.isdigit():
         return int(text)
+    # 标准中文数字解析：从高位到低位
     result = 0
-    unit = 1
-    for char in reversed(text):
+    current = 0
+    for char in text:
         if char in mapping:
             val = mapping[char]
             if val >= 10:
-                unit = val
-                if result == 0:
-                    result = val
+                if current == 0:
+                    current = 1
+                result += current * val
+                current = 0
             else:
-                result += val * (unit if unit >= 10 else 1)
+                current = val
         else:
             try:
                 return int(text)
             except ValueError:
                 return 0
-    # 处理 "十五" 这种情况
-    if result == 0 and len(text) == 2:
-        tens = mapping.get(text[0], 0)
-        ones = mapping.get(text[1], 0)
-        if tens >= 10:
-            return tens + ones
-    return result
+    result += current  # 加上最后的个位数
+    return result if result > 0 else 0
 
 
 def _flush_volume(lines: list[str], volume_index: int | None, result: dict[str, Any]) -> None:
@@ -2220,6 +2221,9 @@ async def _generate_long_draft_with_cards(
     }
 
     for index, section_target in enumerate(section_targets, start=1):
+        # 每段生成前检查是否已被取消
+        if DRAFT_GENERATION_JOBS.get(job_id, {}).get("status") == "cancelled":
+            break
         focus = focuses[index - 1]
         previous_content = "\n\n".join(item for item in [payload.current_content, *generated_parts] if item)
         previous_tail = _tail_clip(previous_content, 2200)

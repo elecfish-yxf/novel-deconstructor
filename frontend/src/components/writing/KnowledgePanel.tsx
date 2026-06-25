@@ -257,7 +257,7 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
             <select value={state.cardTypeFilter} onChange={(e) => setFilter(e.target.value)}>
               {cardFilterGroups.map((g) => (<option key={g.key} value={g.key}>{g.label} ({g.count})</option>))}
             </select>
-            <label className="check-row"><input type="checkbox" checked={state.showRawCards} onChange={(e) => dispatch({ type: "SET_SHOW_RAW_CARDS", show: e.target.checked })} />显示原始卡</label>
+            <label className="check-row"><input type="checkbox" checked={state.showRawCards} onChange={(e) => { dispatch({ type: "SET_SHOW_RAW_CARDS", show: e.target.checked }); setCardPage(1); }} />显示原始卡</label>
             {state.selectedCardIds.length > 0 && <button onClick={async () => { if (!selected) return; dispatch({ type: "SET_BUSY", busy: "delete-cards" }); try { await api.bulkDeleteKnowledgeCards(selected.id, state.selectedCardIds); dispatch({ type: "SET_SELECTED_CARD_IDS", ids: [] }); await refreshKnowledgeCards(selected.id); } catch (err) { dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "删除失败" }); } finally { dispatch({ type: "SET_BUSY", busy: "" }); } }}>删除选中</button>}
           </div>
           {state.busy && state.busy.startsWith("card") ? (

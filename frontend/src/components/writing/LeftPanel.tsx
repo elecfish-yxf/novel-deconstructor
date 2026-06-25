@@ -1,7 +1,7 @@
-import { Dispatch, FormEvent, PointerEvent } from "react";
+import { Dispatch, FormEvent } from "react";
 import { WritingAction, WritingState, VolumeTreeNode } from "./types";
 import { chapterSelectionKey, chapterTitleKey, defaultChapterTitle, parseChapterSelectionKey, parseChapterTitleKey } from "./utils";
-import { KnowledgeBase } from "../../api";
+import { KnowledgeBase, api } from "../../api";
 
 interface Props {
   state: WritingState; dispatch: Dispatch<WritingAction>;
@@ -37,7 +37,7 @@ export function LeftPanel({ state, dispatch, selected, workspaceId, volumeTree, 
     if (!window.confirm(`确定彻底删除选中的 ${vols.length} 个卷、${chs.length} 个章节吗？`)) return;
     dispatch({ type: "SET_BUSY", busy: "delete-scopes" });
     try {
-      const r = await import("../../api").then((m) => m.api.bulkDeleteWritingScope(selected.id, { volume_indices: vols, chapters: chs }));
+      const r = await api.bulkDeleteWritingScope(selected.id, { volume_indices: vols, chapters: chs });
       dispatch({ type: "SET_SELECTED_VOLUME_KEYS", keys: [] });
       dispatch({ type: "SET_SELECTED_CHAPTER_KEYS", keys: [] });
       await load(selected.id);
