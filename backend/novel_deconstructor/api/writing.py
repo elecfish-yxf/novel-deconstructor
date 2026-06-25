@@ -1975,6 +1975,9 @@ def _build_volume_outline_from_cards(
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _job_or_404(job_id: str, workspace_id: str, work_id: int) -> dict[str, Any]:
     job = DRAFT_GENERATION_JOBS.get(job_id)
     if not job or job.get("workspace_id") != workspace_id or job.get("work_id") != work_id:
         raise HTTPException(status_code=404, detail="生成任务不存在")
