@@ -2114,11 +2114,26 @@ def _outline_output_rule(payload: WritingGenerateRequest) -> str:
     if _is_broad_outline_request(payload):
         return (
             "Output the complete novel outline requested by the user, not just the current chapter. "
+            "Do not title the response as a single chapter outline such as '# ...第1章...大纲'. "
             "If the request asks for multi-volume structure, include the volume architecture, each volume's theme/conflict/relationship progress/worldbuilding progress/end hook, "
             "and per-chapter entries with function, summary, conflict, relationship progress, worldbuilding keywords, state-change cause-effect chain, and ending hook. "
             "Do not write prose; make the outline directly usable for later chapter-by-chapter draft generation."
         )
     return "Only output a current-chapter outline. Do not write prose yet. The outline must be directly usable for draft generation."
+
+
+def _outline_scope_block(payload: WritingGenerateRequest) -> str:
+    if _is_broad_outline_request(payload):
+        return """[OUTLINE SCOPE OVERRIDE]
+Scope: FULL_NOVEL_OR_MULTI_VOLUME.
+- The user's request is for full-story planning, not the current chapter.
+- Current volume/chapter metadata is only UI context and must not restrict the output.
+- Start with the full novel architecture: at least three volumes, then chapter entries under each volume.
+- Include the requested golden three chapters as explicit early chapter entries.
+- A single-chapter outline is invalid for this request."""
+    return """[OUTLINE SCOPE]
+Scope: CURRENT_CHAPTER.
+- The user's request is for the current chapter outline unless they explicitly ask for full-story or multi-volume planning."""
 
 
 def _build_structured_card_agent_prompt(
@@ -2153,6 +2168,8 @@ def _build_structured_card_agent_prompt(
     return f"""[CURRENT WRITING POSITION]
 Current volume: {_position_value(payload.current_volume_index)}
 Current chapter: {_position_value(payload.current_chapter_index)}
+
+{_outline_scope_block(payload) if stage == "outline" else ""}
 
 [RETRIEVAL POLICY]
 - Use only global knowledge, current/prior volume knowledge, and chapters up to the current writing position.
@@ -3035,6 +3052,8 @@ def _outline_prompt(payload: WritingOutlineRequest, hits: list[dict], memories: 
     if not writing_guide:
         writing_guide = "未检索到写作技巧指南。"
     return f"""当前任务：{payload.task}
+
+{_outline_scope_block(payload)}
 
 生成模式：{payload.mode}
 知识使用模式：{payload.knowledge_mode}

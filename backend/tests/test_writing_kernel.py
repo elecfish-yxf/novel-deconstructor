@@ -10,6 +10,7 @@ from novel_deconstructor.api.writing import (
     _oh_story_writing_kernel,
     _outline_output_rule,
     _outline_prompt,
+    _outline_scope_block,
     _retrieval_queries,
     _resolve_writing_model,
     _system_prompt,
@@ -171,9 +172,12 @@ def test_outline_output_rule_respects_full_novel_scope():
     payload = WritingOutlineRequest(task="请生成一份原创长篇小说章节提纲，设计三卷以上结构，每卷写明主题，每章包含章尾钩子。")
 
     rule = _outline_output_rule(payload)
+    scope = _outline_scope_block(payload)
 
     assert "complete novel outline" in rule
     assert "not just the current chapter" in rule
+    assert "FULL_NOVEL_OR_MULTI_VOLUME" in scope
+    assert "single-chapter outline is invalid" in scope
 
 
 def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():
