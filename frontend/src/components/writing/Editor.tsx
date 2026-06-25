@@ -1,7 +1,7 @@
 import { Dispatch } from "react";
 import { WritingAction, WritingState } from "./types";
 import { parsePositionInput, defaultChapterTitle } from "./utils";
-import { KnowledgeBase } from "../../api";
+import { KnowledgeBase, getWorkspaceId } from "../../api";
 
 interface Props {
   state: WritingState; dispatch: Dispatch<WritingAction>;
@@ -25,7 +25,7 @@ export function Editor({ state, dispatch, selected, positionMissing, activeDraft
   const updateChapterTitle = (value: string) => {
     dispatch({ type: "SET_CHAPTER_TITLE", title: value });
     if (!selected || typeof state.currentVolumeIndex !== "number" || typeof state.currentChapterIndex !== "number") return;
-    const key = `${import("../../api").getWorkspaceId()}:${selected.id}:${state.currentVolumeIndex}:${state.currentChapterIndex}`;
+    const key = `${getWorkspaceId()}:${selected.id}:${state.currentVolumeIndex}:${state.currentChapterIndex}`;
     dispatch({ type: "SET_CHAPTER_TITLES", titles: { ...state.chapterTitles, [key]: value } });
   };
 
@@ -38,13 +38,13 @@ export function Editor({ state, dispatch, selected, positionMissing, activeDraft
             onChange={(e) => { const nv = parsePositionInput(e.target.value); if (typeof nv === "number") {
               const ch = typeof state.currentChapterIndex === "number" ? state.currentChapterIndex : 1;
               dispatch({ type: "SET_CURRENT_VOLUME", index: nv }); dispatch({ type: "SET_CURRENT_CHAPTER", index: ch });
-              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${import("../../api").getWorkspaceId()}:${selected.id}:${nv}:${ch}`] || defaultChapterTitle(ch) });
+              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${getWorkspaceId()}:${selected.id}:${nv}:${ch}`] || defaultChapterTitle(ch) });
             } else dispatch({ type: "SET_CURRENT_VOLUME", index: nv }); }} /></label>
           <label>C <input type="number" min={1} value={state.currentChapterIndex}
             onChange={(e) => { const nc = parsePositionInput(e.target.value); if (typeof nc === "number") {
               const vol = typeof state.currentVolumeIndex === "number" ? state.currentVolumeIndex : 1;
               dispatch({ type: "SET_CURRENT_VOLUME", index: vol }); dispatch({ type: "SET_CURRENT_CHAPTER", index: nc });
-              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${import("../../api").getWorkspaceId()}:${selected.id}:${vol}:${nc}`] || defaultChapterTitle(nc) });
+              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${getWorkspaceId()}:${selected.id}:${vol}:${nc}`] || defaultChapterTitle(nc) });
             } else dispatch({ type: "SET_CURRENT_CHAPTER", index: nc }); }} /></label>
         </div>
       </div>

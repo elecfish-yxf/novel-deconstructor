@@ -323,7 +323,7 @@ export default function App() {
           />
         )}
         {view === "results" && job && <ResultViewer jobId={job.id} />}
-        {view === "agent" && <WritingAgent job={job} />}
+        {view === "agent" && <WritingAgent />}
         {view === "skills" && <SkillManager />}
         {view === "imports" && <SkillImport />}
         {view === "help" && <HelpPage />}
