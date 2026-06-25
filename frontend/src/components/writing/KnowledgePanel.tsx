@@ -149,40 +149,31 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
           {state.busy && state.busy.startsWith("card") ? (
             <div style={{ padding: 8 }}>{Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)}</div>
           ) : (
-            <>
-              <div className="writing-card-list">
-                {pagedCards.map((card) => (
-              <div key={card.card_id} className="writing-card-item">
-                <input type="checkbox" checked={selectedCardSet.has(card.card_id)} onChange={() => toggleCardSelection(card.card_id)} />
-                <div>
-                  <strong>[{card.card_type}] {card.title}</strong>
-                  <small>{card.status} · {card.scope_level}{card.volume_index ? ` V${card.volume_index}` : ""}{card.chapter_index ? ` C${card.chapter_index}` : ""}</small>
-                  <p>{card.summary || card.content.slice(0, 150)}</p>
+            <div className="writing-card-list">
+              {pagedCards.map((card) => (
+                <div key={card.card_id} className="writing-card-item">
+                  <input type="checkbox" checked={selectedCardSet.has(card.card_id)} onChange={() => toggleCardSelection(card.card_id)} />
+                  <div>
+                    <strong>[{card.card_type}] {card.title}</strong>
+                    <small>{card.status} · {card.scope_level}{card.volume_index ? ` V${card.volume_index}` : ""}{card.chapter_index ? ` C${card.chapter_index}` : ""}</small>
+                    <p>{card.summary || card.content.slice(0, 150)}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-            {!filteredCards.length && <p className="muted">无知识卡。</p>}
-          </div>
+              ))}
+              {!filteredCards.length && <p className="muted">无知识卡。</p>}
+            </div>
+          )}
           {totalPages > 1 && (
             <div className="writing-pagination">
               <button disabled={cardPage <= 1} onClick={() => setCardPage(1)}>«</button>
               <button disabled={cardPage <= 1} onClick={() => setCardPage((p) => p - 1)}>‹</button>
               {Array.from({ length: Math.min(totalPages, 7) }).map((_, i) => {
                 let pageNum: number;
-                if (totalPages <= 7) {
-                  pageNum = i + 1;
-                } else if (cardPage <= 4) {
-                  pageNum = i + 1;
-                } else if (cardPage >= totalPages - 3) {
-                  pageNum = totalPages - 6 + i;
-                } else {
-                  pageNum = cardPage - 3 + i;
-                }
-                return (
-                  <button key={pageNum} className={pageNum === cardPage ? "active" : ""} onClick={() => setCardPage(pageNum)}>
-                    {pageNum}
-                  </button>
-                );
+                if (totalPages <= 7) { pageNum = i + 1; }
+                else if (cardPage <= 4) { pageNum = i + 1; }
+                else if (cardPage >= totalPages - 3) { pageNum = totalPages - 6 + i; }
+                else { pageNum = cardPage - 3 + i; }
+                return (<button key={pageNum} className={pageNum === cardPage ? "active" : ""} onClick={() => setCardPage(pageNum)}>{pageNum}</button>);
               })}
               <button disabled={cardPage >= totalPages} onClick={() => setCardPage((p) => p + 1)}>›</button>
               <button disabled={cardPage >= totalPages} onClick={() => setCardPage(totalPages)}>»</button>
