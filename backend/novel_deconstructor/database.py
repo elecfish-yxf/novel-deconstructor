@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
@@ -79,17 +80,30 @@ def seed_prompt_templates(db: Session) -> None:
 
 
 def ensure_schema_upgrades() -> None:
+    added_columns: set[str] = set()
+
     def table_columns(table_name: str) -> set[str]:
         inspector = inspect(engine)
         if not inspector.has_table(table_name):
             return set()
         return {column["name"] for column in inspector.get_columns(table_name)}
 
+    def table_indexes(table_name: str) -> set[str]:
+        inspector = inspect(engine)
+        if not inspector.has_table(table_name):
+            return set()
+        return {index["name"] for index in inspector.get_indexes(table_name)}
+
     def add_column_if_missing(table_name: str, column_name: str, sqlite_sql: str, mysql_sql: str | None = None) -> None:
         columns = table_columns(table_name)
         if columns and column_name not in columns:
             statement = mysql_sql if settings.app_database_url.startswith("mysql") and mysql_sql else sqlite_sql
             connection.execute(text(statement))
+            added_columns.add(f"{table_name}.{column_name}")
+
+    def create_index_if_missing(index_name: str, sql: str) -> None:
+        if index_name not in table_indexes("knowledge_cards"):
+            connection.execute(text(sql))
 
     with engine.begin() as connection:
         add_column_if_missing("analysis_jobs", "skill_id", "ALTER TABLE analysis_jobs ADD COLUMN skill_id INTEGER")
@@ -153,6 +167,32 @@ def ensure_schema_upgrades() -> None:
         )
         add_column_if_missing(
             "knowledge_cards",
+            "source_refs_json",
+            "ALTER TABLE knowledge_cards ADD COLUMN source_refs_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE knowledge_cards ADD COLUMN source_refs_json TEXT NULL",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "normalized_title_hash",
+            "ALTER TABLE knowledge_cards ADD COLUMN normalized_title_hash VARCHAR(64) NOT NULL DEFAULT ''",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "canonical_group_id",
+            "ALTER TABLE knowledge_cards ADD COLUMN canonical_group_id VARCHAR(96) NOT NULL DEFAULT ''",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "retrieval_level",
+            "ALTER TABLE knowledge_cards ADD COLUMN retrieval_level VARCHAR(24) NOT NULL DEFAULT 'evidence'",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
+            "context_role",
+            "ALTER TABLE knowledge_cards ADD COLUMN context_role VARCHAR(32) NOT NULL DEFAULT 'auxiliary'",
+        )
+        add_column_if_missing(
+            "knowledge_cards",
             "scope_level",
             "ALTER TABLE knowledge_cards ADD COLUMN scope_level VARCHAR(16) NOT NULL DEFAULT 'global'",
         )
@@ -206,14 +246,17 @@ def ensure_schema_upgrades() -> None:
                 text(
                     "UPDATE knowledge_cards "
                     "SET retrievable = 1 "
-                    "WHERE ("
+                    "WHERE "
                     "library_type IN ('writing_guide', 'worldbuilding', 'memory') "
                     "AND is_canonical = 1 "
                     "AND status IN ('approved', 'reviewed')"
-                    ") OR ("
-                    "library_type IN ('writing_guide', 'worldbuilding') "
-                    "AND status = 'raw_extracted'"
-                    ")"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE knowledge_cards "
+                    "SET retrievable = 0 "
+                    "WHERE status = 'raw_extracted' OR is_canonical = 0 OR status IN ('merged', 'deleted', 'deprecated', 'superseded', 'disabled')"
                 )
             )
         if settings.app_database_url.startswith("mysql"):
@@ -223,6 +266,68 @@ def ensure_schema_upgrades() -> None:
                 connection.execute(text("UPDATE writing_memories SET source_ref_json = '{}' WHERE source_ref_json IS NULL"))
             if "merged_from_ids_json" in table_columns("knowledge_cards"):
                 connection.execute(text("UPDATE knowledge_cards SET merged_from_ids_json = '[]' WHERE merged_from_ids_json IS NULL"))
+            if "source_refs_json" in table_columns("knowledge_cards"):
+                connection.execute(text("UPDATE knowledge_cards SET source_refs_json = '[]' WHERE source_refs_json IS NULL"))
+        if "retrieval_level" in table_columns("knowledge_cards"):
+            retrieval_level_where = (
+                "retrieval_level IS NULL OR retrieval_level = '' OR retrieval_level = 'evidence'"
+                if "knowledge_cards.retrieval_level" in added_columns
+                else "retrieval_level IS NULL OR retrieval_level = ''"
+            )
+            connection.execute(
+                text(
+                    "UPDATE knowledge_cards "
+                    "SET retrieval_level = CASE "
+                    "WHEN status = 'raw_extracted' OR is_canonical = 0 OR retrievable = 0 THEN 'evidence' "
+                    "WHEN library_type = 'memory' OR card_type IN ('ChapterOutline', 'ChapterHandoff', 'character_state', 'relationship_state', 'foreshadowing', 'volume_summary') THEN 'pinned' "
+                    "ELSE 'primary' END "
+                    f"WHERE {retrieval_level_where}"
+                )
+            )
+        if "context_role" in table_columns("knowledge_cards"):
+            context_role_where = (
+                "context_role IS NULL OR context_role = '' OR context_role = 'auxiliary'"
+                if "knowledge_cards.context_role" in added_columns
+                else "context_role IS NULL OR context_role = ''"
+            )
+            connection.execute(
+                text(
+                    "UPDATE knowledge_cards "
+                    "SET context_role = CASE "
+                    "WHEN status = 'raw_extracted' THEN 'evidence' "
+                    "WHEN library_type = 'memory' THEN 'memory' "
+                    "WHEN library_type = 'worldbuilding' THEN 'fact' "
+                    "WHEN card_type = 'anti_pattern' THEN 'anti_pattern' "
+                    "WHEN card_type = 'style_pattern' THEN 'style' "
+                    "WHEN library_type = 'writing_guide' THEN 'guide' "
+                    "ELSE 'auxiliary' END "
+                    f"WHERE {context_role_where}"
+                )
+            )
+        create_index_if_missing(
+            "idx_card_kb_library_status",
+            "CREATE INDEX idx_card_kb_library_status ON knowledge_cards (knowledge_base_id, library_type, status, is_canonical, retrievable)",
+        )
+        create_index_if_missing(
+            "idx_card_scope_position",
+            "CREATE INDEX idx_card_scope_position ON knowledge_cards (knowledge_base_id, scope_level, volume_index, chapter_index)",
+        )
+        create_index_if_missing(
+            "idx_card_visibility_window",
+            "CREATE INDEX idx_card_visibility_window ON knowledge_cards (knowledge_base_id, retrievable, status, reveal_at_volume_index, reveal_at_chapter_index, valid_from_volume_index, valid_from_chapter_index, valid_until_volume_index, valid_until_chapter_index)",
+        )
+        create_index_if_missing(
+            "idx_card_type_priority",
+            "CREATE INDEX idx_card_type_priority ON knowledge_cards (knowledge_base_id, card_type, priority)",
+        )
+        create_index_if_missing(
+            "idx_card_content_hash",
+            "CREATE INDEX idx_card_content_hash ON knowledge_cards (knowledge_base_id, content_fingerprint)",
+        )
+        create_index_if_missing(
+            "idx_card_title_group",
+            "CREATE INDEX idx_card_title_group ON knowledge_cards (knowledge_base_id, normalized_title_hash, canonical_group_id)",
+        )
 
 
 def seed_deconstruction_skills(db: Session) -> None:
@@ -298,8 +403,16 @@ def mark_interrupted_knowledge_documents(db: Session) -> None:
 
 def init_db() -> None:
     ensure_runtime_dirs()
-    Base.metadata.create_all(bind=engine)
-    ensure_schema_upgrades()
+    try:
+        Base.metadata.create_all(bind=engine)
+        ensure_schema_upgrades()
+    except OperationalError as exc:
+        if settings.app_database_url.startswith("mysql"):
+            raise RuntimeError(
+                "RDS/MySQL database initialization failed. Check APP_DATABASE_URL, network access, "
+                "security group rules, database name, credentials, and utf8mb4 charset configuration."
+            ) from exc
+        raise
     db = SessionLocal()
     try:
         seed_builtin_workspaces(db)

@@ -1565,6 +1565,12 @@ th {
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+.writing-agent-platform *,
+.writing-agent-platform *::before,
+.writing-agent-platform *::after {
+  box-sizing: border-box;
+}
+
 .writing-agent-platform *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -1593,6 +1599,7 @@ th {
   background: #fff;
   color: #4b5563;
   box-shadow: none;
+  cursor: pointer;
 }
 
 .writing-agent-platform button:hover:not(:disabled),
@@ -1623,9 +1630,16 @@ th {
   color: #b91c1c;
 }
 
+.writing-agent-platform button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .writing-agent-platform input,
 .writing-agent-platform select,
 .writing-agent-platform textarea {
+  width: 100%;
+  min-width: 0;
   border-radius: 6px;
   border-color: #d7dce5;
   padding: 8px 10px;
@@ -1684,6 +1698,7 @@ th {
 
 .writing-agent-header-right {
   gap: 10px;
+  min-width: 0;
 }
 
 .writing-agent-logo {
@@ -1710,6 +1725,7 @@ th {
 
 .writing-agent-top-nav {
   gap: 4px;
+  min-width: 0;
 }
 
 .writing-agent-top-nav button {
@@ -1795,6 +1811,7 @@ th {
 
 .writing-agent-shell {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -2275,6 +2292,7 @@ th {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
+  min-width: 0;
 }
 
 .writing-side-card + .writing-side-card,
@@ -2294,6 +2312,112 @@ th {
 .writing-side-card-head span {
   color: #64748b;
   font-size: 12px;
+}
+
+.writing-side-card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  line-height: 1.55;
+}
+
+.writing-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.writing-tab-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.writing-tab-row button {
+  flex: 0 0 auto;
+  min-height: 32px;
+}
+
+.writing-tab-row button.active {
+  border-color: #1a73e8;
+  background: #eef5ff;
+  color: #1a73e8;
+  font-weight: 800;
+}
+
+.writing-card-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.writing-card-item,
+.writing-memory-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 9px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.writing-card-item > div,
+.writing-memory-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.writing-card-item strong,
+.writing-memory-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #27313f;
+}
+
+.writing-card-item small,
+.writing-memory-item small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.writing-card-item p,
+.writing-memory-item p {
+  margin: 0;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.writing-debug-details {
+  margin-top: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.writing-debug-details summary {
+  cursor: pointer;
+  padding: 9px 10px;
+  color: #334155;
+  font-weight: 800;
+}
+
+.writing-debug-details pre {
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 10px;
+  border-top: 1px solid #e5e7eb;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .writing-field-hint {
@@ -2382,6 +2506,51 @@ th {
   gap: 6px;
 }
 
+.outline-choice-list {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.outline-choice-list button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-color: #e5e7eb;
+  background: #fff;
+}
+
+.outline-choice-list button.active {
+  border-color: #1a73e8;
+  background: #eef5ff;
+  color: #1a73e8;
+  box-shadow: inset 3px 0 0 #1a73e8;
+}
+
+.outline-choice-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.outline-choice-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: #64748b;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .outline-node-list > article {
   border-left: 2px dashed #e5e7eb;
   margin-left: 8px;
@@ -2401,6 +2570,19 @@ th {
   border-radius: 6px;
   background: #f8fafc;
   white-space: pre-wrap;
+}
+
+.outline-selected-preview {
+  max-height: 360px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f8fafc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
 }
 
 .writing-outline-preview {
@@ -2821,6 +3003,25 @@ th {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .writing-card-actions {
+    justify-content: stretch;
+  }
+
+  .writing-card-actions button {
+    flex: 1 1 140px;
+  }
+
+  .writing-card-item,
+  .writing-memory-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .writing-card-item > button,
+  .writing-memory-item > button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .writing-assistant-tabs button {

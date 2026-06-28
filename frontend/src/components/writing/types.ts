@@ -44,6 +44,7 @@ export type WritingAction =
   | { type: "SET_OUTLINE_TASK"; task: string }
   | { type: "SET_OUTLINE_SCOPE"; scope: OutlineScope }
   | { type: "SET_OUTLINE"; outline: string }
+  | { type: "SET_SELECTED_OUTLINE_ID"; id: string }
   | { type: "SET_CONFIRMED_OUTLINE"; outline: string }
   | { type: "SET_DRAFT"; draft: string }
   | { type: "SET_TARGET_CHARS"; chars: OptionalNumberValue }
@@ -122,6 +123,7 @@ export interface WritingState {
   outlineTask: string;
   outlineScope: OutlineScope;
   outline: string;
+  selectedOutlineId: string;
   confirmedOutline: string;
   draft: string;
   targetChars: OptionalNumberValue;
@@ -182,7 +184,7 @@ export function getInitialState(): WritingState {
     expandedWorkIds: [], expandedTypes: { writing_guide: true, worldbuilding: true },
     currentVolumeIndex: 1, currentChapterIndex: 1, chapterTitle: "第 1 章",
     chapterTitles: {}, outlineTask: "请基于世界观设定，结合写作技巧指南，为我生成一份原创小说第一章章节提纲。",
-    outlineScope: "chapter", outline: "", confirmedOutline: "", draft: "",
+    outlineScope: "chapter", outline: "", selectedOutlineId: "full", confirmedOutline: "", draft: "",
     targetChars: 3000, actualChars: null, query: "", ragStage: "draft", ragTopK: 8,
     ragResults: [], retrievalDebug: null, usedKnowledge: [], promptPreview: "",
     hits: [], citations: [], worldbuildingDraft: "", longSections: [],

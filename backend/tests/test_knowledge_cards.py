@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
+from sqlalchemy.dialects import mysql
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import CreateIndex
 
 from novel_deconstructor.config import get_settings
 from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard
@@ -482,6 +484,7 @@ def _add_scoped_card(
     is_canonical: bool = True,
     retrievable: bool = True,
     reveal_at_chapter_index: int | None = None,
+    source_ref: dict | None = None,
 ) -> KnowledgeCard:
     card = KnowledgeCard(
         knowledge_base_id=kb.id,
@@ -492,7 +495,8 @@ def _add_scoped_card(
         content=content,
         summary=content,
         tags_json=json.dumps(["scope", "beacon", library_type]),
-        source_ref_json="{}",
+        source_ref_json=json.dumps(source_ref or {}),
+        source_refs_json=json.dumps([source_ref] if source_ref else []),
         use_when_json='["draft"]',
         avoid="",
         confidence=0.9,
@@ -614,3 +618,136 @@ def test_missing_position_only_returns_global_writing_guide(tmp_path, monkeypatc
 
     assert [item["id"] for item in results] == ["GUIDE"]
     assert debug["filtered_by_scope_count"] == 2
+
+
+def test_scoped_rag_limits_non_memory_chapter_cards_to_current_chapter(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    _add_scoped_card(db, kb, "GUIDE", content="chapter strict beacon", scope_level="global")
+    _add_scoped_card(db, kb, "FACT-C4", library_type="worldbuilding", card_type="worldbuilding", content="chapter strict beacon past fact", scope_level="chapter", volume_index=1, chapter_index=4)
+    _add_scoped_card(db, kb, "FACT-C5", library_type="worldbuilding", card_type="worldbuilding", content="chapter strict beacon current fact", scope_level="chapter", volume_index=1, chapter_index=5)
+    _add_scoped_card(db, kb, "MEM-C4", library_type="memory", card_type="memory", content="chapter strict beacon past memory", scope_level="chapter", volume_index=1, chapter_index=4)
+
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="draft",
+        query="chapter strict beacon",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=5,
+    )
+
+    ids = {item["id"] for item in results}
+    assert "GUIDE" in ids
+    assert "FACT-C5" in ids
+    assert "MEM-C4" in ids
+    assert "FACT-C4" not in ids
+    assert debug["filtered_by_scope_count"] >= 1
+
+
+def test_rag_source_cap_prevents_one_source_from_filling_top_k(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    source_ref = {"source": "same-guide.md"}
+    for index, card_type in enumerate(["writing_rule", "conflict_pattern", "emotion_module", "style_pattern", "anti_pattern"], start=1):
+        _add_scoped_card(
+            db,
+            kb,
+            f"SRC-{index}",
+            card_type=card_type,
+            content=f"source cap beacon {card_type}",
+            source_ref=source_ref,
+        )
+
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="draft",
+        query="source cap beacon",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    assert len(results) == 2
+    assert debug["source_cap_excluded_count"] == 3
+    assert {item["source_ref"].get("source") for item in results} == {"same-guide.md"}
+
+
+def test_duplicate_title_scope_merge_preserves_source_refs_and_single_retrievable_card(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    package = {
+        "package_id": "title-merge-demo",
+        "writing_rules": [
+            {
+                "id": "WR-T1",
+                "title": "Escalate the promise",
+                "rule": "Escalate the promise through a visible cost in every scene.",
+                "source_ref": {"source": "guide-a.md"},
+            },
+            {
+                "id": "WR-T2",
+                "title": "Escalate the promise",
+                "rule": "Escalate the promise by making the cost harder to dodge.",
+                "source_ref": {"source": "guide-b.md"},
+            },
+        ],
+    }
+
+    result = import_knowledge_package(db, kb, package, library_type="writing_guide", status="approved")
+
+    canonical = db.query(KnowledgeCard).filter(KnowledgeCard.is_canonical.is_(True), KnowledgeCard.status == "approved").all()
+    merged = db.query(KnowledgeCard).filter(KnowledgeCard.status == "merged").all()
+    source_refs = json.loads(canonical[0].source_refs_json)
+    results, _ = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="escalate promise cost",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    assert result["merged_card_count"] == 1
+    assert len(canonical) == 1
+    assert len(merged) == 1
+    assert canonical[0].retrievable is True
+    assert canonical[0].evidence_count == 2
+    assert {ref["source"] for ref in source_refs} == {"guide-a.md", "guide-b.md"}
+    assert [item["id"] for item in results] == [canonical[0].card_id]
+
+
+def test_knowledge_card_indexes_compile_for_mysql_without_text_columns():
+    text_columns = {
+        "content",
+        "summary",
+        "tags_json",
+        "source_ref_json",
+        "source_refs_json",
+        "use_when_json",
+        "avoid",
+        "markdown_path",
+    }
+    expected = {
+        "idx_card_kb_library_status",
+        "idx_card_scope_position",
+        "idx_card_visibility_window",
+        "idx_card_type_priority",
+        "idx_card_content_hash",
+        "idx_card_title_group",
+    }
+
+    index_names = {index.name for index in KnowledgeCard.__table__.indexes}
+    assert expected <= index_names
+    for index in KnowledgeCard.__table__.indexes:
+        if index.name not in expected:
+            continue
+        assert not ({column.name for column in index.columns} & text_columns)
+        ddl = str(CreateIndex(index).compile(dialect=mysql.dialect()))
+        assert "CREATE INDEX" in ddl

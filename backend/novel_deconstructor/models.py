@@ -2,7 +2,7 @@
 
 import json
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 
@@ -347,7 +347,26 @@ class KnowledgeChunk(Base):
 
 class KnowledgeCard(Base):
     __tablename__ = "knowledge_cards"
-    __table_args__ = (UniqueConstraint("knowledge_base_id", "card_id", name="uq_knowledge_cards_base_card"),)
+    __table_args__ = (
+        UniqueConstraint("knowledge_base_id", "card_id", name="uq_knowledge_cards_base_card"),
+        Index("idx_card_kb_library_status", "knowledge_base_id", "library_type", "status", "is_canonical", "retrievable"),
+        Index("idx_card_scope_position", "knowledge_base_id", "scope_level", "volume_index", "chapter_index"),
+        Index(
+            "idx_card_visibility_window",
+            "knowledge_base_id",
+            "retrievable",
+            "status",
+            "reveal_at_volume_index",
+            "reveal_at_chapter_index",
+            "valid_from_volume_index",
+            "valid_from_chapter_index",
+            "valid_until_volume_index",
+            "valid_until_chapter_index",
+        ),
+        Index("idx_card_type_priority", "knowledge_base_id", "card_type", "priority"),
+        Index("idx_card_content_hash", "knowledge_base_id", "content_fingerprint"),
+        Index("idx_card_title_group", "knowledge_base_id", "normalized_title_hash", "canonical_group_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -359,6 +378,7 @@ class KnowledgeCard(Base):
     summary = Column(Text, default="", nullable=False)
     tags_json = Column(Text, default="[]", nullable=False)
     source_ref_json = Column(Text, default="{}", nullable=False)
+    source_refs_json = Column(Text, default="[]", nullable=False)
     use_when_json = Column(Text, default="[]", nullable=False)
     avoid = Column(Text, default="", nullable=False)
     confidence = Column(Float, default=0.7, nullable=False)
@@ -371,6 +391,10 @@ class KnowledgeCard(Base):
     merged_from_ids_json = Column(Text, default="[]", nullable=False)
     evidence_count = Column(Integer, default=1, nullable=False)
     content_fingerprint = Column(String(64), default="", nullable=False, index=True)
+    normalized_title_hash = Column(String(64), default="", nullable=False, index=True)
+    canonical_group_id = Column(String(96), default="", nullable=False, index=True)
+    retrieval_level = Column(String(24), default="evidence", nullable=False, index=True)
+    context_role = Column(String(32), default="auxiliary", nullable=False, index=True)
     scope_level = Column(String(16), default="global", nullable=False, index=True)
     volume_index = Column(Integer, nullable=True, index=True)
     volume_title = Column(String(512), nullable=True)

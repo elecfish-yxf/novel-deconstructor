@@ -340,6 +340,11 @@ ENABLE_DIRECTORY_PICKER=false
 CORS_ORIGINS=https://your-domain.example
 ```
 
+RDS/MySQL deployments should run the startup and scoped RAG checks in
+[`docs/rds-smoke-test.md`](docs/rds-smoke-test.md). The backend uses a lightweight,
+idempotent schema upgrade today; new KnowledgeCard columns and indexes are checked
+before being added, and MySQL initialization failures do not fall back to SQLite.
+
 本地开发仍可使用 SQLite 和 Docker Compose：
 
 ```bash

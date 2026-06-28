@@ -9,7 +9,7 @@ import { writingReducer } from "../components/writing/reducer";
 import {
   chapterTitleKey, parseChapterTitleKey, defaultChapterTitle, readChapterTitles,
   writeChapterTitles, parseOutlineContent, resolveOptionalNumber,
-  getOutlineScopePayload, isOutlinePositionMissing,
+  getOutlineScopePayload, isOutlinePositionMissing, readDraftJobRef,
 } from "../components/writing/utils";
 import { useWritingData, useWritingOutline, useWritingDraft, useWritingWorkspace } from "../hooks/useWriting";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
@@ -30,7 +30,7 @@ function knowledgeTypeLabel(type: string) { return KNOWLEDGE_GROUPS.find((g) => 
 
 export default function WritingAgent() {
   const workspaceId = useMemo(() => getWorkspaceId(), []);
-  const [state, dispatch] = useReducer(writingReducer, null, getInitialState);
+  const [state, dispatch] = useReducer(writingReducer, null, () => ({ ...getInitialState(), chapterTitles: readChapterTitles() }));
   const selectedIdRef = useRef<number | null>(null);
   const dataLoadSeqRef = useRef(0);
   const initialLoadDone = useRef(false);
@@ -83,7 +83,8 @@ export default function WritingAgent() {
   useEffect(() => { load().then(() => { initialLoadDone.current = true; }).catch((err: unknown) => { initialLoadDone.current = true; dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "加载失败" }); }); }, []);
   useEffect(() => { selectedIdRef.current = state.selectedId; }, [state.selectedId]);
   useEffect(() => { writeChapterTitles(state.chapterTitles); }, [state.chapterTitles]);
-  useEffect(() => { if (!selected || !state.draftJob || ["completed","failed","cancelled"].includes(state.draftJob.status)) return; const wid = selected.id; let retries = 0; const poll = () => { const t = window.setTimeout(() => { api.getWorkDraftJob(wid, state.draftJob!.job_id).then((j) => applyDraftJob(j, wid)).catch(() => { retries++; if (retries < 3) poll(); else if (selectedIdRef.current === wid) dispatch({ type: "SET_ERROR", error: "正文任务查询失败，请刷新页面" }); }); }, 1200); return () => window.clearTimeout(t); }; return poll(); }, [selected, state.draftJob]);
+  useEffect(() => { if (!selected || state.draftJob) return; const ref = readDraftJobRef(); if (!ref || ref.workId !== selected.id) return; api.getWorkDraftJob(selected.id, ref.jobId).then((j) => applyDraftJob(j, selected.id)).catch(() => undefined); }, [selected, state.draftJob, applyDraftJob]);
+  useEffect(() => { if (!selected || !state.draftJob || ["completed","failed","cancelled"].includes(state.draftJob.status)) return; const wid = selected.id; let retries = 0; const poll = () => { const t = window.setTimeout(() => { api.getWorkDraftJob(wid, state.draftJob!.job_id).then((j) => applyDraftJob(j, wid)).catch(() => { retries++; if (retries < 3) poll(); else if (selectedIdRef.current === wid) dispatch({ type: "SET_ERROR", error: "正文任务查询失败，请刷新页面" }); }); }, 1200); return () => window.clearTimeout(t); }; return poll(); }, [selected, state.draftJob, applyDraftJob]);
 
   function selectWritingPosition(volume: number, chapter: number) {
     const changed = currentPositionPayload.current_volume_index !== volume || currentPositionPayload.current_chapter_index !== chapter;
@@ -95,7 +96,7 @@ export default function WritingAgent() {
   function addVolume() { if (!selected) return; const nv = Math.max(0, ...volumeTree.map((t) => t.volume), typeof state.currentVolumeIndex === "number" ? state.currentVolumeIndex : 0) + 1; selectWritingPosition(nv, 1); }
 
   async function handleGenerateOutline(e: FormEvent) { e.preventDefault(); if (!selected || !writingTaskPayload.trim()) return; if (outlineScopePositionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await generateOutline(selected.id, writingTaskPayload, state.mode, state.knowledgeMode, selectedWritingModelPayload, state.dryRun, resolvedRagTopK, generationRetrievalPayload, outlineScopePayload); }
-  async function handleConfirmOutline() { if (!selected || !state.outline.trim()) return; if (outlineScopePositionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await confirmOutline(selected.id, state.outline, state.outlineScope, state.chapterTitle, outlineScopePayload, state.memories, refreshKnowledgeCards); }
+  async function handleConfirmOutline(outlineContent?: string) { const content = outlineContent || state.outline; if (!selected || !content.trim()) return; if (outlineScopePositionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await confirmOutline(selected.id, content, state.outlineScope, state.chapterTitle, outlineScopePayload, state.memories, refreshKnowledgeCards); }
   async function handleStartDraft() { if (!selected || !state.confirmedOutline.trim()) return; if (positionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await startDraftJob(selected.id, writingTaskPayload, state.confirmedOutline, state.mode, state.knowledgeMode, selectedWritingModelPayload, state.dryRun, resolvedRagTopK, resolvedTargetChars, generationRetrievalPayload); }
   async function handleRevision() { if (!selected || !state.draft.trim()) return; if (positionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await generateRevision(selected.id, writingTaskPayload, state.confirmedOutline, state.draft, state.mode, state.knowledgeMode, selectedWritingModelPayload, state.dryRun, resolvedRagTopK, state.actualChars, resolvedTargetChars, generationRetrievalPayload); }
   async function handleSaveDraft() { if (!selected || !state.draft.trim()) return; if (positionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前位置。" }); return; } await saveDraftToMemory(selected.id, state.draft, state.chapterTitle, currentPositionPayload); }
@@ -107,7 +108,7 @@ export default function WritingAgent() {
   return (
     <ErrorBoundary>
       <section className="writing-agent-platform">
-        <Header state={state} dispatch={dispatch} selected={selected} writingModels={writingModels} selectedWritingModel={selectedWritingModel} positionMissing={positionMissing} workspaceId={workspaceId} />
+        <Header state={state} dispatch={dispatch} selected={selected} writingModels={writingModels} selectedWritingModel={selectedWritingModel} positionMissing={positionMissing} workspaceId={workspaceId} chooseKnowledgeBase={chooseKnowledgeBase} />
         {(state.config || state.error || state.message) && (
           <div className="writing-agent-status-strip">
             {state.config && <span>{state.config.privacy_note} API Key 只用于本次请求。</span>}
@@ -122,7 +123,7 @@ export default function WritingAgent() {
           <div className="writing-agent-shell">
             <LeftPanel state={state} dispatch={dispatch} selected={selected} workspaceId={workspaceId} volumeTree={volumeTree} currentPositionPayload={currentPositionPayload} selectedWorkSet={selectedWorkSet} selectedVolumeSet={selectedVolumeSet} selectedChapterSet={selectedChapterSet} createKnowledgeBase={handleCreateKB} chooseKnowledgeBase={chooseKnowledgeBase} selectWritingPosition={selectWritingPosition} addVolume={addVolume} addChapter={addChapter} deleteSelectedWorks={handleDeleteWorks} reloadWorkIfStillActive={reloadWorkIfStillActive} load={load} />
             <div className="writing-agent-resizer" onPointerDown={(e) => { e.preventDefault(); const sx = e.clientX; const sw = state.leftPanelWidth; const move = (me: PointerEvent) => dispatch({ type: "SET_LEFT_PANEL_WIDTH", width: Math.min(500, Math.max(220, sw + me.clientX - sx)) }); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); document.body.style.cursor = ""; document.body.style.userSelect = ""; }; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} />
-            <Editor state={state} dispatch={dispatch} selected={selected} positionMissing={positionMissing} activeDraftJob={activeDraftJob} draftWordCount={draftWordCount} modelCallBlocked={modelCallBlocked} startDraftJob={handleStartDraft} generateRevision={handleRevision} cancelDraftJob={handleCancelJob} saveDraftToMemory={handleSaveDraft} deleteCurrentChapter={handleDeleteChapter} />
+            <Editor state={state} dispatch={dispatch} selected={selected} positionMissing={positionMissing} activeDraftJob={activeDraftJob} draftWordCount={draftWordCount} modelCallBlocked={modelCallBlocked} startDraftJob={handleStartDraft} generateRevision={handleRevision} cancelDraftJob={handleCancelJob} saveDraftToMemory={handleSaveDraft} deleteCurrentChapter={handleDeleteChapter} selectWritingPosition={selectWritingPosition} />
             <div className="writing-agent-resizer" onPointerDown={(e) => { e.preventDefault(); const sx = e.clientX; const sw = state.rightPanelWidth; const move = (me: PointerEvent) => dispatch({ type: "SET_RIGHT_PANEL_WIDTH", width: Math.min(520, Math.max(260, sw - (me.clientX - sx))) }); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); document.body.style.cursor = ""; document.body.style.userSelect = ""; }; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} />
             <aside className="writing-agent-right-panel" style={{ width: state.rightPanelWidth }}>
               <div className="writing-assistant-tabs">

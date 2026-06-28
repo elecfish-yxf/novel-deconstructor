@@ -1,6 +1,6 @@
 import { Dispatch } from "react";
 import { WritingAction, WritingState } from "./types";
-import { parsePositionInput, defaultChapterTitle } from "./utils";
+import { parsePositionInput } from "./utils";
 import { KnowledgeBase, getWorkspaceId } from "../../api";
 
 interface Props {
@@ -13,9 +13,10 @@ interface Props {
   cancelDraftJob: () => Promise<void>;
   saveDraftToMemory: () => Promise<void>;
   deleteCurrentChapter: () => Promise<void>;
+  selectWritingPosition: (volume: number, chapter: number) => void;
 }
 
-export function Editor({ state, dispatch, selected, positionMissing, activeDraftJob, draftWordCount, modelCallBlocked, startDraftJob, generateRevision, cancelDraftJob, saveDraftToMemory, deleteCurrentChapter }: Props) {
+export function Editor({ state, dispatch, selected, positionMissing, activeDraftJob, draftWordCount, modelCallBlocked, startDraftJob, generateRevision, cancelDraftJob, saveDraftToMemory, deleteCurrentChapter, selectWritingPosition }: Props) {
   const copyText = async (text: string, label: string) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); dispatch({ type: "SET_MESSAGE", message: `${label}已复制` }); }
@@ -37,14 +38,12 @@ export function Editor({ state, dispatch, selected, positionMissing, activeDraft
           <label>V <input type="number" min={1} value={state.currentVolumeIndex}
             onChange={(e) => { const nv = parsePositionInput(e.target.value); if (typeof nv === "number") {
               const ch = typeof state.currentChapterIndex === "number" ? state.currentChapterIndex : 1;
-              dispatch({ type: "SET_CURRENT_VOLUME", index: nv }); dispatch({ type: "SET_CURRENT_CHAPTER", index: ch });
-              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${getWorkspaceId()}:${selected.id}:${nv}:${ch}`] || defaultChapterTitle(ch) });
+              selectWritingPosition(nv, ch);
             } else dispatch({ type: "SET_CURRENT_VOLUME", index: nv }); }} /></label>
           <label>C <input type="number" min={1} value={state.currentChapterIndex}
             onChange={(e) => { const nc = parsePositionInput(e.target.value); if (typeof nc === "number") {
               const vol = typeof state.currentVolumeIndex === "number" ? state.currentVolumeIndex : 1;
-              dispatch({ type: "SET_CURRENT_VOLUME", index: vol }); dispatch({ type: "SET_CURRENT_CHAPTER", index: nc });
-              if (selected) dispatch({ type: "SET_CHAPTER_TITLE", title: state.chapterTitles[`${getWorkspaceId()}:${selected.id}:${vol}:${nc}`] || defaultChapterTitle(nc) });
+              selectWritingPosition(vol, nc);
             } else dispatch({ type: "SET_CURRENT_CHAPTER", index: nc }); }} /></label>
         </div>
       </div>

@@ -15,6 +15,12 @@ WORKSPACE_ID = os.environ.get("TEST_WORKSPACE_ID", "anonymous")
 def client() -> Generator[httpx.Client, None, None]:
     """HTTP client connected to the backend."""
     with httpx.Client(base_url=BASE_URL, timeout=30) as c:
+        try:
+            health = c.get("/api/config/public")
+        except httpx.HTTPError as exc:
+            pytest.skip(f"Integration backend is not reachable at {BASE_URL}: {exc}")
+        if health.status_code != 200:
+            pytest.skip(f"Integration backend at {BASE_URL} is not healthy: HTTP {health.status_code}")
         yield c
 
 

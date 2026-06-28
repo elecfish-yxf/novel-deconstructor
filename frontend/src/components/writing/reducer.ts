@@ -29,6 +29,7 @@ export function writingReducer(state: WritingState, action: WritingAction): Writ
     case "SET_OUTLINE_TASK": return { ...state, outlineTask: action.task };
     case "SET_OUTLINE_SCOPE": return { ...state, outlineScope: action.scope };
     case "SET_OUTLINE": return { ...state, outline: action.outline };
+    case "SET_SELECTED_OUTLINE_ID": return { ...state, selectedOutlineId: action.id };
     case "SET_CONFIRMED_OUTLINE": return { ...state, confirmedOutline: action.outline };
 
     // Draft
@@ -110,7 +111,7 @@ export function writingReducer(state: WritingState, action: WritingAction): Writ
         ...state,
         hits: [], ragResults: [], retrievalDebug: null,
         usedKnowledge: [], promptPreview: "", citations: [],
-        worldbuildingDraft: "", outline: "", confirmedOutline: "",
+        worldbuildingDraft: "", outline: "", selectedOutlineId: "full", confirmedOutline: "",
         draft: "", actualChars: null, longSections: [],
         generationWarnings: [], draftJob: null,
       };

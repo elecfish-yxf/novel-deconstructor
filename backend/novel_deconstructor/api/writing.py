@@ -57,6 +57,7 @@ from ..schemas import (
 from ..services.knowledge_cards import (
     BLOCKED_STATUSES,
     RETRIEVABLE_STATUSES,
+    canonical_group_id,
     card_markdown_path,
     card_to_read,
     delete_card_physical,
@@ -68,6 +69,7 @@ from ..services.knowledge_cards import (
     import_markdown_knowledge_source,
     knowledge_card_merge_stats,
     list_markdown_docs,
+    normalized_title_hash,
     preview_knowledge_card_merges,
     read_markdown_doc,
     save_markdown_doc,
@@ -613,7 +615,7 @@ def update_card(
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     card = get_card_or_404(db, kb, card_id)
     values = payload.model_dump(exclude_unset=True)
-    json_fields = {"tags": "tags_json", "source_ref": "source_ref_json", "use_when": "use_when_json"}
+    json_fields = {"tags": "tags_json", "source_ref": "source_ref_json", "source_refs": "source_refs_json", "use_when": "use_when_json"}
     for key, value in values.items():
         if key in json_fields:
             setattr(card, json_fields[key], json.dumps(value, ensure_ascii=False))
@@ -1715,10 +1717,20 @@ def _upsert_outline_card(
         return existing  # 内容未变化
 
     if existing:
+        title_hash = normalized_title_hash(title)
         existing.title = title
         existing.content = content
         existing.summary = _clip(content, 240)
         existing.content_fingerprint = content_fp
+        existing.normalized_title_hash = title_hash
+        existing.canonical_group_id = canonical_group_id(
+            "memory",
+            card_type,
+            {"scope_level": scope_level, "volume_index": volume_index, "chapter_index": chapter_index},
+            title_hash,
+        )
+        existing.retrieval_level = "pinned"
+        existing.context_role = "memory"
         existing.status = "approved"
         existing.is_canonical = True
         existing.retrievable = True
@@ -1730,6 +1742,8 @@ def _upsert_outline_card(
 
     # 新建卡片
     card_id = _outline_card_id(db, kb, card_type, volume_index)
+    source_ref = {"source": source, "generated_at": datetime.utcnow().isoformat()}
+    title_hash = normalized_title_hash(title)
     card = KnowledgeCard(
         knowledge_base_id=kb.id,
         card_id=card_id,
@@ -1739,7 +1753,8 @@ def _upsert_outline_card(
         content=content,
         summary=_clip(content, 240),
         tags_json=json.dumps([card_type, "auto_generated", "approved"], ensure_ascii=False),
-        source_ref_json=json.dumps({"source": source, "generated_at": datetime.utcnow().isoformat()}, ensure_ascii=False),
+        source_ref_json=json.dumps(source_ref, ensure_ascii=False),
+        source_refs_json=json.dumps([source_ref], ensure_ascii=False),
         use_when_json=json.dumps(["draft", "outline", "continue", "revision"], ensure_ascii=False),
         avoid="",
         confidence=1.0,
@@ -1750,6 +1765,15 @@ def _upsert_outline_card(
         merged_from_ids_json=json.dumps([card_id], ensure_ascii=False),
         evidence_count=1,
         content_fingerprint=content_fp,
+        normalized_title_hash=title_hash,
+        canonical_group_id=canonical_group_id(
+            "memory",
+            card_type,
+            {"scope_level": scope_level, "volume_index": volume_index, "chapter_index": chapter_index},
+            title_hash,
+        ),
+        retrieval_level="pinned",
+        context_role="memory",
         scope_level=scope_level,
         volume_index=volume_index,
         chapter_index=chapter_index,
@@ -2211,11 +2235,24 @@ async def _generate_long_draft_with_cards(
         "current_chapter_index": payload.current_chapter_index,
         "candidate_count_before_scope_filter": 0,
         "candidate_count_after_scope_filter": 0,
+        "candidate_count_after_db_filter": 0,
+        "candidate_count_after_status_filter": 0,
+        "candidate_count_after_retrieval_level_filter": 0,
+        "candidate_count_after_visibility_filter": 0,
         "filtered_by_status_count": 0,
         "filtered_by_scope_count": 0,
         "filtered_by_future_count": 0,
+        "raw_cards_excluded_count": 0,
+        "secondary_cards_excluded_count": 0,
+        "future_cards_excluded_count": 0,
+        "duplicate_group_excluded_count": 0,
+        "source_cap_excluded_count": 0,
         "selected_card_ids": [],
         "selected_card_scope": {},
+        "selected_card_type_distribution": {},
+        "selected_scope_distribution": {},
+        "selected_pinned_context": [],
+        "selected_top_k_cards": [],
         "selected_count": 0,
         "filtered_duplicate_count": 0,
         "diversity_buckets": {},
@@ -2484,6 +2521,8 @@ def _augment_results_with_priority_context(
         selected_scope = dict(debug.get("selected_card_scope", {}))
         selected_scope.update({card.card_id: _card_scope_label(card) for card in ordered_cards if card.card_id in forced_ids})
         debug["selected_card_scope"] = selected_scope
+        pinned = [*forced_ids, *debug.get("selected_pinned_context", [])]
+        debug["selected_pinned_context"] = list(dict.fromkeys(pinned))
         debug["selected_count"] = len(debug["selected_card_ids"])
         warning = f"forced_priority_context:{','.join(forced_ids)}"
         if warning not in warnings:
@@ -2537,6 +2576,8 @@ def _result_from_card(card: KnowledgeCard, score: float) -> dict[str, Any]:
         "content_preview": _clip(card.content, 320),
         "tags": _json_list_text(card.tags_json),
         "status": card.status,
+        "retrieval_level": getattr(card, "retrieval_level", "primary") or "primary",
+        "context_role": getattr(card, "context_role", "auxiliary") or "auxiliary",
         "scope_level": card.scope_level or "global",
         "volume_index": card.volume_index,
         "chapter_index": card.chapter_index,
@@ -2658,13 +2699,21 @@ def _prompt_scope_filter_reason(card: KnowledgeCard, current_volume: int, curren
     if scope_level == "volume":
         if card.volume_index is None:
             return "unknown_volume_scope"
-        return None if card.volume_index <= current_volume else "future_volume"
+        if card.volume_index > current_volume:
+            return "future_volume"
+        return None if card.volume_index == current_volume else "past_volume_scope"
     if card.volume_index is None or card.chapter_index is None:
         return "unknown_chapter_scope"
-    if card.volume_index < current_volume:
-        return None
-    if card.volume_index == current_volume and card.chapter_index <= current_chapter:
-        return None
+    if card.library_type == "memory":
+        if card.volume_index < current_volume:
+            return None
+        if card.volume_index == current_volume and card.chapter_index <= current_chapter:
+            return None
+        return "future_chapter"
+    if card.volume_index == current_volume:
+        if card.chapter_index > current_chapter:
+            return "future_chapter"
+        return None if card.chapter_index == current_chapter else "past_chapter_scope"
     return "future_chapter"
 
 
@@ -2696,6 +2745,8 @@ def _position_before(
 
 def _normalized_scope_level(card: KnowledgeCard) -> str:
     value = (card.scope_level or "global").strip().lower()
+    if value == "book":
+        return "global"
     return value if value in {"global", "volume", "chapter"} else "global"
 
 
@@ -3424,9 +3475,18 @@ def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> Non
     for key in [
         "candidate_count_before_scope_filter",
         "candidate_count_after_scope_filter",
+        "candidate_count_after_db_filter",
+        "candidate_count_after_status_filter",
+        "candidate_count_after_retrieval_level_filter",
+        "candidate_count_after_visibility_filter",
         "filtered_by_status_count",
         "filtered_by_scope_count",
         "filtered_by_future_count",
+        "raw_cards_excluded_count",
+        "secondary_cards_excluded_count",
+        "future_cards_excluded_count",
+        "duplicate_group_excluded_count",
+        "source_cap_excluded_count",
     ]:
         target[key] = int(target.get(key, 0)) + int(debug.get(key, 0))
     target["current_volume_index"] = debug.get("current_volume_index", target.get("current_volume_index"))
@@ -3442,11 +3502,23 @@ def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> Non
     selected_scope = dict(target.get("selected_card_scope", {}))
     selected_scope.update(debug.get("selected_card_scope", {}))
     target["selected_card_scope"] = selected_scope
+    selected_top_k = [*target.get("selected_top_k_cards", []), *debug.get("selected_top_k_cards", [])]
+    target["selected_top_k_cards"] = selected_top_k[:RAG_PROMPT_CARD_LIMIT]
+    pinned = [*target.get("selected_pinned_context", []), *debug.get("selected_pinned_context", [])]
+    target["selected_pinned_context"] = list(dict.fromkeys(pinned))
     target["filtered_duplicate_count"] = int(target.get("filtered_duplicate_count", 0)) + int(debug.get("filtered_duplicate_count", 0))
     buckets = dict(target.get("diversity_buckets", {}))
     for card_type, count in debug.get("diversity_buckets", {}).items():
         buckets[card_type] = int(buckets.get(card_type, 0)) + int(count)
     target["diversity_buckets"] = buckets
+    selected_types = dict(target.get("selected_card_type_distribution", {}))
+    for card_type, count in debug.get("selected_card_type_distribution", {}).items():
+        selected_types[card_type] = int(selected_types.get(card_type, 0)) + int(count)
+    target["selected_card_type_distribution"] = selected_types
+    selected_scopes = dict(target.get("selected_scope_distribution", {}))
+    for scope, count in debug.get("selected_scope_distribution", {}).items():
+        selected_scopes[scope] = int(selected_scopes.get(scope, 0)) + int(count)
+    target["selected_scope_distribution"] = selected_scopes
 
 
 def _section_max_tokens(configured_max_tokens: int, target_chars: int) -> int:

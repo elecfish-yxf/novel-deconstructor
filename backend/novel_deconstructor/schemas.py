@@ -400,6 +400,7 @@ class KnowledgeCardRead(ORMModel):
     summary: str
     tags: list[str] = Field(default_factory=list)
     source_ref: dict[str, Any] = Field(default_factory=dict)
+    source_refs: list[dict[str, Any]] = Field(default_factory=list)
     use_when: list[str] = Field(default_factory=list)
     avoid: str
     confidence: float
@@ -412,6 +413,10 @@ class KnowledgeCardRead(ORMModel):
     merged_from_ids: list[str] = Field(default_factory=list)
     evidence_count: int = 1
     content_fingerprint: str = ""
+    normalized_title_hash: str = ""
+    canonical_group_id: str = ""
+    retrieval_level: str = "evidence"
+    context_role: str = "auxiliary"
     scope_level: str = "global"
     volume_index: int | None = None
     volume_title: str | None = None
@@ -435,6 +440,7 @@ class KnowledgeCardUpdate(BaseModel):
     summary: str | None = None
     tags: list[str] | None = None
     source_ref: dict[str, Any] | None = None
+    source_refs: list[dict[str, Any]] | None = None
     use_when: list[str] | None = None
     avoid: str | None = None
     confidence: float | None = None
@@ -453,6 +459,8 @@ class KnowledgeCardUpdate(BaseModel):
     reveal_at_chapter_index: int | None = None
     retrievable: bool | None = None
     priority: int | None = None
+    retrieval_level: str | None = None
+    context_role: str | None = None
 
 
 class KnowledgeCardBulkDeleteRequest(BaseModel):
@@ -613,6 +621,8 @@ class UsedKnowledge(BaseModel):
     content_preview: str = ""
     tags: list[str] = Field(default_factory=list)
     status: str | None = None
+    retrieval_level: str | None = None
+    context_role: str | None = None
     scope_level: str | None = None
     volume_index: int | None = None
     chapter_index: int | None = None
@@ -630,15 +640,29 @@ class RetrievalDebug(BaseModel):
     expanded_terms: list[str] = Field(default_factory=list)
     preferred_card_types: list[str] = Field(default_factory=list)
     total_candidates: int = 0
+    candidate_count_total: int = 0
     current_volume_index: int | None = None
     current_chapter_index: int | None = None
+    candidate_count_after_db_filter: int = 0
+    candidate_count_after_status_filter: int = 0
+    candidate_count_after_retrieval_level_filter: int = 0
+    candidate_count_after_visibility_filter: int = 0
     candidate_count_before_scope_filter: int = 0
     candidate_count_after_scope_filter: int = 0
     filtered_by_status_count: int = 0
     filtered_by_scope_count: int = 0
     filtered_by_future_count: int = 0
+    raw_cards_excluded_count: int = 0
+    secondary_cards_excluded_count: int = 0
+    future_cards_excluded_count: int = 0
+    duplicate_group_excluded_count: int = 0
+    source_cap_excluded_count: int = 0
     selected_card_ids: list[str] = Field(default_factory=list)
     selected_card_scope: dict[str, str] = Field(default_factory=dict)
+    selected_card_type_distribution: dict[str, int] = Field(default_factory=dict)
+    selected_scope_distribution: dict[str, int] = Field(default_factory=dict)
+    selected_pinned_context: list[str] = Field(default_factory=list)
+    selected_top_k_cards: list[dict[str, Any]] = Field(default_factory=list)
     selected_count: int = 0
     filtered_duplicate_count: int = 0
     diversity_buckets: dict[str, int] = Field(default_factory=dict)

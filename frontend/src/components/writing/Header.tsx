@@ -1,6 +1,5 @@
-import { Dispatch, FormEvent } from "react";
+import { Dispatch } from "react";
 import { WritingState, WritingAction } from "./types";
-import { parsePositionInput } from "./utils";
 import { KnowledgeBase } from "../../api";
 
 interface Props {
@@ -11,9 +10,10 @@ interface Props {
   selectedWritingModel: { id: string; label: string } | null;
   positionMissing: boolean;
   workspaceId: string;
+  chooseKnowledgeBase: (id: number) => Promise<void>;
 }
 
-export function Header({ state, dispatch, selected, writingModels, selectedWritingModel, positionMissing, workspaceId }: Props) {
+export function Header({ state, dispatch, selected, writingModels, selectedWritingModel, positionMissing, workspaceId, chooseKnowledgeBase }: Props) {
   return (
     <header className="writing-agent-header">
       <div className="writing-agent-header-left">
@@ -23,7 +23,10 @@ export function Header({ state, dispatch, selected, writingModels, selectedWriti
         </div>
         <div className="writing-agent-work-switcher">
           <select value={state.selectedId ?? ""}
-            onChange={(e) => { const id = Number(e.target.value); if (id) dispatch({ type: "SET_SELECTED_ID", id }); }}>
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              if (id) chooseKnowledgeBase(id).catch((err) => dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "加载作品失败" }));
+            }}>
             <option value="">选择作品</option>
             {state.knowledgeBases.map((kb) => (<option key={kb.id} value={kb.id}>{kb.name}</option>))}
           </select>

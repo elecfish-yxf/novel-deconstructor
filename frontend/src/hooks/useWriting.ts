@@ -19,12 +19,19 @@ export function useWritingData(
     if (seq !== dataLoadSeqRef.current) return;
     dispatch({ type: "SET_CONFIG", config: nc });
     const opts = nc.writing_models || [];
-    dispatch({ type: "SET_WRITING_MODEL_ID", id: opts[0]?.id || nc.deepseek_model });
+    dispatch({ type: "SET_WRITING_MODEL_ID", id: nc.default_writing_model || opts[0]?.id || nc.deepseek_model });
     dispatch({ type: "SET_KNOWLEDGE_BASES", bases: nb });
     let pref = nextSelectedId ?? nb[0]?.id ?? null;
     if (pref && !nb.some((kb) => kb.id === pref)) pref = nb[0]?.id ?? null;
+    const selectedChanged = selectedIdRef.current !== null && selectedIdRef.current !== pref;
     selectedIdRef.current = pref;
     dispatch({ type: "SET_SELECTED_ID", id: pref });
+    if (selectedChanged) {
+      dispatch({ type: "CLEAR_TRANSIENT" });
+      dispatch({ type: "SET_SELECTED_VOLUME_KEYS", keys: [] });
+      dispatch({ type: "SET_SELECTED_CHAPTER_KEYS", keys: [] });
+      dispatch({ type: "SET_SELECTED_MEMORY_IDS", ids: [] });
+    }
     if (pref) {
       dispatch({ type: "SET_EXPANDED_WORK_IDS", ids: expandedWorkIds.includes(pref) ? expandedWorkIds : [...expandedWorkIds, pref] });
       const [nd, nm, nc2, nmd, ns] = await Promise.all([
@@ -53,9 +60,16 @@ export function useWritingData(
 
   const chooseKnowledgeBase = useCallback(async (id: number) => {
     const seq = ++dataLoadSeqRef.current;
+    const selectedChanged = selectedIdRef.current !== id;
     selectedIdRef.current = id;
     dispatch({ type: "SET_SELECTED_ID", id });
     dispatch({ type: "SET_SELECTED_DOCUMENT_IDS", ids: [] });
+    dispatch({ type: "SET_SELECTED_CARD_IDS", ids: [] });
+    dispatch({ type: "SET_SELECTED_DOC_IDS", ids: [] });
+    dispatch({ type: "SET_SELECTED_MEMORY_IDS", ids: [] });
+    dispatch({ type: "SET_SELECTED_VOLUME_KEYS", keys: [] });
+    dispatch({ type: "SET_SELECTED_CHAPTER_KEYS", keys: [] });
+    if (selectedChanged) dispatch({ type: "CLEAR_TRANSIENT" });
     dispatch({ type: "SET_EXPANDED_WORK_IDS", ids: expandedWorkIds.includes(id) ? expandedWorkIds : [...expandedWorkIds, id] });
     dispatch({ type: "SET_ERROR", error: "" });
     const [nd, nm, nc2, nmd, ns] = await Promise.all([
@@ -105,6 +119,7 @@ export function useWritingOutline(
   ) => {
     dispatch({ type: "SET_BUSY", busy: "outline" });
     dispatch({ type: "SET_OUTLINE", outline: "" });
+    dispatch({ type: "SET_SELECTED_OUTLINE_ID", id: "full" });
     dispatch({ type: "SET_CONFIRMED_OUTLINE", outline: "" });
     try {
       const r = await api.generateWorkOutline(workId, {

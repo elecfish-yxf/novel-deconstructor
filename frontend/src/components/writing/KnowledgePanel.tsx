@@ -1,4 +1,4 @@
-import { Dispatch, ChangeEvent, useState, useMemo } from "react";
+import { Dispatch, ChangeEvent, useEffect, useState, useMemo } from "react";
 import { WritingAction, WritingState } from "./types";
 import { KnowledgeBase, KnowledgeDocument, KnowledgeCard, KnowledgeMarkdownDoc, api } from "../../api";
 import { formatSize, compactSourceRef, documentTitle } from "./utils";
@@ -50,6 +50,10 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     const start = (cardPage - 1) * CARDS_PER_PAGE;
     return filteredCards.slice(start, start + CARDS_PER_PAGE);
   }, [filteredCards, cardPage]);
+
+  useEffect(() => {
+    setCardPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   // Reset page when filter changes
   const setFilter = (filter: string) => {

@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeBase, KnowledgeCard, WritingMemory
@@ -65,9 +66,14 @@ RETRIEVABLE_STATUSES = {"reviewed", "approved"}
 BLOCKED_STATUSES = {"deleted", "deprecated", "superseded", "merged", "disabled"}
 ACTIVE_STATUSES = RETRIEVABLE_STATUSES
 VALID_SCOPE_LEVELS = {"global", "volume", "chapter"}
+SCOPE_ALIASES = {"book": "global"}
+VALID_RETRIEVAL_LEVELS = {"pinned", "primary", "secondary", "evidence"}
+VALID_CONTEXT_ROLES = {"fact", "memory", "guide", "style", "anti_pattern", "evidence", "auxiliary"}
 AUTO_MERGE_THRESHOLD = 0.88
 REVIEW_MERGE_THRESHOLD = 0.72
 RAG_SEARCH_MAX_TOP_K = 200
+RAG_SECONDARY_MIN_TOP_K = 20
+RAG_SOURCE_CAP_PER_SOURCE = 2
 RAG_COMPACT_MIN_GROUP_CARDS = 6
 RAG_COMPACT_GROUP_SIZE = 8
 RAG_COMPACT_ITEM_MAX_CHARS = 220
@@ -79,6 +85,30 @@ SEMANTIC_MERGE_CARD_TYPES = {
     "anti_pattern",
     "style_pattern",
     "information_pattern",
+}
+PINNED_CONTEXT_CARD_TYPES = {
+    "ChapterOutline",
+    "ChapterHandoff",
+    "VolumeSummary",
+    "BookWorldRules",
+    "BookCharacterRegistry",
+    "character_state",
+    "relationship_state",
+    "foreshadowing",
+    "volume_summary",
+}
+SECONDARY_CARD_TYPES = {"chapter_analysis", "information_pattern"}
+CONTEXT_ROLE_BY_CARD_TYPE = {
+    "anti_pattern": "anti_pattern",
+    "AntiPattern": "anti_pattern",
+    "style_pattern": "style",
+    "StylePattern": "style",
+    "ChapterOutline": "memory",
+    "ChapterHandoff": "memory",
+    "character_state": "memory",
+    "relationship_state": "memory",
+    "foreshadowing": "memory",
+    "volume_summary": "memory",
 }
 DEMO_PACKAGE_IDS = {"demo_rain_lamp_street", "demo_rain_lamp_street_canonical_cards"}
 WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9_]+")
@@ -196,7 +226,18 @@ def normalize_card_type(value: str | None, fallback: str = "writing_rule") -> st
 
 def normalize_scope_level(value: str | None, default: str = "global") -> str:
     cleaned = (value or default or "global").strip().lower()
+    cleaned = SCOPE_ALIASES.get(cleaned, cleaned)
     return cleaned if cleaned in VALID_SCOPE_LEVELS else default
+
+
+def normalize_retrieval_level(value: str | None, default: str = "evidence") -> str:
+    cleaned = (value or default or "evidence").strip().lower()
+    return cleaned if cleaned in VALID_RETRIEVAL_LEVELS else default
+
+
+def normalize_context_role(value: str | None, default: str = "auxiliary") -> str:
+    cleaned = (value or default or "auxiliary").strip().lower()
+    return cleaned if cleaned in VALID_CONTEXT_ROLES else default
 
 
 def select_preferred_card_types(stage: str) -> list[str]:
@@ -339,6 +380,8 @@ def import_knowledge_package(
         seen_fingerprints.add(fingerprint_key)
         source_ref = _source_ref(package, raw_card, source_key)
         scope = _scope_values(raw_card, source_ref, card_library, card_type)
+        retrievable = _default_retrievable(raw_card, card_library, card_status, is_canonical)
+        title_hash = normalized_title_hash(title)
         card = KnowledgeCard(
             knowledge_base_id=knowledge_base.id,
             card_id=card_id,
@@ -349,6 +392,7 @@ def import_knowledge_package(
             summary=_summary(raw_card, content),
             tags_json=_json(tags),
             source_ref_json=_json(source_ref),
+            source_refs_json=_json(_card_source_refs(source_ref)),
             use_when_json=_json(_as_list(raw_card.get("use_when"))),
             avoid=avoid,
             confidence=_confidence(raw_card),
@@ -359,6 +403,10 @@ def import_knowledge_package(
             merged_from_ids_json=_json([card_id]),
             evidence_count=1,
             content_fingerprint=fingerprint,
+            normalized_title_hash=title_hash,
+            canonical_group_id=canonical_group_id(card_library, card_type, scope, title_hash),
+            retrieval_level=_default_retrieval_level(raw_card, card_library, card_type, card_status, is_canonical, retrievable),
+            context_role=_default_context_role(raw_card, card_library, card_type, card_status),
             scope_level=scope["scope_level"],
             volume_index=scope["volume_index"],
             volume_title=scope["volume_title"],
@@ -370,7 +418,7 @@ def import_knowledge_package(
             valid_until_chapter_index=scope["valid_until_chapter_index"],
             reveal_at_volume_index=scope["reveal_at_volume_index"],
             reveal_at_chapter_index=scope["reveal_at_chapter_index"],
-            retrievable=_default_retrievable(raw_card, card_library, card_status, is_canonical),
+            retrievable=retrievable,
             priority=_int_or_none(raw_card.get("priority")) or 0,
         )
         card.markdown_path = str(card_markdown_path(knowledge_base, card))
@@ -493,6 +541,8 @@ def import_markdown_knowledge_source(
         raw_scope = {**frontmatter, "title": section_title}
         scope = _scope_values(raw_scope, source_ref, normalized_library, card_type)
         is_canonical = _default_is_canonical(raw_scope, normalized_status)
+        retrievable = _default_retrievable(raw_scope, normalized_library, normalized_status, is_canonical)
+        title_hash = normalized_title_hash(section_title)
         card = KnowledgeCard(
             knowledge_base_id=knowledge_base.id,
             card_id=card_id,
@@ -503,6 +553,7 @@ def import_markdown_knowledge_source(
             summary=_clip(re.sub(r"#+\s*", "", section_body), 240),
             tags_json=_json(tags),
             source_ref_json=_json(source_ref),
+            source_refs_json=_json(_card_source_refs(source_ref)),
             use_when_json=_json(_markdown_use_when(normalized_library, card_type)),
             avoid=section_body if card_type == "anti_pattern" else "",
             confidence=0.72,
@@ -513,6 +564,10 @@ def import_markdown_knowledge_source(
             merged_from_ids_json=_json([card_id]),
             evidence_count=1,
             content_fingerprint=content_fingerprint(section_title, section_body, section_body if card_type == "anti_pattern" else "", tags),
+            normalized_title_hash=title_hash,
+            canonical_group_id=canonical_group_id(normalized_library, card_type, scope, title_hash),
+            retrieval_level=_default_retrieval_level(raw_scope, normalized_library, card_type, normalized_status, is_canonical, retrievable),
+            context_role=_default_context_role(raw_scope, normalized_library, card_type, normalized_status),
             scope_level=scope["scope_level"],
             volume_index=scope["volume_index"],
             volume_title=scope["volume_title"],
@@ -524,7 +579,7 @@ def import_markdown_knowledge_source(
             valid_until_chapter_index=scope["valid_until_chapter_index"],
             reveal_at_volume_index=scope["reveal_at_volume_index"],
             reveal_at_chapter_index=scope["reveal_at_chapter_index"],
-            retrievable=_default_retrievable(raw_scope, normalized_library, normalized_status, is_canonical),
+            retrievable=retrievable,
             priority=_int_or_none(frontmatter.get("priority")) or 0,
         )
         card.markdown_path = str(card_markdown_path(knowledge_base, card))
@@ -569,7 +624,9 @@ def sync_memory_card(db: Session, knowledge_base: KnowledgeBase, memory: Writing
     card.summary = _clip(memory.content, 240)
     tags = [memory_type, memory.source, *memory.tags]
     card.tags_json = _json(list(dict.fromkeys(tag for tag in tags if tag)))
-    card.source_ref_json = _json({"memory_id": memory.id, "source": memory.source, **memory.source_ref})
+    source_ref = {"memory_id": memory.id, "source": memory.source, **memory.source_ref}
+    card.source_ref_json = _json(source_ref)
+    card.source_refs_json = _json(_card_source_refs(source_ref))
     card.use_when_json = _json(["draft", "continue", "revision"])
     card.avoid = ""
     card.confidence = 1.0
@@ -594,6 +651,16 @@ def sync_memory_card(db: Session, knowledge_base: KnowledgeBase, memory: Writing
     card.reveal_at_chapter_index = memory.reveal_at_chapter_index
     card.retrievable = bool(memory.retrievable)
     card.priority = memory.priority or 0
+    title_hash = normalized_title_hash(card.title)
+    card.normalized_title_hash = title_hash
+    card.canonical_group_id = canonical_group_id(
+        card.library_type,
+        card.card_type,
+        {"scope_level": card.scope_level, "volume_index": card.volume_index, "chapter_index": card.chapter_index},
+        title_hash,
+    )
+    card.retrieval_level = _default_retrieval_level({}, card.library_type, card.card_type, card.status, card.is_canonical, card.retrievable)
+    card.context_role = _default_context_role({}, card.library_type, card.card_type, card.status)
     card.markdown_path = str(card_markdown_path(knowledge_base, card))
     db.flush()
     write_card_markdown(knowledge_base, card)
@@ -614,6 +681,7 @@ def card_to_read(card: KnowledgeCard) -> dict[str, Any]:
         "summary": card.summary,
         "tags": _json_list(card.tags_json),
         "source_ref": _json_dict(card.source_ref_json),
+        "source_refs": _json_list_of_dicts(card.source_refs_json),
         "use_when": _json_list(card.use_when_json),
         "avoid": card.avoid,
         "confidence": card.confidence,
@@ -626,6 +694,10 @@ def card_to_read(card: KnowledgeCard) -> dict[str, Any]:
         "merged_from_ids": _json_list(card.merged_from_ids_json),
         "evidence_count": card.evidence_count or 1,
         "content_fingerprint": card.content_fingerprint or "",
+        "normalized_title_hash": card.normalized_title_hash or "",
+        "canonical_group_id": card.canonical_group_id or "",
+        "retrieval_level": _effective_retrieval_level(card),
+        "context_role": normalize_context_role(card.context_role, "auxiliary"),
         "scope_level": card.scope_level or "global",
         "volume_index": card.volume_index,
         "volume_title": card.volume_title,
@@ -689,6 +761,8 @@ def render_card_markdown(card: KnowledgeCard) -> str:
             "evidence_count": card.evidence_count or 1,
             "merged_from": _json_list(card.merged_from_ids_json),
             "confidence": card.confidence,
+            "retrieval_level": _effective_retrieval_level(card),
+            "context_role": normalize_context_role(card.context_role, "auxiliary"),
             "scope_level": card.scope_level or "global",
             "volume_index": card.volume_index,
             "volume_title": card.volume_title,
@@ -705,6 +779,7 @@ def render_card_markdown(card: KnowledgeCard) -> str:
             "tags": tags,
             "use_when": use_when,
             "source_ref": source_ref,
+            "source_refs": _json_list_of_dicts(card.source_refs_json),
         }
     )
     sections = [
@@ -810,6 +885,8 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
         "reveal_at_chapter_index": "reveal_at_chapter_index",
         "retrievable": "retrievable",
         "priority": "priority",
+        "retrieval_level": "retrieval_level",
+        "context_role": "context_role",
     }
     for source_key, attr in field_map.items():
         if source_key not in frontmatter:
@@ -830,6 +907,10 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
             value = normalize_scope_level(str(value), card.scope_level)
         elif attr == "retrievable":
             value = _bool_value(value, bool(card.retrievable))
+        elif attr == "retrieval_level":
+            value = normalize_retrieval_level(str(value), card.retrieval_level)
+        elif attr == "context_role":
+            value = normalize_context_role(str(value), card.context_role)
         elif attr in {
             "volume_index",
             "chapter_index",
@@ -848,13 +929,16 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
             setattr(card, attr, value)
             updated.append(attr)
 
-    for key, attr in [("tags", "tags_json"), ("use_when", "use_when_json"), ("source_ref", "source_ref_json")]:
+    for key, attr in [("tags", "tags_json"), ("use_when", "use_when_json"), ("source_ref", "source_ref_json"), ("source_refs", "source_refs_json")]:
         if key not in frontmatter:
             continue
         value = frontmatter[key]
         serialized = _json(value if isinstance(value, (list, dict)) else [str(value)])
         if attr == "source_ref_json" and not isinstance(value, dict):
             serialized = _json({"value": str(value)})
+        if attr == "source_refs_json":
+            source_refs = value if isinstance(value, list) else [value]
+            serialized = _json([item for item in source_refs if isinstance(item, dict)])
         if getattr(card, attr) != serialized:
             setattr(card, attr, serialized)
             updated.append(key)
@@ -885,6 +969,7 @@ def sync_card_from_markdown(db: Session, knowledge_base: KnowledgeBase, doc_id: 
             card.merged_from_ids_json = serialized
             updated.append("merged_from")
     card.content_fingerprint = content_fingerprint(card.title, card.content, card.avoid, _json_list(card.tags_json))
+    _refresh_card_retrieval_metadata(card)
     card.markdown_path = str(card_markdown_path(knowledge_base, card))
     db.commit()
     db.refresh(card)
@@ -903,6 +988,7 @@ def export_card_markdown(db: Session, knowledge_base: KnowledgeBase, card_id: st
         card.merged_from_ids_json = _json([card.card_id])
     card.evidence_count = max(1, card.evidence_count or 1)
     card.content_fingerprint = card.content_fingerprint or content_fingerprint(card.title, card.content, card.avoid, _json_list(card.tags_json))
+    _refresh_card_retrieval_metadata(card)
     card.markdown_path = str(card_markdown_path(knowledge_base, card))
     path = write_card_markdown(knowledge_base, card)
     db.commit()
@@ -1106,9 +1192,40 @@ def search_knowledge_cards(
         cards_query = cards_query.filter(KnowledgeCard.knowledge_base_id.in_(knowledge_base_ids))
     if library_type:
         cards_query = cards_query.filter(KnowledgeCard.library_type == library_type)
-    base_candidates = cards_query.all()
+    total_candidates = cards_query.count()
+    raw_cards_total = cards_query.filter(KnowledgeCard.status == "raw_extracted").count()
+    status_query = _apply_card_db_status_filter(cards_query, include_inactive=include_inactive, include_raw=include_raw)
+    status_candidate_count = status_query.count()
+    include_secondary = limit >= RAG_SECONDARY_MIN_TOP_K or include_raw or include_inactive
+    secondary_cards_excluded_count = 0
+    if not include_secondary:
+        secondary_cards_excluded_count = status_query.filter(KnowledgeCard.retrieval_level == "secondary").count()
+        status_query = status_query.filter(or_(KnowledgeCard.retrieval_level.is_(None), KnowledgeCard.retrieval_level != "secondary"))
+    after_retrieval_level_count = status_query.count()
+    db_future_count = _count_db_future_position_cards(
+        status_query,
+        current_volume_index,
+        current_chapter_index,
+        include_future=include_future,
+    )
+    scoped_query = _apply_card_db_scope_filter(
+        status_query,
+        current_volume_index,
+        current_chapter_index,
+        include_future=include_future,
+        allowed_scope_levels=allowed_scope_levels,
+    )
+    scoped_candidate_count = scoped_query.count()
+    base_candidates = (
+        scoped_query.order_by(
+            KnowledgeCard.priority.desc(),
+            KnowledgeCard.updated_at.desc(),
+            KnowledgeCard.id.desc(),
+        )
+        .all()
+    )
     status_candidates: list[KnowledgeCard] = []
-    filtered_by_status_count = 0
+    filtered_by_status_count = max(0, total_candidates - status_candidate_count)
     for card in base_candidates:
         reason = _card_status_filter_reason(card, include_raw=include_raw)
         if reason and not include_inactive:
@@ -1120,8 +1237,8 @@ def search_knowledge_cards(
         status_candidates.append(card)
 
     visible_candidates: list[KnowledgeCard] = []
-    filtered_by_scope_count = 0
-    filtered_by_future_count = 0
+    filtered_by_scope_count = max(0, after_retrieval_level_count - scoped_candidate_count - db_future_count)
+    filtered_by_future_count = db_future_count
     for card in status_candidates:
         reason = _card_scope_filter_reason(
             card,
@@ -1146,14 +1263,24 @@ def search_knowledge_cards(
         if score > 0:
             scored.append((score, card))
     scored.sort(key=lambda item: (item[0], _card_sort_time(item[1])), reverse=True)
-    selected, filtered_duplicate_count, diversity_buckets = _select_diverse_scored_cards(scored, limit, preferred_card_types)
+    selected, filtered_duplicate_count, source_cap_excluded_count, diversity_buckets = _select_diverse_scored_cards(
+        scored,
+        limit,
+        preferred_card_types,
+    )
     results = [_search_result(card, score) for score, card in selected]
+    selected_scope_distribution = _selected_scope_distribution([card for _, card in selected])
     debug = {
         "query": expanded_query["query"],
         "raw_query": expanded_query["raw_query"],
         "expanded_terms": expanded_query["expanded_terms"],
         "preferred_card_types": preferred_card_types,
-        "total_candidates": len(base_candidates),
+        "total_candidates": total_candidates,
+        "candidate_count_total": total_candidates,
+        "candidate_count_after_db_filter": len(base_candidates),
+        "candidate_count_after_status_filter": status_candidate_count,
+        "candidate_count_after_retrieval_level_filter": after_retrieval_level_count,
+        "candidate_count_after_visibility_filter": len(visible_candidates),
         "current_volume_index": current_volume_index,
         "current_chapter_index": current_chapter_index,
         "candidate_count_before_scope_filter": len(status_candidates),
@@ -1161,8 +1288,26 @@ def search_knowledge_cards(
         "filtered_by_status_count": filtered_by_status_count,
         "filtered_by_scope_count": filtered_by_scope_count,
         "filtered_by_future_count": filtered_by_future_count,
+        "raw_cards_excluded_count": 0 if include_raw else raw_cards_total,
+        "secondary_cards_excluded_count": secondary_cards_excluded_count,
+        "future_cards_excluded_count": filtered_by_future_count,
+        "duplicate_group_excluded_count": filtered_duplicate_count,
+        "source_cap_excluded_count": source_cap_excluded_count,
         "selected_card_ids": [card.card_id for _, card in selected],
         "selected_card_scope": {card.card_id: _scope_label(card) for _, card in selected},
+        "selected_card_type_distribution": diversity_buckets,
+        "selected_scope_distribution": selected_scope_distribution,
+        "selected_pinned_context": [card.card_id for _, card in selected if _effective_retrieval_level(card) == "pinned"],
+        "selected_top_k_cards": [
+            {
+                "id": card.card_id,
+                "card_type": card.card_type,
+                "scope": _scope_label(card),
+                "score": round(score, 4),
+                "retrieval_level": _effective_retrieval_level(card),
+            }
+            for score, card in selected
+        ],
         "selected_count": len(results),
         "filtered_duplicate_count": filtered_duplicate_count,
         "diversity_buckets": diversity_buckets,
@@ -1615,6 +1760,80 @@ def _default_retrievable(raw: dict[str, Any], library_type: str, status: str, is
     return True
 
 
+def _default_retrieval_level(raw: dict[str, Any], library_type: str, card_type: str, status: str, is_canonical: bool, retrievable: bool) -> str:
+    if "retrieval_level" in raw:
+        return normalize_retrieval_level(str(raw.get("retrieval_level")), "evidence")
+    if status == "raw_extracted" or not is_canonical or not retrievable:
+        return "evidence"
+    if library_type == "memory" or card_type in PINNED_CONTEXT_CARD_TYPES:
+        return "pinned"
+    if card_type in SECONDARY_CARD_TYPES:
+        return "secondary"
+    return "primary"
+
+
+def _default_context_role(raw: dict[str, Any], library_type: str, card_type: str, status: str) -> str:
+    if "context_role" in raw:
+        return normalize_context_role(str(raw.get("context_role")), "auxiliary")
+    if status == "raw_extracted":
+        return "evidence"
+    if card_type in CONTEXT_ROLE_BY_CARD_TYPE:
+        return CONTEXT_ROLE_BY_CARD_TYPE[card_type]
+    if library_type == "memory":
+        return "memory"
+    if library_type == "worldbuilding":
+        return "fact"
+    if library_type == "writing_guide":
+        return "guide"
+    return "auxiliary"
+
+
+def _card_source_refs(source_ref: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = source_ref.get("source_refs")
+    if isinstance(refs, list):
+        clean_refs = [item for item in refs if isinstance(item, dict)]
+        if clean_refs:
+            return clean_refs
+    return [source_ref] if source_ref else []
+
+
+def normalized_title_hash(title: str) -> str:
+    normalized = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (title or "").lower())
+    if not normalized:
+        normalized = "untitled"
+    return hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def canonical_group_id(library_type: str, card_type: str, scope: dict[str, Any], title_hash: str) -> str:
+    scope_level = normalize_scope_level(str(scope.get("scope_level") or "global"), "global")
+    volume = scope.get("volume_index") if scope_level in {"volume", "chapter"} else "*"
+    chapter = scope.get("chapter_index") if scope_level == "chapter" else "*"
+    return f"{library_type}:{card_type}:{scope_level}:{volume}:{chapter}:{title_hash[:16]}"[:96]
+
+
+def _refresh_card_retrieval_metadata(card: KnowledgeCard) -> None:
+    source_ref = _json_dict(card.source_ref_json)
+    if not card.source_refs_json or card.source_refs_json == "[]":
+        card.source_refs_json = _json(_card_source_refs(source_ref))
+    title_hash = normalized_title_hash(card.title)
+    card.normalized_title_hash = title_hash
+    card.canonical_group_id = canonical_group_id(
+        card.library_type,
+        card.card_type,
+        {
+            "scope_level": card.scope_level,
+            "volume_index": card.volume_index,
+            "chapter_index": card.chapter_index,
+        },
+        title_hash,
+    )
+    card.retrieval_level = _effective_retrieval_level(card)
+    if not card.context_role or card.context_role == "auxiliary":
+        card.context_role = _default_context_role({}, card.library_type, card.card_type, card.status)
+    else:
+        card.context_role = normalize_context_role(card.context_role, "auxiliary")
+
+
 def _scope_markdown_dir(card: KnowledgeCard) -> Path:
     scope_level = normalize_scope_level(card.scope_level, "global")
     if scope_level == "global":
@@ -1640,6 +1859,114 @@ def _card_status_filter_reason(card: KnowledgeCard, *, include_raw: bool = False
     if not bool(card.is_canonical) and not include_raw:
         return "not_canonical"
     return None
+
+
+def _effective_retrieval_level(card: KnowledgeCard) -> str:
+    level = normalize_retrieval_level(card.retrieval_level, "evidence")
+    if level == "evidence" and card.status in RETRIEVABLE_STATUSES and bool(card.retrievable) and bool(card.is_canonical):
+        return _default_retrieval_level({}, card.library_type, card.card_type, card.status, bool(card.is_canonical), bool(card.retrievable))
+    return level
+
+
+def _apply_card_db_status_filter(query: Any, *, include_inactive: bool, include_raw: bool) -> Any:
+    if include_inactive:
+        filtered = query.filter(~KnowledgeCard.status.in_(tuple(BLOCKED_STATUSES)))
+        if not include_raw:
+            filtered = filtered.filter(KnowledgeCard.status != "raw_extracted")
+        return filtered
+    retrievable_clause = and_(
+        KnowledgeCard.status.in_(tuple(RETRIEVABLE_STATUSES)),
+        KnowledgeCard.retrievable.is_(True),
+        KnowledgeCard.is_canonical.is_(True),
+    )
+    if include_raw:
+        return query.filter(or_(KnowledgeCard.status == "raw_extracted", retrievable_clause))
+    return query.filter(retrievable_clause)
+
+
+def _normalized_allowed_scope_levels(allowed_scope_levels: list[str] | None) -> set[str]:
+    return {normalize_scope_level(item, item) for item in (allowed_scope_levels or []) if item}
+
+
+def _scope_level_column_values(scope_level: str) -> list[str]:
+    if scope_level == "global":
+        return ["global", "book"]
+    return [scope_level]
+
+
+def _scope_allowed(scope_level: str, allowed_scope_levels: set[str]) -> bool:
+    return not allowed_scope_levels or scope_level in allowed_scope_levels
+
+
+def _apply_card_db_scope_filter(
+    query: Any,
+    current_volume_index: int | None,
+    current_chapter_index: int | None,
+    *,
+    include_future: bool,
+    allowed_scope_levels: list[str] | None,
+) -> Any:
+    allowed = _normalized_allowed_scope_levels(allowed_scope_levels)
+    clauses = []
+    if _scope_allowed("global", allowed):
+        clauses.append(KnowledgeCard.scope_level.in_(_scope_level_column_values("global")))
+
+    if current_volume_index is None or current_chapter_index is None:
+        if clauses:
+            return query.filter(KnowledgeCard.library_type == "writing_guide").filter(or_(*clauses))
+        return query.filter(False)
+
+    if _scope_allowed("volume", allowed):
+        if include_future:
+            clauses.append(KnowledgeCard.scope_level == "volume")
+        else:
+            clauses.append(and_(KnowledgeCard.scope_level == "volume", KnowledgeCard.volume_index == current_volume_index))
+
+    if _scope_allowed("chapter", allowed):
+        if include_future:
+            clauses.append(KnowledgeCard.scope_level == "chapter")
+        else:
+            current_chapter_clause = and_(
+                KnowledgeCard.scope_level == "chapter",
+                KnowledgeCard.volume_index == current_volume_index,
+                KnowledgeCard.chapter_index == current_chapter_index,
+                KnowledgeCard.library_type != "memory",
+            )
+            memory_history_clause = and_(
+                KnowledgeCard.scope_level == "chapter",
+                KnowledgeCard.library_type == "memory",
+                or_(
+                    KnowledgeCard.volume_index < current_volume_index,
+                    and_(KnowledgeCard.volume_index == current_volume_index, KnowledgeCard.chapter_index <= current_chapter_index),
+                ),
+            )
+            clauses.extend([current_chapter_clause, memory_history_clause])
+
+    if not clauses:
+        return query.filter(False)
+    return query.filter(or_(*clauses))
+
+
+def _count_db_future_position_cards(
+    query: Any,
+    current_volume_index: int | None,
+    current_chapter_index: int | None,
+    *,
+    include_future: bool,
+) -> int:
+    if include_future or current_volume_index is None or current_chapter_index is None:
+        return 0
+    future_clause = or_(
+        and_(KnowledgeCard.scope_level == "volume", KnowledgeCard.volume_index > current_volume_index),
+        and_(
+            KnowledgeCard.scope_level == "chapter",
+            or_(
+                KnowledgeCard.volume_index > current_volume_index,
+                and_(KnowledgeCard.volume_index == current_volume_index, KnowledgeCard.chapter_index > current_chapter_index),
+            ),
+        ),
+    )
+    return query.filter(future_clause).count()
 
 
 def _card_scope_filter_reason(
@@ -1697,13 +2024,21 @@ def _card_scope_filter_reason(
     if scope_level == "volume":
         if card.volume_index is None:
             return "scope"
-        return None if card.volume_index <= current_volume_index else "future"
+        if card.volume_index > current_volume_index:
+            return "future"
+        return None if card.volume_index == current_volume_index else "scope"
     if card.volume_index is None or card.chapter_index is None:
         return "scope"
-    if card.volume_index < current_volume_index:
-        return None
+    if card.library_type == "memory":
+        if card.volume_index < current_volume_index:
+            return None
+        if card.volume_index == current_volume_index:
+            return None if card.chapter_index <= current_chapter_index else "future"
+        return "future"
     if card.volume_index == current_volume_index:
-        return None if card.chapter_index <= current_chapter_index else "future"
+        if card.chapter_index > current_chapter_index:
+            return "future"
+        return None if card.chapter_index == current_chapter_index else "scope"
     return "future"
 
 
@@ -1791,6 +2126,14 @@ def _json_dict(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _json_list_of_dicts(value: str | None) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+
 def content_fingerprint(title: str, content: str, avoid: str = "", tags: list[str] | None = None) -> str:
     normalized = _normalize_for_fingerprint("\n".join([title or "", content or "", avoid or "", " ".join(sorted(tags or []))]))
     return hashlib.sha256(normalized.encode("utf-8", errors="ignore")).hexdigest()
@@ -1823,6 +2166,22 @@ def _merge_candidate_cards(db: Session, knowledge_base: KnowledgeBase) -> list[K
         if not card.content_fingerprint:
             card.content_fingerprint = content_fingerprint(card.title, card.content, card.avoid, _json_list(card.tags_json))
             changed = True
+        previous_metadata = (
+            card.source_refs_json,
+            card.normalized_title_hash,
+            card.canonical_group_id,
+            card.retrieval_level,
+            card.context_role,
+        )
+        _refresh_card_retrieval_metadata(card)
+        if previous_metadata != (
+            card.source_refs_json,
+            card.normalized_title_hash,
+            card.canonical_group_id,
+            card.retrieval_level,
+            card.context_role,
+        ):
+            changed = True
         if not card.merged_from_ids_json or card.merged_from_ids_json == "[]":
             card.merged_from_ids_json = _json([card.card_id])
             changed = True
@@ -1850,6 +2209,21 @@ def _merge_groups(cards: list[KnowledgeCard], *, auto_merge_threshold: float, re
             continue
         consumed.update(card.card_id for card in candidates)
         groups.append(_merge_group_dict(primary, candidates, "auto_merge", "exact_duplicate", 1.0, fingerprint))
+
+    title_buckets: dict[tuple[str, str, str], list[KnowledgeCard]] = {}
+    for card in cards:
+        if card.card_id in consumed or not card.canonical_group_id:
+            continue
+        title_buckets.setdefault((card.library_type, card.card_type, card.canonical_group_id), []).append(card)
+    for (_, _, group_id), bucket in title_buckets.items():
+        candidates = [card for card in bucket if card.card_id not in consumed]
+        if len(candidates) < 2:
+            continue
+        ordered = sorted(candidates, key=lambda item: (item.confidence, item.evidence_count or 1, item.updated_at or item.created_at), reverse=True)
+        primary = ordered[0]
+        merge_candidates = ordered[1:]
+        consumed.update(card.card_id for card in merge_candidates)
+        groups.append(_merge_group_dict(primary, merge_candidates, "auto_merge", "title_scope_duplicate", 0.95, group_id))
 
     for index, left in enumerate(cards):
         if left.card_id in consumed:
@@ -1953,14 +2327,19 @@ def _merge_card_into(primary: KnowledgeCard, candidate: KnowledgeCard) -> None:
     primary.tags_json = _json(_merge_lists(_json_list(primary.tags_json), _json_list(candidate.tags_json)))
     primary.use_when_json = _json(_merge_lists(_json_list(primary.use_when_json), _json_list(candidate.use_when_json)))
     primary.source_ref_json = _json(_merge_source_refs(_json_dict(primary.source_ref_json), _json_dict(candidate.source_ref_json)))
+    primary.source_refs_json = _json(_merge_source_ref_lists(_json_list_of_dicts(primary.source_refs_json), _json_list_of_dicts(candidate.source_refs_json), _json_dict(primary.source_ref_json)))
     if candidate.avoid and candidate.avoid not in primary.avoid:
         primary.avoid = "\n".join(item for item in [primary.avoid.strip(), candidate.avoid.strip()] if item)
     primary.confidence = max(primary.confidence or 0, candidate.confidence or 0)
     merged_from = _merge_lists(_json_list(primary.merged_from_ids_json) or [primary.card_id], _json_list(candidate.merged_from_ids_json) or [candidate.card_id])
     primary.merged_from_ids_json = _json(merged_from)
     primary.evidence_count = max(1, len(merged_from), (primary.evidence_count or 1) + (candidate.evidence_count or 1))
+    _refresh_card_retrieval_metadata(primary)
     candidate.is_canonical = False
     candidate.status = "merged"
+    candidate.retrievable = False
+    candidate.retrieval_level = "evidence"
+    candidate.context_role = "evidence"
     candidate.merged_into_card_id = primary.card_id
     candidate.markdown_path = candidate.markdown_path or str(card_markdown_path(primary.knowledge_base, candidate))
 
@@ -1991,12 +2370,30 @@ def _merge_source_refs(left: dict[str, Any], right: dict[str, Any]) -> dict[str,
     return {"source_refs": unique}
 
 
+def _merge_source_ref_lists(left: list[dict[str, Any]], right: list[dict[str, Any]], fallback: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = [*left, *right]
+    if not refs:
+        refs = _card_source_refs(fallback)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ref in refs:
+        if not ref:
+            continue
+        key = json.dumps(ref, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        unique.append(ref)
+        seen.add(key)
+    return unique
+
+
 def _rag_compact_candidate_cards(db: Session, knowledge_base: KnowledgeBase) -> list[KnowledgeCard]:
     return (
         db.query(KnowledgeCard)
         .filter(
             KnowledgeCard.knowledge_base_id == knowledge_base.id,
-            KnowledgeCard.status.in_({"raw_extracted", "reviewed", "approved"}),
+            KnowledgeCard.status.in_(tuple(RETRIEVABLE_STATUSES)),
+            KnowledgeCard.is_canonical.is_(True),
             KnowledgeCard.retrievable.is_(True),
             KnowledgeCard.library_type != "memory",
             KnowledgeCard.source_kind != "rag_compact",
@@ -2061,6 +2458,7 @@ def _create_rag_compact_card(db: Session, knowledge_base: KnowledgeBase, cards: 
         summary=_clip(content, 240),
         tags_json=_json(tags),
         source_ref_json=_json(source_ref),
+        source_refs_json=_json(_card_source_refs(source_ref)),
         use_when_json=_json(use_when),
         avoid=avoid,
         confidence=max(card.confidence or 0 for card in cards),
@@ -2071,6 +2469,15 @@ def _create_rag_compact_card(db: Session, knowledge_base: KnowledgeBase, cards: 
         merged_from_ids_json=_json(card_ids),
         evidence_count=sum(max(1, card.evidence_count or 1) for card in cards),
         content_fingerprint=content_fingerprint(card_id, content, avoid, tags),
+        normalized_title_hash=normalized_title_hash(f"RAG compact {first.library_type}/{first.card_type}"),
+        canonical_group_id=canonical_group_id(
+            first.library_type,
+            first.card_type,
+            {"scope_level": first.scope_level, "volume_index": first.volume_index, "chapter_index": first.chapter_index},
+            normalized_title_hash(f"RAG compact {first.library_type}/{first.card_type}"),
+        ),
+        retrieval_level="primary",
+        context_role=_default_context_role({}, first.library_type, first.card_type, "approved"),
         scope_level=first.scope_level,
         volume_index=first.volume_index,
         volume_title=first.volume_title,
@@ -2092,6 +2499,8 @@ def _create_rag_compact_card(db: Session, knowledge_base: KnowledgeBase, cards: 
         card.is_canonical = False
         card.status = "merged"
         card.retrievable = False
+        card.retrieval_level = "evidence"
+        card.context_role = "evidence"
         card.merged_into_card_id = compact.card_id
         card.markdown_path = card.markdown_path or str(card_markdown_path(knowledge_base, card))
     return compact
@@ -2232,19 +2641,25 @@ def _select_diverse_scored_cards(
     scored: list[tuple[float, KnowledgeCard]],
     limit: int,
     preferred_card_types: list[str],
-) -> tuple[list[tuple[float, KnowledgeCard]], int, dict[str, int]]:
+) -> tuple[list[tuple[float, KnowledgeCard]], int, int, dict[str, int]]:
     selected: list[tuple[float, KnowledgeCard]] = []
     selected_ids: set[int] = set()
     seen_fingerprints: set[str] = set()
     card_type_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
     capped_backlog: list[tuple[float, KnowledgeCard, str]] = []
     filtered_duplicate_count = 0
+    source_cap_excluded_count = 0
     max_per_type = _max_cards_per_type(limit, preferred_card_types)
 
     for score, card in scored:
         fingerprint = _search_fingerprint(card)
         if fingerprint and fingerprint in seen_fingerprints:
             filtered_duplicate_count += 1
+            continue
+        source_key = _source_cap_key(card)
+        if source_key and source_counts[source_key] >= RAG_SOURCE_CAP_PER_SOURCE:
+            source_cap_excluded_count += 1
             continue
         type_cap = _card_type_search_cap(card, max_per_type)
         if card_type_counts[card.card_type] >= type_cap:
@@ -2253,10 +2668,12 @@ def _select_diverse_scored_cards(
         selected.append((score, card))
         selected_ids.add(card.id)
         card_type_counts[card.card_type] += 1
+        if source_key:
+            source_counts[source_key] += 1
         if fingerprint:
             seen_fingerprints.add(fingerprint)
         if len(selected) >= limit:
-            return selected, filtered_duplicate_count, dict(card_type_counts)
+            return selected, filtered_duplicate_count, source_cap_excluded_count, dict(card_type_counts)
 
     for score, card, fingerprint in capped_backlog:
         if len(selected) >= limit:
@@ -2266,13 +2683,19 @@ def _select_diverse_scored_cards(
         if fingerprint and fingerprint in seen_fingerprints:
             filtered_duplicate_count += 1
             continue
+        source_key = _source_cap_key(card)
+        if source_key and source_counts[source_key] >= RAG_SOURCE_CAP_PER_SOURCE:
+            source_cap_excluded_count += 1
+            continue
         selected.append((score, card))
         selected_ids.add(card.id)
         card_type_counts[card.card_type] += 1
+        if source_key:
+            source_counts[source_key] += 1
         if fingerprint:
             seen_fingerprints.add(fingerprint)
 
-    return selected, filtered_duplicate_count, dict(card_type_counts)
+    return selected, filtered_duplicate_count, source_cap_excluded_count, dict(card_type_counts)
 
 
 def _max_cards_per_type(limit: int, preferred_card_types: list[str]) -> int:
@@ -2292,6 +2715,26 @@ def _search_fingerprint(card: KnowledgeCard) -> str:
     if card.content_fingerprint:
         return card.content_fingerprint
     return content_fingerprint(card.title, card.content, card.avoid, _json_list(card.tags_json))
+
+
+def _source_cap_key(card: KnowledgeCard) -> str:
+    refs = _json_list_of_dicts(card.source_refs_json)
+    if not refs:
+        source_ref = _json_dict(card.source_ref_json)
+        refs = [source_ref] if source_ref else []
+    if not refs:
+        return ""
+    ref = refs[0]
+    source = (
+        ref.get("source_path")
+        or ref.get("source_file")
+        or ref.get("source")
+        or ref.get("package_id")
+        or card.package_id
+        or ""
+    )
+    source = str(source).strip()
+    return f"{card.library_type}:{source}" if source else ""
 
 
 def _card_sort_time(card: KnowledgeCard) -> datetime:
@@ -2363,10 +2806,19 @@ def _search_result(card: KnowledgeCard, score: float) -> dict[str, Any]:
         "content_preview": _clip(card.content, 320),
         "tags": _json_list(card.tags_json),
         "status": card.status,
+        "retrieval_level": _effective_retrieval_level(card),
+        "context_role": normalize_context_role(card.context_role, "auxiliary"),
         "scope_level": card.scope_level or "global",
         "volume_index": card.volume_index,
         "chapter_index": card.chapter_index,
     }
+
+
+def _selected_scope_distribution(cards: list[KnowledgeCard]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for card in cards:
+        counter[normalize_scope_level(card.scope_level, "global")] += 1
+    return dict(counter)
 
 
 def _scope_label(card: KnowledgeCard) -> str:

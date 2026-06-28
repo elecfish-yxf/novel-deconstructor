@@ -1,4 +1,4 @@
-import { Dispatch, FormEvent } from "react";
+import { Dispatch, FormEvent, useMemo } from "react";
 import { WritingAction, WritingState, ParsedOutlineNode, OutlineScope } from "./types";
 import { OUTLINE_SCOPE_OPTIONS, OUTLINE_SCOPE_HINTS, parseOptionalNumberInput } from "./utils";
 import { KnowledgeBase } from "../../api";
@@ -17,7 +17,59 @@ interface Props {
   outlineScopeLabel: string; outlineScopePositionMissing: boolean;
   modelCallBlocked: boolean;
   generateOutline: (e: FormEvent) => Promise<void>;
-  confirmOutline: () => Promise<void>;
+  confirmOutline: (outlineContent?: string) => Promise<void>;
+}
+
+type OutlineChoice = {
+  id: string;
+  label: string;
+  content: string;
+  preview: string;
+  depth: number;
+};
+
+function outlineNodeContent(node: ParsedOutlineNode): string {
+  const headingPrefix = "#".repeat(Math.min(Math.max(node.level, 1), 6));
+  return [
+    `${headingPrefix} ${node.heading}`,
+    node.body.join("\n").trim(),
+    ...node.children.map(outlineNodeContent),
+  ].filter(Boolean).join("\n\n");
+}
+
+function flattenOutlineChoices(nodes: ParsedOutlineNode[], path: string[] = []): OutlineChoice[] {
+  return nodes.flatMap((node, index) => {
+    const nodePath = [...path, String(index)];
+    const content = outlineNodeContent(node);
+    const childPreview = node.children[0]?.heading ? `包含：${node.children[0].heading}` : "";
+    const bodyPreview = node.body.find((line) => line.trim())?.trim() || childPreview || "暂无正文";
+    return [
+      {
+        id: `node-${nodePath.join("-")}`,
+        label: node.heading,
+        content,
+        preview: bodyPreview.length > 80 ? `${bodyPreview.slice(0, 80).trim()}...` : bodyPreview,
+        depth: nodePath.length,
+      },
+      ...flattenOutlineChoices(node.children, nodePath),
+    ];
+  });
+}
+
+function buildOutlineChoices(nodes: ParsedOutlineNode[], outline: string): OutlineChoice[] {
+  const full = outline.trim();
+  const fullPreview = full.split(/\r?\n/).find((line) => line.trim())?.trim().replace(/^#+\s*/, "") || "完整生成结果";
+  const nodeChoices = flattenOutlineChoices(nodes).filter((choice) => choice.content.trim());
+  return [
+    {
+      id: "full",
+      label: "完整生成结果",
+      content: full,
+      preview: fullPreview.length > 80 ? `${fullPreview.slice(0, 80).trim()}...` : fullPreview,
+      depth: 0,
+    },
+    ...nodeChoices,
+  ];
 }
 
 function OutlineNodeList({ nodes }: { nodes: ParsedOutlineNode[] }) {
@@ -38,6 +90,10 @@ function OutlineNodeList({ nodes }: { nodes: ParsedOutlineNode[] }) {
 }
 
 export function OutlinePanel({ state, dispatch, selected, writingModels, selectedWritingModel, selectedWritingModelPayload, writingTaskPayload, parsedOutline, resolvedRagTopK, resolvedTargetChars, generationRetrievalPayload, outlineScopePayload, outlineScopeLabel, outlineScopePositionMissing, modelCallBlocked, generateOutline, confirmOutline }: Props) {
+  const outlineChoices = useMemo(() => buildOutlineChoices(parsedOutline, state.outline), [parsedOutline, state.outline]);
+  const selectedOutlineChoice = outlineChoices.find((choice) => choice.id === state.selectedOutlineId) || outlineChoices[0] || null;
+  const selectedOutlineContent = selectedOutlineChoice?.content || state.outline;
+
   return (
     <>
       <form className="writing-side-card" onSubmit={generateOutline}>
@@ -67,9 +123,28 @@ export function OutlinePanel({ state, dispatch, selected, writingModels, selecte
       {state.outline && (
         <div className="writing-side-card">
           <div className="writing-side-card-head"><strong>确认提纲</strong><span>{state.confirmedOutline ? "已确认" : "待确认"}</span></div>
-          <OutlineNodeList nodes={parsedOutline} />
+          <div className="outline-choice-list" role="listbox" aria-label="可确认的提纲范围">
+            {outlineChoices.map((choice) => (
+              <button
+                key={choice.id}
+                type="button"
+                className={choice.id === (selectedOutlineChoice?.id || "full") ? "active" : ""}
+                style={{ marginLeft: choice.id === "full" ? 0 : Math.min(choice.depth, 3) * 10 }}
+                aria-selected={choice.id === (selectedOutlineChoice?.id || "full")}
+                onClick={() => dispatch({ type: "SET_SELECTED_OUTLINE_ID", id: choice.id })}
+              >
+                <span>{choice.label}</span>
+                <small>{choice.preview}</small>
+              </button>
+            ))}
+          </div>
+          {selectedOutlineChoice?.id === "full" ? (
+            <OutlineNodeList nodes={parsedOutline} />
+          ) : (
+            <pre className="outline-selected-preview">{selectedOutlineContent}</pre>
+          )}
           <div className="writing-card-actions">
-            <button className="primary" onClick={confirmOutline} disabled={!selected || state.busy === "confirm-outline" || !!state.confirmedOutline}>确认提纲</button>
+            <button type="button" className="primary" onClick={() => void confirmOutline(selectedOutlineContent)} disabled={!selected || state.busy === "confirm-outline" || !!state.confirmedOutline || !selectedOutlineContent.trim()}>确认选中提纲</button>
           </div>
         </div>
       )}
