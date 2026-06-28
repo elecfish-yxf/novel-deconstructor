@@ -209,6 +209,13 @@ def test_markdown_import_compacts_large_card_groups_for_rag(tmp_path, monkeypatc
     assert compact.is_canonical is True
     assert compact.retrievable is True
     assert compact.evidence_count == 9
+    source_ref = json.loads(compact.source_ref_json)
+    source_refs = json.loads(compact.source_refs_json)
+    assert source_ref["source_kind"] == "rag_compact"
+    assert source_ref["source_count"] == 9
+    assert len(source_ref["sample_source_refs"]) <= 12
+    assert len(source_refs) == 1
+    assert source_refs[0]["source_kind"] == "rag_compact"
     assert len(merged) == 9
     assert [item["id"] for item in results] == [compact.card_id]
     assert debug["top_k"] == 200

@@ -32,6 +32,31 @@ def _engine_kwargs(database_url: str) -> dict:
 engine = create_engine(settings.app_database_url, **_engine_kwargs(settings.app_database_url))
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 _MYSQL_INIT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
+_MYSQL_LONGTEXT_COLUMNS = {
+    "knowledge_cards": (
+        "tags_json",
+        "source_ref_json",
+        "source_refs_json",
+        "use_when_json",
+        "merged_from_ids_json",
+    ),
+    "writing_memories": ("tags_json", "source_ref_json"),
+}
+
+
+def _is_mysql_database() -> bool:
+    return settings.app_database_url.startswith("mysql")
+
+
+def _mysql_longtext_upgrade_statements(column_types: dict[str, dict[str, str]]) -> list[str]:
+    statements: list[str] = []
+    for table_name, column_names in _MYSQL_LONGTEXT_COLUMNS.items():
+        table_columns = column_types.get(table_name, {})
+        for column_name in column_names:
+            column_type = table_columns.get(column_name, "").lower()
+            if column_type and "longtext" not in column_type:
+                statements.append(f"ALTER TABLE {table_name} MODIFY COLUMN {column_name} LONGTEXT NULL")
+    return statements
 
 
 def get_db():
@@ -97,10 +122,16 @@ def ensure_schema_upgrades() -> None:
             return set()
         return {index["name"] for index in inspector.get_indexes(table_name)}
 
+    def table_column_types(table_name: str) -> dict[str, str]:
+        inspector = inspect(engine)
+        if not inspector.has_table(table_name):
+            return {}
+        return {column["name"]: str(column["type"]).lower() for column in inspector.get_columns(table_name)}
+
     def add_column_if_missing(table_name: str, column_name: str, sqlite_sql: str, mysql_sql: str | None = None) -> None:
         columns = table_columns(table_name)
         if columns and column_name not in columns:
-            statement = mysql_sql if settings.app_database_url.startswith("mysql") and mysql_sql else sqlite_sql
+            statement = mysql_sql if _is_mysql_database() and mysql_sql else sqlite_sql
             connection.execute(text(statement))
             added_columns.add(f"{table_name}.{column_name}")
 
@@ -262,7 +293,10 @@ def ensure_schema_upgrades() -> None:
                     "WHERE status = 'raw_extracted' OR is_canonical = 0 OR status IN ('merged', 'deleted', 'deprecated', 'superseded', 'disabled')"
                 )
             )
-        if settings.app_database_url.startswith("mysql"):
+        if _is_mysql_database():
+            column_types = {table_name: table_column_types(table_name) for table_name in _MYSQL_LONGTEXT_COLUMNS}
+            for statement in _mysql_longtext_upgrade_statements(column_types):
+                connection.execute(text(statement))
             if "tags_json" in table_columns("writing_memories"):
                 connection.execute(text("UPDATE writing_memories SET tags_json = '[]' WHERE tags_json IS NULL"))
             if "source_ref_json" in table_columns("writing_memories"):
@@ -402,11 +436,6 @@ def mark_interrupted_knowledge_documents(db: Session) -> None:
         document.error_message = "服务重启导致索引中断，请重新索引。"
     if indexing_docs:
         db.commit()
-
-
-def _is_mysql_database() -> bool:
-    return settings.app_database_url.startswith("mysql")
-
 
 def _init_db_once() -> None:
     Base.metadata.create_all(bind=engine)

@@ -78,6 +78,9 @@ RAG_COMPACT_MIN_GROUP_CARDS = 6
 RAG_COMPACT_GROUP_SIZE = 8
 RAG_COMPACT_ITEM_MAX_CHARS = 220
 RAG_COMPACT_CONTENT_MAX_CHARS = 1800
+RAG_COMPACT_SAMPLE_REF_LIMIT = 12
+RAG_COMPACT_SOURCE_GROUP_LIMIT = 24
+RAG_COMPACT_SOURCE_HEADING_LIMIT = 8
 SEMANTIC_MERGE_CARD_TYPES = {
     "writing_rule",
     "emotion_module",
@@ -2548,10 +2551,36 @@ def _compact_avoid_text(cards: list[KnowledgeCard]) -> str:
 
 def _merge_compact_source_refs(cards: list[KnowledgeCard]) -> dict[str, Any]:
     refs = [_json_dict(card.source_ref_json) for card in cards]
-    merged = _merge_source_refs({}, {"source_refs": refs})
-    if isinstance(merged, dict):
-        merged["compact_source_card_ids"] = [card.card_id for card in cards]
-    return merged
+    sample_refs = [ref for ref in refs if ref][:RAG_COMPACT_SAMPLE_REF_LIMIT]
+    source_groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for ref in refs:
+        if not ref:
+            continue
+        source = str(ref.get("source") or ref.get("source_file") or ref.get("package_id") or "").strip()
+        source_path = str(ref.get("source_path") or "").strip()
+        key = (source, source_path)
+        group = source_groups.setdefault(
+            key,
+            {
+                "source": source,
+                "source_path": source_path,
+                "section_count": 0,
+                "sample_headings": [],
+            },
+        )
+        group["section_count"] += 1
+        heading = ref.get("heading_path")
+        if isinstance(heading, list) and len(group["sample_headings"]) < RAG_COMPACT_SOURCE_HEADING_LIMIT:
+            group["sample_headings"].append(" / ".join(str(item) for item in heading if str(item).strip()))
+    return {
+        "source": "rag_compact",
+        "source_kind": "rag_compact",
+        "source_count": len([ref for ref in refs if ref]),
+        "sources": list(source_groups.values())[:RAG_COMPACT_SOURCE_GROUP_LIMIT],
+        "sample_source_refs": sample_refs,
+        "compact_source_card_count": len(cards),
+        "compact_source_card_ids": [card.card_id for card in cards],
+    }
 
 
 def _frontmatter(values: dict[str, Any]) -> str:
