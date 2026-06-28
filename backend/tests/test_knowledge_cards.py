@@ -221,6 +221,137 @@ def test_markdown_import_compacts_large_card_groups_for_rag(tmp_path, monkeypatc
     assert debug["top_k"] == 200
 
 
+def test_markdown_import_scopes_h5_chapter_outlines_and_blocks_future(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    markdown = """# Volume One Outline
+
+#### Unit One
+
+##### 第001章　Rain Road Wake
+
+Location: Rain Ridge north slope.
+Event: Chen Du wakes with cold coffee and hears the salt caravan bell.
+
+##### 第087章　Archive Future
+
+Location: Ash Archive.
+Event: The forbidden archive beacon must not appear in chapter one retrieval.
+"""
+
+    result = import_markdown_knowledge_source(
+        db,
+        kb,
+        markdown,
+        source_name="volume-one-outline.md",
+        library_type="memory",
+        status="approved",
+    )
+
+    cards = db.query(KnowledgeCard).order_by(KnowledgeCard.chapter_index).all()
+    current = next(card for card in cards if card.chapter_index == 1)
+    future = next(card for card in cards if card.chapter_index == 87)
+    results, debug = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="Rain Ridge cold coffee salt caravan forbidden archive beacon",
+        top_k=10,
+        current_volume_index=1,
+        current_chapter_index=1,
+        include_future=False,
+    )
+
+    assert result["imported_count"] == 2
+    assert {card.card_type for card in cards} == {"ChapterOutline"}
+    assert current.scope_level == "chapter"
+    assert current.volume_index == 1
+    assert current.reveal_at_chapter_index == 1
+    assert future.scope_level == "chapter"
+    assert future.reveal_at_chapter_index == 87
+    assert current.card_id in {item["id"] for item in results}
+    assert future.card_id not in {item["id"] for item in results}
+    assert debug["filtered_by_future_count"] >= 1
+
+
+def test_rag_exact_query_outranks_generic_preferred_compact_card(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    exact = _add_scoped_card(
+        db,
+        kb,
+        "LC-RAIN-RIDGE",
+        library_type="worldbuilding",
+        card_type="location",
+        title="Rain Ridge north road",
+        content="Rain Ridge salt caravan Roggo Benan cold coffee road sign.",
+        source_ref={"source": "story-bible.md", "heading_path": ["Rain Ridge"]},
+    )
+    generic = _add_scoped_card(
+        db,
+        kb,
+        "CP-COMPACT",
+        library_type="writing_guide",
+        card_type="conflict_pattern",
+        title="RAG compact writing guide conflict",
+        content="outline conflict structure pressure turning point hook worldbuilding memory",
+        source_ref={"source": "rag_compact", "source_kind": "rag_compact"},
+    )
+    generic.source_kind = "rag_compact"
+    generic.evidence_count = 20
+    db.commit()
+
+    results, _ = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="outline",
+        query="Rain Ridge salt caravan Roggo Benan",
+        top_k=5,
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    assert results[0]["id"] == exact.card_id
+
+
+def test_rag_compaction_preserves_entity_cards_as_search_surfaces(tmp_path, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
+    db, kb = _session()
+    sections = "\n\n".join(
+        f"## Location {index}\n\nLocation beacon {index} is a precise road, town, or bridge fact."
+        for index in range(1, 10)
+    )
+
+    result = import_markdown_knowledge_source(
+        db,
+        kb,
+        f"# Story Bible\n\n{sections}",
+        source_name="locations.md",
+        library_type="worldbuilding",
+        status="approved",
+    )
+
+    cards = db.query(KnowledgeCard).order_by(KnowledgeCard.card_id).all()
+    results, _ = search_knowledge_cards(
+        db,
+        [kb.id],
+        stage="worldbuilding_check",
+        query="Location beacon 7 bridge fact",
+        top_k=5,
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    assert result["imported_count"] == 9
+    assert result["compacted_card_count"] == 0
+    assert all(card.card_type == "location" for card in cards)
+    assert all(card.source_kind == "markdown_import" for card in cards)
+    assert results[0]["title"] == "Location 7"
+
+
 def test_import_markdown_worldbuilding_is_retrievable_when_approved(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_knowledge_dir", str(tmp_path / "knowledge"))
@@ -483,6 +614,7 @@ def _add_scoped_card(
     *,
     library_type: str = "writing_guide",
     card_type: str = "writing_rule",
+    title: str | None = None,
     content: str = "scope beacon",
     scope_level: str = "global",
     volume_index: int | None = None,
@@ -498,7 +630,7 @@ def _add_scoped_card(
         card_id=card_id,
         library_type=library_type,
         card_type=card_type,
-        title=card_id,
+        title=title or card_id,
         content=content,
         summary=content,
         tags_json=json.dumps(["scope", "beacon", library_type]),
@@ -518,7 +650,7 @@ def _add_scoped_card(
         reveal_at_volume_index=volume_index if reveal_at_chapter_index is not None else None,
         reveal_at_chapter_index=reveal_at_chapter_index,
         evidence_count=1,
-        content_fingerprint=content_fingerprint(card_id, content, "", ["scope", "beacon", library_type]),
+        content_fingerprint=content_fingerprint(title or card_id, content, "", ["scope", "beacon", library_type]),
     )
     db.add(card)
     db.commit()

@@ -81,6 +81,9 @@ RAG_COMPACT_CONTENT_MAX_CHARS = 1800
 RAG_COMPACT_SAMPLE_REF_LIMIT = 12
 RAG_COMPACT_SOURCE_GROUP_LIMIT = 24
 RAG_COMPACT_SOURCE_HEADING_LIMIT = 8
+RAG_COMPACT_EXCLUDED_CARD_TYPES = {"ChapterOutline", "ChapterHandoff", "character", "location", "faction", "item", "timeline"}
+CHAPTER_HEADING_RE = re.compile(r"第\s*([0-9０-９〇零一二两三四五六七八九十百千]+)\s*[章节回]")
+VOLUME_HEADING_RE = re.compile(r"第\s*([0-9０-９〇零一二两三四五六七八九十百千]+)\s*卷")
 SEMANTIC_MERGE_CARD_TYPES = {
     "writing_rule",
     "emotion_module",
@@ -512,6 +515,12 @@ def import_markdown_knowledge_source(
         if not section_body:
             skipped += 1
             continue
+        chapter_scope = _infer_markdown_chapter_scope(
+            section_title,
+            section_body,
+            section.get("heading_path", []),
+            source_name,
+        )
         card_type = _infer_markdown_card_type(
             section_title,
             section_body,
@@ -541,8 +550,18 @@ def import_markdown_knowledge_source(
             "heading_path": section.get("heading_path", []),
             "section_index": index,
         }
+        if chapter_scope:
+            source_ref.update({key: value for key, value in chapter_scope.items() if value is not None})
+            if normalized_library == "memory" and not (frontmatter.get("card_type") or frontmatter.get("type")):
+                card_type = "ChapterOutline"
         raw_scope = {**frontmatter, "title": section_title}
+        if chapter_scope:
+            raw_scope.update(chapter_scope)
         scope = _scope_values(raw_scope, source_ref, normalized_library, card_type)
+        tags = _merge_lists(
+            _markdown_tags(frontmatter, section_title, section_body, normalized_library, card_type, source_name),
+            _markdown_scope_tags(scope),
+        )
         is_canonical = _default_is_canonical(raw_scope, normalized_status)
         retrievable = _default_retrievable(raw_scope, normalized_library, normalized_status, is_canonical)
         title_hash = normalized_title_hash(section_title)
@@ -1260,7 +1279,14 @@ def search_knowledge_cards(
 
     scored: list[tuple[float, KnowledgeCard]] = []
     for card in visible_candidates:
-        score = _score_card(card, expanded_query["query"], stage, preferred_card_types, expanded_query["expanded_terms"])
+        score = _score_card(
+            card,
+            expanded_query["raw_query"],
+            expanded_query["query"],
+            stage,
+            preferred_card_types,
+            expanded_query["expanded_terms"],
+        )
         if card.priority:
             score += min(max(card.priority, 0), 100) / 100
         if score > 0:
@@ -1409,7 +1435,7 @@ def _split_markdown_sections(markdown: str, source_name: str, max_chars: int = 2
         sections.extend(_split_long_section(current_title, content, current_path, max_chars))
 
     for line in text.splitlines():
-        match = re.match(r"^(#{1,4})\s+(.+?)\s*$", line)
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
         if match:
             flush()
             current_level = len(match.group(1))
@@ -1468,9 +1494,103 @@ def _clean_heading(value: str) -> str:
     return re.sub(r"^\d+[\.)、]\s*", "", text)
 
 
+def _infer_markdown_chapter_scope(
+    title: str,
+    content: str,
+    heading_path: list[str],
+    source_name: str,
+) -> dict[str, Any]:
+    chapter_index = _extract_chapter_index(title)
+    if chapter_index is None:
+        for heading in reversed(heading_path):
+            chapter_index = _extract_chapter_index(heading)
+            if chapter_index is not None:
+                break
+    if chapter_index is None:
+        chapter_index = _extract_chapter_index(content[:1200])
+    if chapter_index is None:
+        return {}
+
+    volume_index = None
+    for value in [*heading_path, source_name, content[:1200]]:
+        volume_index = _extract_volume_index(str(value))
+        if volume_index is not None:
+            break
+    if volume_index is None:
+        volume_index = 1
+
+    return {
+        "scope_level": "chapter",
+        "volume_index": volume_index,
+        "chapter_index": chapter_index,
+        "chapter_title": _clip(_clean_heading(title), 120),
+        "reveal_at_volume_index": volume_index,
+        "reveal_at_chapter_index": chapter_index,
+    }
+
+
+def _extract_chapter_index(value: str) -> int | None:
+    match = CHAPTER_HEADING_RE.search(value or "")
+    if not match:
+        return None
+    return _parse_zh_number(match.group(1))
+
+
+def _extract_volume_index(value: str) -> int | None:
+    match = VOLUME_HEADING_RE.search(value or "")
+    if not match:
+        return None
+    return _parse_zh_number(match.group(1))
+
+
+def _parse_zh_number(value: str) -> int | None:
+    text = (value or "").strip().translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digit_map = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    unit_map = {"十": 10, "百": 100, "千": 1000}
+    total = 0
+    section = 0
+    number = 0
+    seen = False
+    for char in text:
+        if char in digit_map:
+            number = digit_map[char]
+            seen = True
+            continue
+        if char in unit_map:
+            unit = unit_map[char]
+            if number == 0:
+                number = 1
+            section += number * unit
+            number = 0
+            seen = True
+            continue
+        return None
+    total += section + number
+    return total if seen and total > 0 else None
+
+
 def _infer_markdown_card_type(title: str, content: str, library_type: str, *, explicit: str = "") -> str:
     if explicit:
         return normalize_card_type(explicit)
+    if _extract_chapter_index(title) is not None:
+        return "ChapterOutline" if library_type == "memory" else "chapter_analysis"
     haystack = f"{title}\n{content}".lower()
     if library_type == "worldbuilding":
         worldbuilding_rules = [
@@ -1530,6 +1650,18 @@ def _markdown_tags(
         if keyword in text:
             candidates.append(keyword)
     return list(dict.fromkeys(tag for tag in [*tags, *candidates] if tag))
+
+
+def _markdown_scope_tags(scope: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    scope_level = normalize_scope_level(str(scope.get("scope_level") or "global"), "global")
+    volume_index = scope.get("volume_index")
+    chapter_index = scope.get("chapter_index")
+    if scope_level in {"volume", "chapter"} and volume_index is not None:
+        tags.extend([f"volume:{volume_index}", f"volume_{int(volume_index):03d}"])
+    if scope_level == "chapter" and chapter_index is not None:
+        tags.extend([f"chapter:{chapter_index}", f"chapter_{int(chapter_index):03d}"])
+    return tags
 
 
 def _markdown_use_when(library_type: str, card_type: str) -> list[str]:
@@ -2400,6 +2532,7 @@ def _rag_compact_candidate_cards(db: Session, knowledge_base: KnowledgeBase) -> 
             KnowledgeCard.retrievable.is_(True),
             KnowledgeCard.library_type != "memory",
             KnowledgeCard.source_kind != "rag_compact",
+            ~KnowledgeCard.card_type.in_(tuple(RAG_COMPACT_EXCLUDED_CARD_TYPES)),
         )
         .order_by(KnowledgeCard.library_type, KnowledgeCard.card_type, KnowledgeCard.card_id)
         .all()
@@ -2772,53 +2905,91 @@ def _card_sort_time(card: KnowledgeCard) -> datetime:
 
 def _score_card(
     card: KnowledgeCard,
+    raw_query: str,
     query: str,
     stage: str,
     preferred_card_types: list[str],
     expanded_terms: list[str] | None = None,
 ) -> float:
-    terms = _tokens(query)
-    expanded_tokens = _tokens(" ".join(expanded_terms or []))
-    terms = list(dict.fromkeys([*terms, *expanded_tokens]))[:32]
-    haystack = "\n".join(
+    raw_terms = _tokens(raw_query, limit=96)
+    expanded_tokens = _tokens(" ".join(expanded_terms or []), limit=32)
+    expanded_only = [term for term in expanded_tokens if term not in set(raw_terms)]
+    tags = [tag.lower() for tag in _json_list(card.tags_json)]
+    use_when_items = [item.lower() for item in _json_list(card.use_when_json)]
+    source_ref = _json_dict(card.source_ref_json)
+    source_refs = _json_list_of_dicts(card.source_refs_json)
+    source_text = json.dumps({"source_ref": source_ref, "source_refs": source_refs}, ensure_ascii=False).lower()
+    title_text = "\n".join([card.title or "", card.chapter_title or "", card.volume_title or ""]).lower()
+    meta_text = "\n".join(
         [
-            card.title or "",
-            card.summary or "",
-            card.content or "",
-            card.avoid or "",
             card.card_type or "",
             card.library_type or "",
-            " ".join(_json_list(card.tags_json)),
-            " ".join(_json_list(card.use_when_json)),
+            " ".join(tags),
+            " ".join(use_when_items),
+            source_text,
         ]
     ).lower()
+    body_text = "\n".join([card.summary or "", card.content or "", card.avoid or ""]).lower()
+    haystack = "\n".join([title_text, meta_text, body_text])
     score = 0.0
-    for term in terms:
-        if term and term in haystack:
-            score += 1.0
-    tags = [tag.lower() for tag in _json_list(card.tags_json)]
-    for term in terms:
+    raw_match_count = 0
+    for term in raw_terms:
+        if not term:
+            continue
+        matched = False
+        if term in title_text:
+            score += 4.0
+            matched = True
+        if term in meta_text:
+            score += 3.0
+            matched = True
+        if term in body_text:
+            score += 2.0
+            matched = True
         if any(term == tag or term in tag for tag in tags):
             score += 2.0
+            matched = True
+        if matched:
+            raw_match_count += 1
+
+    for phrase in _query_phrases(raw_query):
+        if phrase in title_text:
+            score += 5.0
+        elif phrase in meta_text:
+            score += 4.0
+        elif phrase in body_text:
+            score += 3.0
+
+    for term in expanded_only:
+        if term and term in haystack:
+            score += 0.4
+        if any(term == tag or term in tag for tag in tags):
+            score += 0.6
+
     if card.card_type in preferred_card_types:
-        score += 3.0
-    use_when = " ".join(_json_list(card.use_when_json)).lower()
+        score += 1.5
+    use_when = " ".join(use_when_items)
     if stage and (stage.lower() in use_when or _stage_label(stage) in use_when):
-        score += 2.0
+        score += 1.0
     if stage == "worldbuilding_check" and card.library_type == "worldbuilding":
         score += 5.0
     elif card.library_type == "worldbuilding":
-        score += 2.0
+        score += 1.5
     if stage in {"draft", "continue", "continuation"} and card.library_type == "memory":
-        score += 4.0
+        score += 3.0
     elif stage == "revision" and card.library_type == "memory":
-        score += 3.0
-    if stage in {"draft", "revision"} and card.card_type == "anti_pattern":
-        score += 3.0
-    if stage in {"draft", "revision"} and card.card_type == "style_pattern":
         score += 2.0
+    if stage in {"draft", "revision"} and card.card_type == "anti_pattern":
+        score += 2.0
+    if stage in {"draft", "revision"} and card.card_type == "style_pattern":
+        score += 1.5
     if card.library_type == "memory":
         score += 1.0 / math.sqrt(max(1, (datetime.utcnow() - card.updated_at).days + 1)) if card.updated_at else 0.5
+    if card.source_kind == "rag_compact" and raw_terms:
+        if raw_match_count < min(3, max(1, len(raw_terms) // 3)):
+            score -= 2.0
+        else:
+            score -= 0.5
     if score > 0:
         score += min(math.log2(max(0, card.evidence_count or 0) + 1), 2.0)
     return round(score, 4)
@@ -2861,7 +3032,7 @@ def _scope_label(card: KnowledgeCard) -> str:
     return f"chapter:{volume}/{chapter}"
 
 
-def _tokens(value: str) -> list[str]:
+def _tokens(value: str, *, limit: int = 64) -> list[str]:
     lowered = (value or "").lower()
     words = WORD_RE.findall(lowered)
     if words:
@@ -2869,10 +3040,21 @@ def _tokens(value: str) -> list[str]:
         for word in words:
             if re.fullmatch(r"[\u4e00-\u9fff]+", word) and len(word) > 4:
                 tokens.extend(word[index : index + 2] for index in range(len(word) - 1))
+                tokens.extend(word[index : index + 3] for index in range(len(word) - 2))
+                tokens.extend(word[index : index + 4] for index in range(len(word) - 3))
             tokens.append(word)
-        return list(dict.fromkeys(token for token in tokens if len(token) >= 2))[:16]
+        return list(dict.fromkeys(token for token in tokens if len(token) >= 2 or token.isdigit()))[:limit]
     compact = re.sub(r"\s+", "", lowered)
-    return [compact[index : index + 2] for index in range(max(0, len(compact) - 1))][:16]
+    return [compact[index : index + 2] for index in range(max(0, len(compact) - 1))][:limit]
+
+
+def _query_phrases(value: str) -> list[str]:
+    phrases: list[str] = []
+    for part in re.split(r"[\s,，。；;：:\n\r\t\"'“”‘’（）()\[\]【】<>《》]+", value or ""):
+        text = part.strip().lower()
+        if len(text) >= 3 and len(text) <= 24:
+            phrases.append(text)
+    return list(dict.fromkeys(phrases))[:24]
 
 
 def _dedupe_terms(values: list[str]) -> list[str]:
