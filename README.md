@@ -189,6 +189,8 @@ KnowledgeCard / Markdown / Canonical Card 的关系：
 - Markdown Doc：给人编辑的知识文档，可同步回结构化卡片。
 - disabled / deleted / deprecated / superseded / merged-away 卡片默认不参与检索。
 
+在写作 Agent 的知识面板中上传或按路径导入 Markdown 时，默认按 `approved` 导入。这适合用户已经整理好的世界观设定库和写作指南，导入后可直接参与常规 RAG；如果需要人工审核式流程，可以在接口层显式传 `status=raw_extracted`。
+
 每张 KnowledgeCard 都有明确作用域，不再用 `source_ref` 判断召回范围：
 
 - `scope_level=global`：全局知识，通常适合 `writing_guide`。
@@ -218,6 +220,8 @@ Current writing position is a core context field:
 - `current_volume_index` and `current_chapter_index` must travel from the page payload into the writing API, RAG retrieval, retrieval debug, and final prompt.
 - The final prompt includes `[CURRENT WRITING POSITION]` and `[RETRIEVAL POLICY]`, explicitly forbidding future volume or future chapter knowledge.
 - If the position is missing, scoped story knowledge is not treated as safe by default; only global `writing_guide` can be used safely and retrieval debug returns a warning.
+- Outline scope is explicit: `scope_level=chapter` keeps the request as a current-chapter outline, `scope_level=volume` generates the current-volume outline, and `scope_level=global` / `book` allows full-story planning. Mentioning a long-form writing guide such as `AI中文长篇小说写作指南` does not by itself expand a chapter outline into a full novel outline.
+- Draft prompts treat `章尾落点`、`结尾状态` and `章尾钩子` as the final scene of the current chapter. Once the draft reaches that beat, it should stop instead of continuing into the next-chapter conflict, rescue aftermath, or author-style summary.
 
 Chapter memory inheritance:
 
@@ -271,6 +275,7 @@ user task
 - 对长正文进行分段计划，逐段组装 Prompt 和 RAG 知识。
 - 每段统计 CJK 字数、非空白字符数和粗略 token 估算。
 - 如果单段明显低于目标，会尝试补写；默认补写上限为 2 次。
+- 最后一段和补写都会被约束在提纲指定的章尾落点内，避免为了凑字数提前写下一章。
 - 最终结果低于目标较多时会返回 warning，避免假装已经满足字数。
 - 长文本可通过后台 draft job 轮询进度，也可取消；页面刷新后只要后端进程还在，可恢复最近一次 job 状态。
 
@@ -315,6 +320,26 @@ backend/outputs/
 ## Deployment
 
 推荐正式部署路径是 **ECS + Docker + Nginx + 阿里云 RDS MySQL**。根目录 `Dockerfile` 会构建前端并由 FastAPI 同容器托管静态页面，ECS 上只需要把容器绑定到 `127.0.0.1:8000`，再由 Nginx 提供公网域名、HTTPS 和反向代理。
+
+当前仓库也支持 Docker Compose 双容器部署：`backend` 监听 `8000`，`frontend` 通过 Nginx 静态托管到 `5173`。这条路径适合 ECS 临时验证、内网测试或没有单容器反代配置时快速上线。
+
+```bash
+cd /srv/novel-deconstructor
+docker compose build backend frontend
+docker compose up -d backend frontend
+docker compose ps
+curl -sS http://127.0.0.1:8000/health
+curl -sS -I http://127.0.0.1:5173/ | head -n 5
+```
+
+如果 ECS 内部健康检查正常，但公网访问 `http://<ecs-ip>:8000/health` 或 `http://<ecs-ip>:5173/` 超时，优先检查阿里云安全组入站规则。服务器本机还可用下面的命令确认是否是本机防火墙或监听问题：
+
+```bash
+ufw status
+ss -lntp | grep -E ':8000|:5173'
+```
+
+`ufw` 为 inactive 且端口监听在 `0.0.0.0` 时，公网超时通常是云侧安全组未放行对应 TCP 端口。正式公开部署更推荐只放行 `80/443`，由 Nginx 反代到应用端口。
 
 部署细节见 [`deploy/ecs.md`](deploy/ecs.md)，包括：
 

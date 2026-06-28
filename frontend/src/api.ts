@@ -642,7 +642,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  uploadKnowledgeMarkdownFiles: async (workId: number, files: FileList | File[], libraryType: string, status = "raw_extracted") => {
+  uploadKnowledgeMarkdownFiles: async (workId: number, files: FileList | File[], libraryType: string, status = "approved") => {
     const results: KnowledgeImportResult[] = [];
     for (const file of Array.from(files)) {
       const data = new FormData();

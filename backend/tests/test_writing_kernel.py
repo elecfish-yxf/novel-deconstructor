@@ -92,6 +92,8 @@ def test_outline_and_draft_prompts_are_separated():
     assert "oh-story" in outline_prompt
     assert "Chapter outline" in draft_prompt
     assert "bullet" in draft_prompt
+    assert "章尾落点" in draft_prompt
+    assert "不要替下一章推进或解决" in draft_prompt
     assert "citations" in draft_system
 
 
@@ -175,13 +177,29 @@ def test_resolve_writing_model_maps_doubao_display_alias_to_endpoint():
 
 def test_outline_output_rule_scopes_outline_levels():
     chapter_payload = WritingOutlineRequest(task="generate current chapter opening outline")
-    global_payload = WritingOutlineRequest(task="generate full novel outline")
+    volume_payload = WritingOutlineRequest(task="generate outline", scope_level="volume")
+    global_payload = WritingOutlineRequest(task="generate full novel outline", scope_level="global")
 
     assert "CURRENT_CHAPTER" in _outline_scope_block(chapter_payload)
+    assert "CURRENT_VOLUME" in _outline_scope_block(volume_payload)
     assert "FULL_NOVEL" in _outline_scope_block(global_payload)
 
     assert "Only output a current-chapter outline" in _outline_output_rule(chapter_payload)
+    assert "current-volume outline" in _outline_output_rule(volume_payload)
     assert "complete novel outline" in _outline_output_rule(global_payload)
+
+
+def test_chapter_outline_scope_ignores_long_form_guide_title():
+    payload = WritingOutlineRequest(
+        task="请结合《AI中文长篇小说写作指南》，生成第一卷第001章章节提纲。",
+        scope_level="chapter",
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    assert "CURRENT_CHAPTER" in _outline_scope_block(payload)
+    assert "FULL_NOVEL" not in _outline_scope_block(payload)
+    assert "Only output a current-chapter outline" in _outline_output_rule(payload)
 
 
 def test_resolve_writing_model_requires_user_key_even_when_server_key_exists():

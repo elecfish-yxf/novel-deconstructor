@@ -110,7 +110,7 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     if (!selected || !markdownSourcePath.trim()) return;
     dispatch({ type: "SET_BUSY", busy: "import-md-path" });
     try {
-      const r = await api.importKnowledgeMarkdown(selected.id, { source_path: markdownSourcePath, library_type: uploadType, status: "raw_extracted" });
+      const r = await api.importKnowledgeMarkdown(selected.id, { source_path: markdownSourcePath, library_type: uploadType, status: "approved" });
       dispatch({ type: "SET_MESSAGE", message: `Markdown 已拆卡：${r.message}` });
       await refreshKnowledgeCards(selected.id);
       dispatch({ type: "SET_ACTIVE_KNOWLEDGE_TAB", tab: "cards" });
@@ -129,7 +129,7 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     if (!selected || !pendingMdFiles?.length) return;
     dispatch({ type: "SET_BUSY", busy: "import-md-files" });
     try {
-      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, pendingMdFiles, uploadType, "raw_extracted");
+      const results = await api.uploadKnowledgeMarkdownFiles(selected.id, pendingMdFiles, uploadType, "approved");
       const imported = results.reduce((t, r) => t + r.imported_count, 0);
       const skipped = results.reduce((t, r) => t + r.skipped_count, 0);
       dispatch({ type: "SET_MESSAGE", message: `Markdown 拆卡完成：导入 ${imported} 张，跳过 ${skipped} 项` });

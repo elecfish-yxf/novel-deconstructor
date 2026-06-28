@@ -12,6 +12,7 @@ from novel_deconstructor.api.writing import (
     _generate_with_cards,
     _generate_long_draft_with_cards,
     _last_sentence,
+    _long_section_prompt,
     _maybe_supplement_section,
     _parse_target_chars_from_text,
     _plan_section_targets,
@@ -251,6 +252,20 @@ def test_long_generation_next_section_prompt_inherits_previous_final_sentence(tm
     assert "开头不应作为第二段续写依据" not in second_prompt
     assert "第一句必须承接 [LAST SENTENCE TO CONTINUE]" in second_prompt
     assert result.sections[1].continuity_state
+
+    final_section_prompt = _long_section_prompt(
+        payload,
+        [],
+        payload.confirmed_outline,
+        "结尾门后有人叫出主角名字，迫使她做选择。",
+        3,
+        3,
+        1700,
+        "门后有人叫出了她的名字。",
+        "[SECTION CONTINUITY LOCK]",
+    )
+    assert "如果本段是最后一段" in final_section_prompt
+    assert "不要越过章尾去写下一章冲突" in final_section_prompt
 
 
 def test_revision_dry_run_returns_prompt_preview_and_aligned_used_knowledge(tmp_path, monkeypatch):
