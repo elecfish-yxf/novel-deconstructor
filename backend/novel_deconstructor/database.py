@@ -1,5 +1,7 @@
-from pathlib import Path
 import json
+import time
+from collections.abc import Callable
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
@@ -29,6 +31,7 @@ def _engine_kwargs(database_url: str) -> dict:
 
 engine = create_engine(settings.app_database_url, **_engine_kwargs(settings.app_database_url))
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+_MYSQL_INIT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
 
 
 def get_db():
@@ -401,18 +404,13 @@ def mark_interrupted_knowledge_documents(db: Session) -> None:
         db.commit()
 
 
-def init_db() -> None:
-    ensure_runtime_dirs()
-    try:
-        Base.metadata.create_all(bind=engine)
-        ensure_schema_upgrades()
-    except OperationalError as exc:
-        if settings.app_database_url.startswith("mysql"):
-            raise RuntimeError(
-                "RDS/MySQL database initialization failed. Check APP_DATABASE_URL, network access, "
-                "security group rules, database name, credentials, and utf8mb4 charset configuration."
-            ) from exc
-        raise
+def _is_mysql_database() -> bool:
+    return settings.app_database_url.startswith("mysql")
+
+
+def _init_db_once() -> None:
+    Base.metadata.create_all(bind=engine)
+    ensure_schema_upgrades()
     db = SessionLocal()
     try:
         seed_builtin_workspaces(db)
@@ -422,3 +420,29 @@ def init_db() -> None:
         mark_interrupted_knowledge_documents(db)
     finally:
         db.close()
+
+
+def _run_init_db_with_retries(sleep: Callable[[float], None] = time.sleep) -> None:
+    # Docker DNS/RDS networking can come online a moment after the app process starts.
+    delays = _MYSQL_INIT_RETRY_DELAYS if _is_mysql_database() else ()
+    for attempt in range(len(delays) + 1):
+        try:
+            _init_db_once()
+            return
+        except OperationalError:
+            if attempt >= len(delays):
+                raise
+            sleep(delays[attempt])
+
+
+def init_db() -> None:
+    ensure_runtime_dirs()
+    try:
+        _run_init_db_with_retries()
+    except OperationalError as exc:
+        if _is_mysql_database():
+            raise RuntimeError(
+                "RDS/MySQL database initialization failed. Check APP_DATABASE_URL, network access, "
+                "security group rules, database name, credentials, and utf8mb4 charset configuration."
+            ) from exc
+        raise
