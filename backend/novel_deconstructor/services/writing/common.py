@@ -44,6 +44,13 @@ from ..retrieval_service import (
     rebuild_knowledge_base_vectors,
     retrieve_for_writing,
 )
+from ..retrieval_index_queue import (
+    enqueue_card_delete,
+    enqueue_card_index,
+    enqueue_knowledge_base_rebuild,
+    enqueue_memory_delete,
+    enqueue_memory_index,
+)
 
 __all__ = [
     "AGENT_RETRIEVAL_PROTOCOL",
@@ -310,38 +317,56 @@ def _safe_index_card(db: Session, card: KnowledgeCard | None) -> None:
     if not card:
         return
     try:
-        index_knowledge_card(db, card)
+        enqueue_card_index(db, card)
+        db.commit()
     except Exception:
+        db.rollback()
         pass
 
-def _safe_delete_card_vector(card: KnowledgeCard | str | None) -> None:
+def _safe_delete_card_vector(card: KnowledgeCard | str | None, db: Session | None = None) -> None:
     if not card:
         return
     try:
-        delete_card_vector(card)
+        if db is not None:
+            enqueue_card_delete(db, card)
+            db.commit()
+        else:
+            delete_card_vector(card)
     except Exception:
+        if db is not None:
+            db.rollback()
         pass
 
 def _safe_index_memory(db: Session, memory: WritingMemory | None) -> None:
     if not memory:
         return
     try:
-        index_writing_memory(db, memory)
+        enqueue_memory_index(db, memory)
+        db.commit()
     except Exception:
+        db.rollback()
         pass
 
-def _safe_delete_memory_vector(memory: WritingMemory | int | None) -> None:
+def _safe_delete_memory_vector(memory: WritingMemory | int | None, db: Session | None = None) -> None:
     if not memory:
         return
     try:
-        delete_memory_vector(memory)
+        if db is not None:
+            enqueue_memory_delete(db, memory)
+            db.commit()
+        else:
+            delete_memory_vector(memory)
     except Exception:
+        if db is not None:
+            db.rollback()
         pass
 
 def _safe_rebuild_kb_vectors(db: Session, knowledge_base: KnowledgeBase) -> None:
     try:
-        rebuild_knowledge_base_vectors(db, knowledge_base)
+        enqueue_knowledge_base_rebuild(db, knowledge_base)
+        db.commit()
     except Exception:
+        db.rollback()
         pass
 
 def _ensure_workspace_kb(db: Session, workspace_id: str, knowledge_base_id: int) -> KnowledgeBase:

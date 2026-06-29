@@ -51,6 +51,7 @@ _MYSQL_LONGTEXT_COLUMNS = {
         "request_payload_json",
         "error_message",
     ),
+    "retrieval_index_events": ("last_error", "result_json"),
 }
 
 

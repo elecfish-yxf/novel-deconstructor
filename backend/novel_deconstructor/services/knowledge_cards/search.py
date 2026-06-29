@@ -199,20 +199,36 @@ def used_knowledge_from_results(results: list[dict[str, Any]]) -> list[dict[str,
     return [
         {
             "id": item["id"],
-            "library_type": item["library_type"],
-            "card_type": item["card_type"],
-            "title": item["title"],
-            "score": item["score"],
+            "library_type": item.get("library_type") or item.get("knowledge_type") or "unknown",
+            "card_type": item.get("card_type") or item.get("source_type") or "unknown",
+            "title": item.get("title") or "",
+            "score": item.get("score", 0),
+            "source_type": item.get("source_type"),
+            "reason": _knowledge_reason(item),
             "source_ref": item.get("source_ref", {}),
             "content_preview": item.get("content_preview", ""),
+            "concise_content": item.get("content_preview", ""),
             "tags": item.get("tags", []),
             "status": item.get("status"),
+            "retrieval_level": item.get("retrieval_level"),
+            "context_role": item.get("context_role"),
             "scope_level": item.get("scope_level"),
             "volume_index": item.get("volume_index"),
             "chapter_index": item.get("chapter_index"),
         }
         for item in results
     ]
+
+
+def _knowledge_reason(item: dict[str, Any]) -> str:
+    modes = item.get("source_modes")
+    if isinstance(modes, list) and modes:
+        return "+".join(str(mode) for mode in modes)
+    if item.get("vector_score"):
+        return "vector"
+    if item.get("keyword_score"):
+        return "keyword"
+    return "selected"
 
 def build_expanded_rag_query(
     *,

@@ -57,6 +57,7 @@ __all__ = [
     "_cards_for_search_results",
     "_format_card_context",
     "_format_handoff_context",
+    "_format_retrieval_evidence_context",
     "_format_used_knowledge",
     "_is_broad_outline_request",
     "_is_current_chapter_card",
@@ -104,11 +105,12 @@ def _retrieve_for_card_agent(
             include_raw=payload.include_raw_knowledge,
         )
         debug = retrieval["retrieval_debug"]
-        card_results = [hit for hit in retrieval["hits"] if hit.get("source_type") == "card"]
-        non_card_count = len(retrieval["hits"]) - len(card_results)
+        results = retrieval["hits"]
+        non_card_count = len([hit for hit in results if hit.get("source_type") != "card"])
         if non_card_count:
             debug.setdefault("warnings", []).append(f"non_card_hits_available:{non_card_count}")
-        return card_results, debug
+            debug["selected_non_card_count"] = non_card_count
+        return results, debug
     except Exception as exc:  # noqa: BLE001 - keep writing agent available if the new service regresses.
         results, debug = search_rag_cards(
             db,
@@ -255,10 +257,99 @@ def _prompt_cards_for_results(
     debug: dict[str, Any] | None = None,
 ) -> tuple[list[KnowledgeCard], list[dict[str, Any]]]:
     prompt_results = results[:RAG_PROMPT_CARD_LIMIT]
-    cards = _cards_for_search_results(db, knowledge_base_id, prompt_results)
+    card_results = [item for item in prompt_results if _is_card_result(item)]
+    non_card_results = [item for item in prompt_results if not _is_card_result(item)]
+    cards = _cards_for_search_results(db, knowledge_base_id, card_results)
     if payload is not None:
-        cards, prompt_results = _prompt_safe_cards(cards, prompt_results, payload, debug)
-    return cards, _results_for_prompt_cards(prompt_results, cards)
+        cards, safe_card_results = _prompt_safe_cards(cards, card_results, payload, debug)
+        safe_non_card_results = _prompt_safe_non_card_results(non_card_results, payload, debug)
+    else:
+        safe_card_results = _results_for_prompt_cards(card_results, cards)
+        safe_non_card_results = non_card_results
+    safe_card_ids = {item["id"] for item in safe_card_results}
+    safe_non_card_ids = {item["id"] for item in safe_non_card_results}
+    prompt_items = [
+        item
+        for item in prompt_results
+        if (item.get("id") in safe_card_ids if _is_card_result(item) else item.get("id") in safe_non_card_ids)
+    ]
+    if debug is not None:
+        debug["selected_count"] = len(prompt_items)
+    return cards, prompt_items
+
+def _is_card_result(item: dict[str, Any]) -> bool:
+    return (item.get("source_type") or "card") == "card"
+
+def _prompt_safe_non_card_results(
+    results: list[dict[str, Any]],
+    payload: WritingGenerateRequest,
+    debug: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    safe_results: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for item in results:
+        reason = _prompt_non_card_filter_reason(item, payload)
+        if reason:
+            warnings.append(f"prompt_dropped:{item.get('id', 'unknown')}:{reason}")
+            continue
+        safe_results.append(item)
+
+    if debug is not None:
+        debug["selected_non_card_ids"] = [str(item.get("id") or "") for item in safe_results]
+        if warnings:
+            existing_warnings = debug.setdefault("warnings", [])
+            for warning in warnings:
+                if warning not in existing_warnings:
+                    existing_warnings.append(warning)
+    return safe_results
+
+def _prompt_non_card_filter_reason(item: dict[str, Any], payload: WritingGenerateRequest) -> str | None:
+    source_type = item.get("source_type")
+    if source_type not in {"chunk", "memory"}:
+        return "unsupported_source"
+    status = str(item.get("status") or "").strip()
+    if status in BLOCKED_STATUSES:
+        return "blocked_status"
+    if status and status not in {"approved", "reviewed", "completed"}:
+        return "inactive_status"
+
+    current_volume = payload.current_volume_index
+    current_chapter = payload.current_chapter_index
+    if current_volume is None or current_chapter is None:
+        scope_level = _normalized_item_scope_level(item)
+        return None if scope_level == "global" else "missing_position_scope"
+
+    if _position_after(_item_int_or_none(item.get("reveal_at_volume_index")), _item_int_or_none(item.get("reveal_at_chapter_index")), current_volume, current_chapter):
+        return "future_reveal"
+    if _position_after(_item_int_or_none(item.get("valid_from_volume_index")), _item_int_or_none(item.get("valid_from_chapter_index")), current_volume, current_chapter):
+        return "future_valid_from"
+    if _position_before(_item_int_or_none(item.get("valid_until_volume_index")), _item_int_or_none(item.get("valid_until_chapter_index")), current_volume, current_chapter):
+        return "expired_scope"
+
+    scope_level = _normalized_item_scope_level(item)
+    if scope_level == "global":
+        return None
+    volume_index = _item_int_or_none(item.get("volume_index"))
+    chapter_index = _item_int_or_none(item.get("chapter_index"))
+    if scope_level == "volume":
+        if volume_index is None:
+            return "unknown_volume_scope"
+        if volume_index > current_volume:
+            return "future_volume"
+        return None if volume_index == current_volume else "past_volume_scope"
+    if volume_index is None or chapter_index is None:
+        return "unknown_chapter_scope"
+    if source_type == "memory":
+        if volume_index < current_volume:
+            return None
+        if volume_index == current_volume and chapter_index <= current_chapter:
+            return None
+        return "future_chapter"
+    if volume_index == current_volume:
+        if chapter_index > current_chapter:
+            return "future_chapter"
+        return None if chapter_index == current_chapter else "past_chapter_scope"
+    return "future_chapter"
 
 def _prompt_safe_cards(
     cards: list[KnowledgeCard],
@@ -378,6 +469,20 @@ def _normalized_scope_level(card: KnowledgeCard) -> str:
         return "global"
     return value if value in {"global", "volume", "chapter"} else "global"
 
+def _normalized_item_scope_level(item: dict[str, Any]) -> str:
+    value = str(item.get("scope_level") or "global").strip().lower()
+    if value == "book":
+        return "global"
+    return value if value in {"global", "volume", "chapter"} else "global"
+
+def _item_int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
 def _cards_for_search_results(db: Session, knowledge_base_id: int, results: list[dict[str, Any]]) -> list[KnowledgeCard]:
     ids = [item["id"] for item in results]
     if not ids:
@@ -399,11 +504,13 @@ def _card_agent_prompt(
     payload: WritingGenerateRequest,
     cards: list[KnowledgeCard],
     confirmed_outline: str,
+    retrieval_items: list[dict[str, Any]] | None = None,
 ) -> str:
     worldbuilding = [card for card in cards if card.library_type == "worldbuilding"]
     memory = [card for card in cards if card.library_type == "memory"]
     anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
     writing_guide = [card for card in cards if card.library_type == "writing_guide" and card.card_type != "anti_pattern"]
+    retrieval_evidence = _format_retrieval_evidence_context(retrieval_items or [])
     output_rule = (
         "只输出章节提纲，不要写正文。提纲要能直接进入下一步正文生成。"
         if stage == "outline"
@@ -420,6 +527,10 @@ def _card_agent_prompt(
 [WRITING GUIDE]
 这里放拆书提取出的写作技巧、结构、冲突、情绪链、节奏、语言规则。这些只指导写法，不是故事事实。
 {_format_card_context(writing_guide) or "未检索到 writing_guide。"}
+
+[DIRECT DOCUMENT / MEMORY EVIDENCE]
+Document chunks and native memory hits selected by retrieval. Use worldbuilding chunks as story facts, writing_guide chunks as technique, and native memory hits as continuity. Do not expose evidence IDs.
+{retrieval_evidence or "No direct document chunks or native memory hits were retrieved."}
 
 [ANTI PATTERNS]
 这里放不建议模仿的写法，例如 AI 味、解释腔、机械对白、硬讲设定。
@@ -447,8 +558,9 @@ def _build_card_agent_prompt(
     payload: WritingGenerateRequest,
     cards: list[KnowledgeCard],
     confirmed_outline: str,
+    retrieval_items: list[dict[str, Any]] | None = None,
 ) -> str:
-    return _build_structured_card_agent_prompt(stage, payload, cards, confirmed_outline)
+    return _build_structured_card_agent_prompt(stage, payload, cards, confirmed_outline, retrieval_items=retrieval_items)
 
 def _outline_scope_kind(payload: WritingGenerateRequest) -> str:
     scope = (payload.scope_level or "chapter").strip().lower()
@@ -527,6 +639,7 @@ def _build_structured_card_agent_prompt(
     payload: WritingGenerateRequest,
     cards: list[KnowledgeCard],
     confirmed_outline: str,
+    retrieval_items: list[dict[str, Any]] | None = None,
 ) -> str:
     worldbuilding = [card for card in cards if card.library_type == "worldbuilding"]
     memory = [card for card in cards if card.library_type == "memory"]
@@ -545,6 +658,7 @@ def _build_structured_card_agent_prompt(
     other_memory = [card for card in memory if card.card_id not in classified_memory_ids]
     anti_patterns = [card for card in cards if card.card_type == "anti_pattern"]
     writing_guide = [card for card in cards if card.library_type == "writing_guide" and card.card_type != "anti_pattern"]
+    retrieval_evidence = _format_retrieval_evidence_context(retrieval_items or [])
     output_rule = {
         "outline": _outline_output_rule(payload),
         "draft": "Only output novel prose. Do not output outlines, tables, writing notes, retrieval notes, or citation IDs.",
@@ -609,6 +723,10 @@ Other confirmed continuity memory for this work.
 Technique, structure, pacing, conflict, emotion chain, language, and style guidance. These guide execution only.
 {_format_card_context(writing_guide) or "No writing_guide cards were retrieved."}
 
+[DIRECT DOCUMENT / MEMORY EVIDENCE]
+Document chunks and native memory hits selected by retrieval. Use worldbuilding chunks as story facts, writing_guide chunks as technique, and native memory hits as continuity. Do not expose evidence IDs.
+{retrieval_evidence or "No direct document chunks or native memory hits were retrieved."}
+
 [ANTI PATTERNS]
 Problems to avoid in this generation.
 {_format_card_context(anti_patterns) or "No anti_pattern cards were retrieved."}
@@ -649,6 +767,51 @@ def _format_card_context(cards: list[KnowledgeCard]) -> str:
         f"[{card.card_id}] {card.library_type}/{card.card_type} | {card.title}\n{_clip(card.content, 1400)}"
         for card in cards
     )
+
+def _format_retrieval_evidence_context(items: list[dict[str, Any]]) -> str:
+    formatted: list[str] = []
+    for item in items:
+        if _is_card_result(item):
+            continue
+        source_type = str(item.get("source_type") or "unknown")
+        source_id = item.get("chunk_id") or item.get("memory_id") or item.get("id") or "unknown"
+        knowledge_type = item.get("knowledge_type") or item.get("library_type") or "unknown"
+        card_type = item.get("card_type") or source_type
+        title = item.get("title") or item.get("original_filename") or str(source_id)
+        scope = _item_scope_label(item)
+        locator = _item_locator_label(item)
+        text = str(item.get("text") or item.get("content") or item.get("content_preview") or item.get("summary") or "")
+        formatted.append(
+            "\n".join(
+                line
+                for line in [
+                    f"[{source_type}:{source_id}] {knowledge_type}/{card_type} | {title}",
+                    f"Scope: {scope}" if scope else "",
+                    f"Source: {locator}" if locator else "",
+                    _clip(text, 1400),
+                ]
+                if line
+            )
+        )
+    return "\n\n".join(formatted)
+
+def _item_scope_label(item: dict[str, Any]) -> str:
+    scope_level = _normalized_item_scope_level(item)
+    if scope_level == "global":
+        return "global"
+    volume = item.get("volume_index")
+    chapter = item.get("chapter_index")
+    if scope_level == "volume":
+        return f"volume:{volume}" if volume is not None else "volume:unknown"
+    return f"chapter:{volume if volume is not None else 'unknown'}/{chapter if chapter is not None else 'unknown'}"
+
+def _item_locator_label(item: dict[str, Any]) -> str:
+    parts = [
+        item.get("original_filename"),
+        item.get("structure_path"),
+        item.get("citation_id"),
+    ]
+    return " / ".join(str(part) for part in parts if part)
 
 def _format_handoff_context(cards: list[KnowledgeCard]) -> str:
     formatted: list[str] = []
@@ -715,6 +878,9 @@ def _merge_retrieval_debug(target: dict[str, Any], debug: dict[str, Any]) -> Non
     target["expanded_terms"] = list(dict.fromkeys(expanded_terms))
     selected_ids = [*target.get("selected_card_ids", []), *debug.get("selected_card_ids", [])]
     target["selected_card_ids"] = list(dict.fromkeys(selected_ids))
+    selected_non_card_ids = [*target.get("selected_non_card_ids", []), *debug.get("selected_non_card_ids", [])]
+    target["selected_non_card_ids"] = list(dict.fromkeys(selected_non_card_ids))
+    target["selected_non_card_count"] = len(target["selected_non_card_ids"])
     warnings = [*target.get("warnings", []), *debug.get("warnings", [])]
     target["warnings"] = list(dict.fromkeys(warnings))
     selected_scope = dict(target.get("selected_card_scope", {}))

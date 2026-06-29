@@ -347,7 +347,7 @@ async def _generate_with_cards(
     cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
     oh_story_kernel = _oh_story_writing_kernel(db)
     system_prompt = _system_prompt(payload.knowledge_mode, oh_story_kernel, stage=stage)
-    user_prompt = _build_card_agent_prompt(stage, payload, cards, confirmed_outline)
+    user_prompt = _build_card_agent_prompt(stage, payload, cards, confirmed_outline, retrieval_items=prompt_results)
     prompt_preview = _clip(f"{system_prompt}\n\n{user_prompt}", 9000)
     used_knowledge = used_knowledge_from_results(prompt_results)
 
@@ -459,6 +459,8 @@ async def _generate_long_draft_with_cards(
         "duplicate_group_excluded_count": 0,
         "source_cap_excluded_count": 0,
         "selected_card_ids": [],
+        "selected_non_card_ids": [],
+        "selected_non_card_count": 0,
         "selected_card_scope": {},
         "selected_card_type_distribution": {},
         "selected_scope_distribution": {},
@@ -501,6 +503,7 @@ async def _generate_long_draft_with_cards(
             section_target,
             previous_tail,
             continuity_state,
+            retrieval_items=prompt_results,
         )
         if index == 1:
             prompt_preview_parts.append(f"{system_prompt}\n\n{user_prompt}")
@@ -596,7 +599,7 @@ async def _generate_long_draft_with_cards(
         _merge_retrieval_debug(aggregate_debug, debug)
         used_knowledge = used_knowledge_from_results(prompt_results)
         _merge_used_knowledge(merged_used, used_knowledge)
-        padding_prompt = _long_padding_prompt(payload, cards, confirmed_outline, content, padding_target)
+        padding_prompt = _long_padding_prompt(payload, cards, confirmed_outline, content, padding_target, retrieval_items=prompt_results)
         try:
             padding_content = await provider.complete(
                 LLMRequest(
@@ -821,8 +824,9 @@ def _long_section_prompt(
     section_target: int,
     previous_tail: str,
     continuity_state: str,
+    retrieval_items: list[dict[str, Any]] | None = None,
 ) -> str:
-    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline)
+    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline, retrieval_items=retrieval_items)
     return f"""{base}
 
 [LONG GENERATION SECTION CONTROL]
@@ -849,8 +853,9 @@ def _long_padding_prompt(
     confirmed_outline: str,
     existing_content: str,
     padding_target: int,
+    retrieval_items: list[dict[str, Any]] | None = None,
 ) -> str:
-    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline)
+    base = _build_card_agent_prompt("draft", payload, cards, confirmed_outline, retrieval_items=retrieval_items)
     return f"""{base}
 
 [PADDING CONTROL]

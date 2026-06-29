@@ -25,6 +25,11 @@ def rag_health():
         vector_size=int(health.get("vector_size") or 0),
         distance=str(health.get("distance") or ""),
         embedding_provider=str(health.get("embedding_provider") or ""),
+        embedding_model=str(health.get("embedding_model") or ""),
+        embedding_base_url=str(health.get("embedding_base_url") or ""),
+        embedding_configured=bool(health.get("embedding_configured", True)),
+        embedding_vector_size=health.get("embedding_vector_size"),
+        embedding_missing=list(health.get("embedding_missing") or []),
         retrieval_mode=str(health.get("retrieval_mode") or ""),
         error=health.get("error"),
     )

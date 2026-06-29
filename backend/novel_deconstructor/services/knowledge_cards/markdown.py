@@ -325,13 +325,26 @@ def sync_deleted_markdown(db: Session, knowledge_base: KnowledgeBase) -> dict[st
     cards = db.query(KnowledgeCard).filter(KnowledgeCard.knowledge_base_id == knowledge_base.id).all()
     deleted = 0
     deleted_files = 0
+    deleted_card_ids: list[str] = []
     for card in cards:
         if card.markdown_path and not Path(card.markdown_path).exists():
+            deleted_card_ids.append(card.card_id)
+            try:
+                from ..retrieval_index_queue import enqueue_card_delete
+
+                enqueue_card_delete(db, card, process_now=True)
+            except Exception:
+                pass
             if delete_card_physical(db, knowledge_base, card):
                 deleted_files += 1
             deleted += 1
     db.commit()
-    return {"card_id": "*", "status": "updated", "updated_fields": [f"deleted:{deleted}", f"files:{deleted_files}"]}
+    return {
+        "card_id": "*",
+        "status": "updated",
+        "updated_fields": [f"deleted:{deleted}", f"files:{deleted_files}"],
+        "deleted_card_ids": deleted_card_ids,
+    }
 
 def parse_frontmatter(markdown: str) -> tuple[dict[str, Any], str]:
     text = markdown.replace("\r\n", "\n").replace("\r", "\n")

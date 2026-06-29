@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from novel_deconstructor.config import get_settings
-from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, KnowledgeChunk, KnowledgeDocument, WritingMemory
+from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, KnowledgeChunk, KnowledgeDocument, RetrievalIndexEvent, WritingMemory
 from novel_deconstructor.schemas import RAGPreviewRequest, RAGRebuildRequest
 from novel_deconstructor.services.embedding_service import EmbeddingService
 from novel_deconstructor.services.rag_scoring import merge_and_rank_candidates
@@ -135,6 +135,53 @@ def test_openai_compatible_embedding_batches_and_validates_dimension(monkeypatch
     assert calls[0]["timeout"] == 7
 
 
+def test_embedding_provider_alias_uses_runtime_defaults(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "embedding_provider", "doubao")
+    monkeypatch.setattr(settings, "embedding_base_url", "")
+    monkeypatch.setattr(settings, "embedding_model", "doubao-embedding-test")
+    monkeypatch.setattr(settings, "embedding_api_key", "")
+    monkeypatch.setattr(settings, "doubao_base_url", "https://ark.example/api/v3")
+    monkeypatch.setattr(settings, "ark_api_key", "ark-key")
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, headers, json):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    from novel_deconstructor.services import embedding_service
+
+    monkeypatch.setattr(embedding_service.httpx, "Client", FakeClient)
+
+    service = EmbeddingService(vector_size=3)
+    vector = service.embed_query("alpha")
+    health = service.healthcheck()
+
+    assert vector == [1.0, 0.0, 0.0]
+    assert calls[0]["url"] == "https://ark.example/api/v3/embeddings"
+    assert calls[0]["headers"]["Authorization"] == "Bearer ark-key"
+    assert calls[0]["json"]["model"] == "doubao-embedding-test"
+    assert health["embedding_configured"] is True
+    assert health["embedding_base_url"] == "https://ark.example/api/v3"
+
+
 def test_openai_compatible_embedding_rejects_dimension_mismatch(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "embedding_base_url", "https://embedding.example/v1")
@@ -251,6 +298,39 @@ def test_index_knowledge_card_only_upserts_canonical_retrievable_active_cards(mo
     assert hidden_result["deleted"] is True
     assert len(upserts) == 1
     assert deletes
+
+
+def test_retrieval_index_event_queue_processes_card_upsert_and_delete(monkeypatch):
+    db, kb = _session()
+    card = _add_card(db, kb, "WR-QUEUE", content="queued index beacon")
+    indexed = []
+    deleted = []
+
+    from novel_deconstructor.services import retrieval_index_queue
+
+    def fake_index(db_arg, card_arg):
+        indexed.append(card_arg.card_id)
+        return {"indexed": 1, "source_type": "card", "card_id": card_arg.card_id}
+
+    def fake_delete(card_arg):
+        deleted.append(str(card_arg))
+        return {"deleted": True, "source_type": "card", "card_id": str(card_arg)}
+
+    monkeypatch.setattr(retrieval_index_queue, "index_knowledge_card", fake_index)
+    monkeypatch.setattr(retrieval_index_queue, "delete_card_vector", fake_delete)
+
+    retrieval_index_queue.enqueue_card_index(db, card, process_now=False)
+    retrieval_index_queue.enqueue_card_delete(db, "WR-QUEUE", process_now=False)
+    db.commit()
+
+    result = retrieval_index_queue.process_pending_index_events(db, limit=10)
+    db.commit()
+
+    events = db.query(RetrievalIndexEvent).order_by(RetrievalIndexEvent.id).all()
+    assert result == {"processed": 2, "failed": 0, "done": 2}
+    assert [event.status for event in events] == ["done", "done"]
+    assert indexed == ["WR-QUEUE"]
+    assert deleted == ["WR-QUEUE"]
 
 
 def test_rag_health_api_reports_vector_store(monkeypatch):

@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     retrieval_diversity_enabled: bool = True
     retrieval_max_per_source: int = 3
     retrieval_max_per_card_type: int = 5
+    retrieval_index_startup_limit: int = 200
 
     embedding_provider: str = "fake"
     embedding_model: str = ""

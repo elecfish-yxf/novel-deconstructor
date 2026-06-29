@@ -119,6 +119,8 @@ def retrieve_for_writing(
     debug["final_hits"] = len(final_hits)
     debug["selected_count"] = len(final_hits)
     debug["selected_card_ids"] = [hit["id"] for hit in final_hits if hit.get("source_type") == "card"]
+    debug["selected_non_card_ids"] = [hit["id"] for hit in final_hits if hit.get("source_type") != "card"]
+    debug["selected_non_card_count"] = len(debug["selected_non_card_ids"])
     debug["selected_top_k_cards"] = [
         {"id": hit.get("id"), "score": hit.get("score"), "source_type": hit.get("source_type")}
         for hit in final_hits
@@ -458,7 +460,7 @@ def _hydrate_vector_hit(db: Session, hit: VectorHit, scope_filter: dict[str, Any
         reason = scope_filter_reason(hydrated_payload, scope_filter)
         if reason:
             return None
-        return {**_chunk_candidate(chunk, document), "vector_score": hit.score}
+        return {**_chunk_candidate(chunk, document), "workspace_id": hydrated_payload.get("workspace_id"), "vector_score": hit.score}
     return None
 
 
@@ -517,6 +519,8 @@ def _empty_debug(
         "duplicate_group_excluded_count": 0,
         "source_cap_excluded_count": 0,
         "selected_card_ids": [],
+        "selected_non_card_ids": [],
+        "selected_non_card_count": 0,
         "selected_card_scope": {},
         "selected_card_type_distribution": {},
         "selected_scope_distribution": {},
@@ -649,6 +653,8 @@ def _base_payload(kb: KnowledgeBase, source_type: str) -> dict[str, Any]:
         "reveal_at_chapter_index": None,
         "valid_until_volume_index": None,
         "valid_until_chapter_index": None,
+        "valid_from_volume_index": None,
+        "valid_from_chapter_index": None,
         "priority": 0,
         "tags": [],
         "title": "",
@@ -679,6 +685,12 @@ def _chunk_payload(kb: KnowledgeBase, document: KnowledgeDocument, chunk: Knowle
             "scope_level": metadata.get("scope_level") or "global",
             "volume_index": metadata.get("volume_index"),
             "chapter_index": metadata.get("chapter_index"),
+            "reveal_at_volume_index": metadata.get("reveal_at_volume_index"),
+            "reveal_at_chapter_index": metadata.get("reveal_at_chapter_index"),
+            "valid_from_volume_index": metadata.get("valid_from_volume_index"),
+            "valid_from_chapter_index": metadata.get("valid_from_chapter_index"),
+            "valid_until_volume_index": metadata.get("valid_until_volume_index"),
+            "valid_until_chapter_index": metadata.get("valid_until_chapter_index"),
             "title": document.document_title or document.original_filename,
             "summary": chunk.heading or document.structure_path,
             "content_fingerprint": hashlib.sha256(chunk.text.encode("utf-8", errors="ignore")).hexdigest(),
@@ -785,6 +797,7 @@ def _chunk_keyword_candidate(hit: dict[str, Any], payload: dict[str, Any]) -> di
     return {
         "id": stable_point_id("chunk", hit["chunk_id"]),
         "source_type": "chunk",
+        "workspace_id": payload.get("workspace_id"),
         "knowledge_base_id": hit["knowledge_base_id"],
         "document_id": hit["document_id"],
         "chunk_id": hit["chunk_id"],
@@ -797,6 +810,14 @@ def _chunk_keyword_candidate(hit: dict[str, Any], payload: dict[str, Any]) -> di
         "text": hit.get("text"),
         "status": payload.get("status"),
         "scope_level": payload.get("scope_level"),
+        "volume_index": payload.get("volume_index"),
+        "chapter_index": payload.get("chapter_index"),
+        "reveal_at_volume_index": payload.get("reveal_at_volume_index"),
+        "reveal_at_chapter_index": payload.get("reveal_at_chapter_index"),
+        "valid_from_volume_index": payload.get("valid_from_volume_index"),
+        "valid_from_chapter_index": payload.get("valid_from_chapter_index"),
+        "valid_until_volume_index": payload.get("valid_until_volume_index"),
+        "valid_until_chapter_index": payload.get("valid_until_chapter_index"),
         "keyword_score": float(hit.get("score") or 0),
         "priority": 0,
         "citation_id": hit.get("citation_id"),
@@ -834,6 +855,8 @@ def _memory_candidate(memory: WritingMemory) -> dict[str, Any]:
     return {
         "id": stable_point_id("memory", memory.id),
         "source_type": "memory",
+        "workspace_id": memory.workspace_id,
+        "knowledge_base_id": memory.knowledge_base_id,
         "memory_id": memory.id,
         "library_type": "memory",
         "knowledge_type": "memory",
@@ -841,6 +864,7 @@ def _memory_candidate(memory: WritingMemory) -> dict[str, Any]:
         "title": memory.title,
         "summary": _clip(memory.content, 240),
         "content_preview": _clip(memory.content, 320),
+        "text": memory.content,
         "source_ref": memory.source_ref,
         "tags": memory.tags,
         "status": "approved",
@@ -849,11 +873,18 @@ def _memory_candidate(memory: WritingMemory) -> dict[str, Any]:
         "scope_level": memory.scope_level,
         "volume_index": memory.volume_index,
         "chapter_index": memory.chapter_index,
+        "reveal_at_volume_index": memory.reveal_at_volume_index,
+        "reveal_at_chapter_index": memory.reveal_at_chapter_index,
+        "valid_from_volume_index": memory.valid_from_volume_index,
+        "valid_from_chapter_index": memory.valid_from_chapter_index,
+        "valid_until_volume_index": memory.valid_until_volume_index,
+        "valid_until_chapter_index": memory.valid_until_chapter_index,
         "priority": memory.priority or 0,
     }
 
 
 def _chunk_candidate(chunk: KnowledgeChunk, document: KnowledgeDocument) -> dict[str, Any]:
+    metadata = _json_dict(chunk.metadata_json)
     return {
         "id": stable_point_id("chunk", chunk.id),
         "source_type": "chunk",
@@ -868,7 +899,15 @@ def _chunk_candidate(chunk: KnowledgeChunk, document: KnowledgeDocument) -> dict
         "content_preview": _clip(chunk.text, 320),
         "text": chunk.text,
         "status": document.status,
-        "scope_level": "global",
+        "scope_level": metadata.get("scope_level") or "global",
+        "volume_index": metadata.get("volume_index"),
+        "chapter_index": metadata.get("chapter_index"),
+        "reveal_at_volume_index": metadata.get("reveal_at_volume_index"),
+        "reveal_at_chapter_index": metadata.get("reveal_at_chapter_index"),
+        "valid_from_volume_index": metadata.get("valid_from_volume_index"),
+        "valid_from_chapter_index": metadata.get("valid_from_chapter_index"),
+        "valid_until_volume_index": metadata.get("valid_until_volume_index"),
+        "valid_until_chapter_index": metadata.get("valid_until_chapter_index"),
         "priority": 0,
         "original_filename": document.original_filename,
         "structure_path": document.structure_path,

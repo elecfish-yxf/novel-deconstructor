@@ -7,7 +7,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import auth, files, imports, jobs, knowledge, projects, prompts, rag, results, skills, system, writing
 from .config import get_settings
-from .database import init_db
+from .database import SessionLocal, init_db
+from .services.retrieval_index_queue import process_pending_index_events, recover_interrupted_index_events
 
 
 settings = get_settings()
@@ -39,6 +40,12 @@ app.include_router(system.router)
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    db = SessionLocal()
+    try:
+        recover_interrupted_index_events(db)
+        process_pending_index_events(db, limit=settings.retrieval_index_startup_limit, commit_each=True)
+    finally:
+        db.close()
 
 
 @app.get("/health")

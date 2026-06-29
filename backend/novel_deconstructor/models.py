@@ -463,6 +463,29 @@ class WritingMemory(Base):
         return value if isinstance(value, dict) else {}
 
 
+class RetrievalIndexEvent(Base):
+    __tablename__ = "retrieval_index_events"
+    __table_args__ = (
+        Index("idx_retrieval_index_events_status_created", "status", "created_at"),
+        Index("idx_retrieval_index_events_source", "source_type", "source_id", "operation"),
+        Index("idx_retrieval_index_events_workspace", "workspace_id", "knowledge_base_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(String(80), nullable=True, index=True)
+    knowledge_base_id = Column(Integer, nullable=True, index=True)
+    source_type = Column(String(32), nullable=False, index=True)
+    source_id = Column(String(96), nullable=False, index=True)
+    operation = Column(String(32), nullable=False, index=True)
+    status = Column(String(24), default="pending", nullable=False, index=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    last_error = Column(Text, nullable=True)
+    result_json = Column(Text, default="{}", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+
+
 class WritingDraftJob(Base):
     __tablename__ = "writing_draft_jobs"
 

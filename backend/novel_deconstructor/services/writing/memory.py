@@ -270,9 +270,9 @@ def _refresh_volume_continuity_memory(
                 .first()
             )
             if card:
-                _safe_delete_card_vector(card)
+                _safe_delete_card_vector(card, db)
                 delete_card_physical(db, knowledge_base, card)
-            _safe_delete_memory_vector(existing)
+            _safe_delete_memory_vector(existing, db)
             db.delete(existing)
             db.commit()
         return None
@@ -454,11 +454,11 @@ def _delete_memories_and_cards(db: Session, workspace_id: str, memories: list[Wr
             .first()
         )
         if card:
-            _safe_delete_card_vector(card)
+            _safe_delete_card_vector(card, db)
             if delete_card_physical(db, kb, card):
                 deleted_files += 1
             deleted_cards += 1
-        _safe_delete_memory_vector(memory)
+        _safe_delete_memory_vector(memory, db)
         db.delete(memory)
         deleted_memories += 1
     return {"memories": deleted_memories, "cards": deleted_cards, "files": deleted_files}

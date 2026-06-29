@@ -5,7 +5,7 @@ import shutil
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ..database import get_db
 from ..models import AnalysisJob, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
@@ -32,8 +32,8 @@ from ..services.knowledge_base import (
     reindex_document,
     search_knowledge,
 )
+from ..services.retrieval_index_queue import enqueue_document_delete, enqueue_knowledge_base_delete
 from ..services.retrieval_service import delete_document_vectors
-from ..services.vector_store import VectorStore
 from .workspace import get_workspace_id
 
 
@@ -143,7 +143,7 @@ def update_knowledge_base(
 def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _get_kb(db, knowledge_base_id, workspace_id)
     base_dir = knowledge_base_storage_dir(kb)
-    _safe_delete_kb_vectors(workspace_id, kb.id)
+    _safe_delete_kb_vectors(db, workspace_id, kb.id)
     db.delete(kb)
     db.commit()
     if base_dir.exists():
@@ -167,7 +167,7 @@ def bulk_delete_knowledge_bases(
     )
     base_dirs = [knowledge_base_storage_dir(kb) for kb in items]
     for kb in items:
-        _safe_delete_kb_vectors(workspace_id, kb.id)
+        _safe_delete_kb_vectors(db, workspace_id, kb.id)
         db.delete(kb)
     db.commit()
     for base_dir in base_dirs:
@@ -321,10 +321,17 @@ def _safe_delete_document_vectors(document: KnowledgeDocument) -> None:
         delete_document_vectors(document)
     except Exception:
         pass
-
-
-def _safe_delete_kb_vectors(workspace_id: str, knowledge_base_id: int) -> None:
     try:
-        VectorStore().delete_by_payload({"must": [{"key": "workspace_id", "match": workspace_id}, {"key": "knowledge_base_id", "match": knowledge_base_id}]})
+        db = object_session(document)
+        if db is None:
+            return
+        enqueue_document_delete(db, document)
+    except Exception:
+        pass
+
+
+def _safe_delete_kb_vectors(db: Session, workspace_id: str, knowledge_base_id: int) -> None:
+    try:
+        enqueue_knowledge_base_delete(db, workspace_id=workspace_id, knowledge_base_id=knowledge_base_id)
     except Exception:
         pass

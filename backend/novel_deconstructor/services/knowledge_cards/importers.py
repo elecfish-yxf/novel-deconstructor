@@ -567,6 +567,12 @@ def purge_demo_knowledge_cards(db: Session, knowledge_base: KnowledgeBase) -> in
                     path.unlink()
             except OSError:
                 pass
+        try:
+            from ..retrieval_index_queue import enqueue_card_delete
+
+            enqueue_card_delete(db, card, process_now=True)
+        except Exception:
+            pass
         db.delete(card)
         removed += 1
     if removed:

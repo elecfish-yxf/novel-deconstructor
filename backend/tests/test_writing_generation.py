@@ -307,6 +307,59 @@ def test_long_draft_dry_run_returns_sections_and_generation_metadata(tmp_path, m
     assert all(section.continuity_state for section in result.sections)
 
 
+def test_dry_run_prompt_includes_document_chunk_hits(monkeypatch):
+    db, kb = _session()
+
+    from novel_deconstructor.services.writing import orchestration
+
+    def fake_retrieve(db_arg, knowledge_base, payload, *, stage, query):
+        return (
+            [
+                {
+                    "id": "chunk:doc-1",
+                    "source_type": "chunk",
+                    "knowledge_base_id": knowledge_base.id,
+                    "document_id": 1,
+                    "chunk_id": "doc-1",
+                    "library_type": "worldbuilding",
+                    "knowledge_type": "worldbuilding",
+                    "card_type": "knowledge_chunk",
+                    "title": "World notes",
+                    "text": "The sky bridge closes at dawn and only opens for oath bearers.",
+                    "content_preview": "The sky bridge closes at dawn.",
+                    "score": 0.91,
+                    "status": "completed",
+                    "scope_level": "global",
+                }
+            ],
+            {
+                "query": query,
+                "raw_query": query,
+                "warnings": [],
+                "selected_card_ids": [],
+                "selected_non_card_ids": ["chunk:doc-1"],
+                "selected_non_card_count": 1,
+            },
+        )
+
+    monkeypatch.setattr(orchestration, "_retrieve_for_card_agent", fake_retrieve)
+    payload = WritingDraftRequest(
+        knowledge_base_ids=[kb.id],
+        task="Draft a scene using the retrieved world rule.",
+        confirmed_outline="The protagonist reaches the sky bridge before dawn.",
+        current_volume_index=1,
+        current_chapter_index=1,
+        dry_run=True,
+        top_k=3,
+    )
+
+    result = asyncio.run(_generate_with_cards(db, kb, payload, stage="draft", confirmed_outline=payload.confirmed_outline))
+
+    assert "The sky bridge closes at dawn and only opens for oath bearers." in result.prompt_preview
+    assert result.used_knowledge[0].source_type == "chunk"
+    assert result.retrieval_debug.selected_non_card_count == 1
+
+
 def test_long_generation_tail_clip_uses_recent_ending_not_opening():
     text = "开头不应作为续写依据。\n\n" + ("中段推进。" * 600) + "她把铜钥匙攥进掌心，走廊尽头的灯忽然灭了。"
 

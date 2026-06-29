@@ -229,9 +229,10 @@ def reindex_document(db: Session, document: KnowledgeDocument) -> KnowledgeDocum
             raise ValueError("该文件可能是扫描版 PDF，当前版本暂未启用 OCR，未进行索引。")
         db.commit()
         try:
-            from ..services.retrieval_service import index_document_chunks
+            from ..services.retrieval_index_queue import enqueue_document_index
 
-            index_document_chunks(db, document)
+            enqueue_document_index(db, document)
+            db.commit()
         except Exception:
             # Qdrant is only a retrieval index; document reindex must keep SQLite/MySQL as source of truth.
             pass

@@ -173,9 +173,9 @@ def delete_memory(memory_id: int, workspace_id: str = Depends(get_workspace_id),
         .first()
     )
     if card:
-        _safe_delete_card_vector(card)
+        _safe_delete_card_vector(card, db)
         delete_card_physical(db, kb, card)
-    _safe_delete_memory_vector(memory)
+    _safe_delete_memory_vector(memory, db)
     db.delete(memory)
     db.commit()
     return {"ok": True}
@@ -623,7 +623,7 @@ def delete_card(work_id: int, card_id: str, workspace_id: str = Depends(get_work
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     card = get_card_or_404(db, kb, card_id)
     result = card_to_read(card)
-    _safe_delete_card_vector(card)
+    _safe_delete_card_vector(card, db)
     delete_card_physical(db, kb, card)
     db.commit()
     return KnowledgeCardRead.model_validate(result)
@@ -647,7 +647,7 @@ def bulk_delete_cards(
     )
     deleted_files = 0
     for card in cards:
-        _safe_delete_card_vector(card)
+        _safe_delete_card_vector(card, db)
         if delete_card_physical(db, kb, card):
             deleted_files += 1
     db.commit()
@@ -689,7 +689,7 @@ def save_doc(
 @router.delete("/works/{work_id}/knowledge/docs/{doc_id}", response_model=KnowledgeMarkdownSyncResponse)
 def delete_doc(work_id: int, doc_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
-    _safe_delete_card_vector(doc_id)
+    _safe_delete_card_vector(doc_id, db)
     return KnowledgeMarkdownSyncResponse.model_validate(delete_markdown_doc(db, kb, doc_id))
 
 
@@ -711,7 +711,7 @@ def bulk_delete_docs(
     )
     deleted_files = 0
     for card in cards:
-        _safe_delete_card_vector(card)
+        _safe_delete_card_vector(card, db)
         if delete_card_physical(db, kb, card):
             deleted_files += 1
     db.commit()
@@ -777,11 +777,11 @@ def bulk_delete_writing_scope(
 
     deleted_files = 0
     for card in scoped_cards.values():
-        _safe_delete_card_vector(card)
+        _safe_delete_card_vector(card, db)
         if delete_card_physical(db, kb, card):
             deleted_files += 1
     for memory in scoped_memories:
-        _safe_delete_memory_vector(memory)
+        _safe_delete_memory_vector(memory, db)
         db.delete(memory)
     db.commit()
     for volume_index in sorted({volume for volume, _chapter in chapter_refs if volume not in volume_indices}):

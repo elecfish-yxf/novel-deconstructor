@@ -673,6 +673,8 @@ class RetrievalDebug(BaseModel):
     duplicate_group_excluded_count: int = 0
     source_cap_excluded_count: int = 0
     selected_card_ids: list[str] = Field(default_factory=list)
+    selected_non_card_ids: list[str] = Field(default_factory=list)
+    selected_non_card_count: int = 0
     selected_card_scope: dict[str, str] = Field(default_factory=dict)
     selected_card_type_distribution: dict[str, int] = Field(default_factory=dict)
     selected_scope_distribution: dict[str, int] = Field(default_factory=dict)
@@ -694,6 +696,11 @@ class RAGHealthResponse(BaseModel):
     vector_size: int
     distance: str
     embedding_provider: str
+    embedding_model: str = ""
+    embedding_base_url: str = ""
+    embedding_configured: bool = True
+    embedding_vector_size: int | None = None
+    embedding_missing: list[str] = Field(default_factory=list)
     retrieval_mode: str
     error: str | None = None
 

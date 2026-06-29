@@ -9,6 +9,27 @@ import httpx
 from ..config import get_settings
 
 
+OPENAI_COMPATIBLE_PROVIDERS = {
+    "openai",
+    "openai-compatible",
+    "compatible",
+    "doubao",
+    "ark",
+    "volcengine",
+    "dashscope",
+    "qwen",
+    "aliyun",
+    "siliconflow",
+}
+
+PROVIDER_DEFAULT_BASE_URLS = {
+    "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "aliyun": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "siliconflow": "https://api.siliconflow.cn/v1",
+}
+
+
 class EmbeddingService:
     """Embedding facade with fake and OpenAI-compatible providers."""
 
@@ -17,19 +38,36 @@ class EmbeddingService:
         self.provider = (provider or settings.embedding_provider or "fake").strip().lower()
         self.vector_size = max(1, int(vector_size or settings.embedding_vector_size))
         self.model = settings.embedding_model
-        self.base_url = settings.embedding_base_url
-        self.api_key = settings.embedding_api_key
+        self.base_url = _embedding_base_url(self.provider, settings)
+        self.api_key = _embedding_api_key(self.provider, settings)
         self.timeout_seconds = settings.embedding_timeout_seconds
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "fake":
             return [_fake_embedding(text or "", self.vector_size) for text in texts]
-        if self.provider in {"openai", "openai-compatible", "compatible"}:
+        if self.provider in OPENAI_COMPATIBLE_PROVIDERS:
             return self._embed_openai_compatible(texts)
         raise NotImplementedError(f"Unsupported embedding provider: {self.provider}")
 
     def embed_query(self, query: str) -> list[float]:
         return self.embed_texts([query])[0]
+
+    def healthcheck(self) -> dict[str, Any]:
+        configured = self.provider == "fake" or bool(self.base_url and self.model)
+        missing: list[str] = []
+        if self.provider != "fake":
+            if not self.base_url:
+                missing.append("EMBEDDING_BASE_URL")
+            if not self.model:
+                missing.append("EMBEDDING_MODEL")
+        return {
+            "embedding_provider": self.provider,
+            "embedding_model": self.model,
+            "embedding_base_url": self.base_url,
+            "embedding_configured": configured,
+            "embedding_vector_size": self.vector_size,
+            "embedding_missing": missing,
+        }
 
     def _embed_openai_compatible(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -70,6 +108,28 @@ def _parse_openai_embeddings(data: dict[str, Any]) -> list[list[float]]:
             raise RuntimeError("Embedding response item missing embedding")
         vectors.append([float(value) for value in item["embedding"]])
     return vectors
+
+
+def _embedding_base_url(provider: str, settings: Any) -> str:
+    explicit = (settings.embedding_base_url or "").strip()
+    if explicit:
+        return explicit
+    if provider == "openai":
+        return settings.openai_base_url
+    if provider in {"doubao", "ark", "volcengine"}:
+        return settings.doubao_base_url
+    return PROVIDER_DEFAULT_BASE_URLS.get(provider, "")
+
+
+def _embedding_api_key(provider: str, settings: Any) -> str:
+    explicit = (settings.embedding_api_key or "").strip()
+    if explicit:
+        return explicit
+    if provider == "openai":
+        return settings.openai_api_key
+    if provider in {"doubao", "ark", "volcengine"}:
+        return settings.ark_api_key or settings.doubao_api_key
+    return ""
 
 
 def _fake_embedding(text: str, vector_size: int) -> list[float]:

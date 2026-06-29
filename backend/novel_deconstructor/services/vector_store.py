@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import get_settings
+from .embedding_service import EmbeddingService
 
 
 @dataclass
@@ -88,6 +89,7 @@ class VectorStore:
 
     def healthcheck(self) -> dict[str, Any]:
         settings = get_settings()
+        embedding_health = EmbeddingService().healthcheck()
         try:
             client, _models = self._client_and_models()
             collections = client.get_collections()
@@ -113,7 +115,7 @@ class VectorStore:
                 "points_count": points_count,
                 "vector_size": vector_size,
                 "distance": distance,
-                "embedding_provider": settings.embedding_provider,
+                **embedding_health,
                 "retrieval_mode": settings.retrieval_mode,
             }
         except Exception as exc:  # noqa: BLE001 - health reports the integration boundary.
@@ -125,7 +127,7 @@ class VectorStore:
                 "points_count": 0,
                 "vector_size": int(settings.qdrant_vector_size),
                 "distance": settings.qdrant_distance,
-                "embedding_provider": settings.embedding_provider,
+                **embedding_health,
                 "retrieval_mode": settings.retrieval_mode,
                 "error": str(exc),
             }
