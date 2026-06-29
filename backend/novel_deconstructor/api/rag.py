@@ -30,7 +30,11 @@ def rag_health():
         embedding_configured=bool(health.get("embedding_configured", True)),
         embedding_vector_size=health.get("embedding_vector_size"),
         embedding_missing=list(health.get("embedding_missing") or []),
+        embedding_qdrant_size_match=health.get("embedding_qdrant_size_match"),
+        collection_vector_size_matches_config=health.get("collection_vector_size_matches_config"),
+        collection_distance_matches_config=health.get("collection_distance_matches_config"),
         retrieval_mode=str(health.get("retrieval_mode") or ""),
+        warnings=list(health.get("warnings") or []),
         error=health.get("error"),
     )
 

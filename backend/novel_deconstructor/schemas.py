@@ -701,7 +701,11 @@ class RAGHealthResponse(BaseModel):
     embedding_configured: bool = True
     embedding_vector_size: int | None = None
     embedding_missing: list[str] = Field(default_factory=list)
+    embedding_qdrant_size_match: bool | None = None
+    collection_vector_size_matches_config: bool | None = None
+    collection_distance_matches_config: bool | None = None
     retrieval_mode: str
+    warnings: list[str] = Field(default_factory=list)
     error: str | None = None
 
 

@@ -50,6 +50,8 @@ EMBEDDING_TIMEOUT_SECONDS=30
 
 `EMBEDDING_VECTOR_SIZE` and `QDRANT_VECTOR_SIZE` should match the embedding model dimension. The OpenAI-compatible provider validates response dimensions and fails the vector path early if the provider returns the wrong size.
 
+The backend also validates point vector dimensions before upsert and reports whether the existing Qdrant collection size/distance matches the current config in `/api/rag/health`. If the embedding dimension changes, use a new `QDRANT_COLLECTION` name or recreate the existing collection, then run a force rebuild.
+
 ## MySQL/RDS Notes
 
 The current application initializes tables through SQLAlchemy metadata at startup. No Alembic migration flow is required for the current deployment shape. For a fresh RDS database:
@@ -70,6 +72,8 @@ Recommended RDS settings:
 ## Qdrant Lifecycle
 
 Qdrant is rebuildable. Deleting a knowledge base or knowledge document attempts to delete matching Qdrant payloads, but SQL remains authoritative.
+
+Point IDs are deterministic UUIDv5 values derived from source type and source ID. Business IDs such as `card_id`, `document_id`, `chunk_id`, and `memory_id` remain in payload fields so delete/rebuild operations still work by payload filters while staying compatible with Qdrant point ID requirements.
 
 Health:
 
@@ -136,7 +140,7 @@ These fields are currently stored as payload metadata only. They do not change r
 ## Troubleshooting
 
 - `qdrant_available=false`: check `QDRANT_URL`, network/security group, and container health. Retrieval should continue through keyword fallback.
-- `dimension mismatch`: set `QDRANT_VECTOR_SIZE` and `EMBEDDING_VECTOR_SIZE` to the embedding model dimension, then force rebuild.
+- `dimension mismatch`: set `QDRANT_VECTOR_SIZE` and `EMBEDDING_VECTOR_SIZE` to the embedding model dimension. If the existing collection was created with another size or distance, use a new `QDRANT_COLLECTION` or recreate the collection, then force rebuild.
 - `Embedding request failed`: check `EMBEDDING_BASE_URL`, model name, API key, and provider compatibility with `/embeddings`.
 - Empty preview: verify the selected workspace and knowledge base IDs, then run rebuild dry-run to confirm planned documents/cards/memories.
 - RDS connection failures: verify the RDS endpoint, database name, user, URL-encoded password, VPC routing, and security group ingress from the backend host.

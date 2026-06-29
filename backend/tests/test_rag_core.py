@@ -1,5 +1,7 @@
 import hashlib
 import json
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine
@@ -11,6 +13,13 @@ from novel_deconstructor.schemas import RAGPreviewRequest, RAGRebuildRequest
 from novel_deconstructor.services.embedding_service import EmbeddingService
 from novel_deconstructor.services.rag_scoring import merge_and_rank_candidates
 from novel_deconstructor.services.retrieval_service import index_knowledge_card, retrieve_for_writing
+from novel_deconstructor.services.vector_store import (
+    VectorPoint,
+    VectorStore,
+    _collection_config_status,
+    _qdrant_embedding_status,
+    stable_point_id,
+)
 
 
 def _session():
@@ -86,6 +95,48 @@ def test_fake_embedding_is_deterministic_and_uses_configured_size(monkeypatch):
 
     assert first == second
     assert len(first) == 16
+
+
+def test_stable_point_id_is_deterministic_uuid():
+    first = stable_point_id("card", "WR-INDEX")
+    second = stable_point_id("card", "WR-INDEX")
+
+    assert first == second
+    assert UUID(first).version == 5
+    assert first != stable_point_id("chunk", "WR-INDEX")
+
+
+def test_vector_store_rejects_wrong_point_dimension(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "qdrant_vector_size", 8)
+
+    store = VectorStore()
+    point = VectorPoint(id=stable_point_id("card", "WR-BAD"), vector=[0.0] * 7, payload={})
+
+    with pytest.raises(RuntimeError, match="Vector dimension mismatch"):
+        store.upsert_points([point])
+
+
+def test_qdrant_health_flags_collection_and_embedding_mismatch(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "qdrant_vector_size", 1536)
+    monkeypatch.setattr(settings, "qdrant_distance", "Cosine")
+    info = SimpleNamespace(
+        config=SimpleNamespace(params=SimpleNamespace(vectors=SimpleNamespace(size=1024, distance="Distance.COSINE")))
+    )
+
+    collection_status = _collection_config_status(info, settings)
+    status = _qdrant_embedding_status(
+        collection_exists=True,
+        collection_status=collection_status,
+        embedding_health={"embedding_vector_size": 768},
+        settings=settings,
+    )
+
+    assert collection_status["collection_vector_size_matches_config"] is False
+    assert collection_status["collection_distance_matches_config"] is True
+    assert status["embedding_qdrant_size_match"] is False
+    assert len(status["warnings"]) == 2
 
 
 def test_openai_compatible_embedding_batches_and_validates_dimension(monkeypatch):
@@ -292,7 +343,8 @@ def test_index_knowledge_card_only_upserts_canonical_retrievable_active_cards(mo
     hidden_result = index_knowledge_card(db, hidden)
 
     assert good_result["indexed"] == 1
-    assert upserts[0].id == "card:WR-INDEX"
+    assert upserts[0].id == stable_point_id("card", "WR-INDEX")
+    assert UUID(upserts[0].id).version == 5
     assert upserts[0].payload["workspace_id"] == "ws_rag"
     assert upserts[0].payload["priority"] == 25
     assert hidden_result["deleted"] is True
@@ -346,7 +398,16 @@ def test_rag_health_api_reports_vector_store(monkeypatch):
                 "vector_size": 8,
                 "distance": "Cosine",
                 "embedding_provider": "fake",
+                "embedding_model": "",
+                "embedding_base_url": "",
+                "embedding_configured": True,
+                "embedding_vector_size": 8,
+                "embedding_missing": [],
+                "embedding_qdrant_size_match": True,
+                "collection_vector_size_matches_config": True,
+                "collection_distance_matches_config": True,
                 "retrieval_mode": "hybrid",
+                "warnings": [],
             }
 
     monkeypatch.setattr(rag_api, "VectorStore", FakeVectorStore)
@@ -357,6 +418,7 @@ def test_rag_health_api_reports_vector_store(monkeypatch):
     assert response.collection == "novel_vectors"
     assert response.points_count == 12
     assert response.embedding_provider == "fake"
+    assert response.embedding_qdrant_size_match is True
 
 
 def test_rag_rebuild_api_dry_run_and_force_indexes_scope(monkeypatch):

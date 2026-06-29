@@ -380,7 +380,16 @@ export type RAGHealth = {
   vector_size: number;
   distance: string;
   embedding_provider: string;
+  embedding_model: string;
+  embedding_base_url: string;
+  embedding_configured: boolean;
+  embedding_vector_size?: number | null;
+  embedding_missing: string[];
+  embedding_qdrant_size_match?: boolean | null;
+  collection_vector_size_matches_config?: boolean | null;
+  collection_distance_matches_config?: boolean | null;
   retrieval_mode: string;
+  warnings: string[];
   error?: string | null;
 };
 

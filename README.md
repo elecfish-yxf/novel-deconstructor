@@ -57,7 +57,7 @@ Upload Novel
 - 主要面向本地个人使用、学习和项目演示。
 - 不是企业级 SaaS，也不是多租户商业平台。
 - 本地匿名模式下，浏览器 workspace 是轻量隔离机制；云端可开启个人项目级账号登录，但不是企业级 RBAC。
-- 当前 RAG 是 SQLite 文档分块 + 本地关键词召回，不是完整向量数据库。
+- 当前 RAG 支持关键词检索，也支持可选 Qdrant 向量索引；默认配置仍是 `RETRIEVAL_MODE=keyword` 和 `EMBEDDING_PROVIDER=fake`，生产语义检索需要显式配置真实 embedding provider。
 - 当前图谱导出是轻量 JSON/Markdown，不是生产级 GraphRAG。
 - 拆书输出应抽象写作方法，不应生成可替代原作阅读的大段内容。
 
@@ -265,7 +265,7 @@ user task
   -> confirmed output writes Memory
 ```
 
-这套 RAG 的重点是可解释和轻量：你能看到召回了哪些卡片、scope 过滤前后候选数、哪些未来知识被过滤、哪些重复内容被过滤。它仍然不是生产级向量 RAG，没有集成 Qdrant、Chroma、Milvus 或 pgvector；本轮实现的是 scope-safe lightweight RAG。
+这套 RAG 的重点是可解释和轻量：你能看到召回了哪些卡片、scope 过滤前后候选数、哪些未来知识被过滤、哪些重复内容被过滤。它已经接入 Qdrant 作为可重建的向量索引层，SQL 仍是知识库、文档分块、卡片和 Memory 的事实来源；默认配置偏向本地关键词召回，启用正式语义检索时需要切到 `RETRIEVAL_MODE=hybrid` 或 `vector`，配置真实 embedding provider，并调用 `/api/rag/rebuild` 重建索引。当前图谱导出仍不是生产级 GraphRAG。
 
 ## Long Text Generation
 

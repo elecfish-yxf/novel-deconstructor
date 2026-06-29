@@ -371,7 +371,17 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
               <div><strong>{ragHealth?.embedding_provider || "-"}</strong><span>embedding</span></div>
               <div><strong>{ragHealth?.retrieval_mode || "-"}</strong><span>mode</span></div>
             </div>
-            <small>{ragHealth?.collection || "collection unset"} / {ragHealth?.vector_size || 0}d / {ragHealth?.distance || "-"}</small>
+            <small>
+              {ragHealth?.collection || "collection unset"} / qdrant {ragHealth?.vector_size || 0}d / {ragHealth?.distance || "-"}
+              {typeof ragHealth?.embedding_vector_size === "number" ? ` / embedding ${ragHealth.embedding_vector_size}d` : ""}
+              {ragHealth?.embedding_model ? ` / ${ragHealth.embedding_model}` : ""}
+            </small>
+            {ragHealth?.embedding_configured === false && (
+              <p className="muted">Embedding missing: {ragHealth.embedding_missing.join(", ") || "configuration"}</p>
+            )}
+            {ragHealth?.warnings?.map((warning, index) => (
+              <p className="muted" key={`rag-warning-${index}`}>{warning}</p>
+            ))}
             {ragHealth?.error && <p className="muted">{ragHealth.error}</p>}
             <div className="writing-card-actions">
               <button onClick={() => rebuildRAG(false)} disabled={!selected || state.busy === "rag-dry-run"}>Dry Run</button>
