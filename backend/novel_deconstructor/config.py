@@ -36,7 +36,30 @@ class Settings(BaseSettings):
     chunk_overlap_chars: int = 800
     knowledge_chunk_size: int = 900
     knowledge_chunk_overlap: int = 120
-    retrieval_top_k: int = 6
+    qdrant_url: str = "http://qdrant:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "novel_knowledge"
+    qdrant_vector_size: int = 1024
+    qdrant_distance: str = "Cosine"
+
+    retrieval_mode: str = "keyword"
+    retrieval_top_k: int = 12
+    retrieval_candidate_k: int = 80
+    retrieval_keyword_weight: float = 0.35
+    retrieval_vector_weight: float = 0.65
+    retrieval_scope_filter_enabled: bool = True
+    retrieval_diversity_enabled: bool = True
+    retrieval_max_per_source: int = 3
+    retrieval_max_per_card_type: int = 5
+
+    embedding_provider: str = "fake"
+    embedding_model: str = ""
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_vector_size: int = 1024
+    embedding_batch_size: int = 32
+    embedding_timeout_seconds: int = 60
+
     default_concurrency: int = 1
     allow_absolute_output_path: bool = False
     enable_directory_picker: bool = True
@@ -70,4 +93,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

@@ -83,6 +83,14 @@ from ..services.knowledge_cards import (
 from ..services.knowledge_base import search_knowledge
 from ..services.llm_provider import DoubaoResponsesProvider, LLMProvider, LLMRequest, OpenAICompatibleProvider, is_doubao_base_url
 from ..services.rag_retrieval import search_rag_cards
+from ..services.retrieval_service import (
+    delete_card_vector,
+    delete_memory_vector,
+    index_knowledge_card,
+    index_writing_memory,
+    rebuild_knowledge_base_vectors,
+    retrieve_for_writing,
+)
 from .workspace import get_workspace_id
 
 
@@ -188,7 +196,9 @@ def delete_memory(memory_id: int, workspace_id: str = Depends(get_workspace_id),
         .first()
     )
     if card:
+        _safe_delete_card_vector(card)
         delete_card_physical(db, kb, card)
+    _safe_delete_memory_vector(memory)
     db.delete(memory)
     db.commit()
     return {"ok": True}
@@ -460,6 +470,7 @@ def import_package_to_work(
     )
     # 知识卡导入后自动同步书卷大纲
     sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    _safe_rebuild_kb_vectors(db, kb)
     return KnowledgePackageImportResponse(**result)
 
 
@@ -482,6 +493,7 @@ def import_markdown_to_work(
     )
     # 知识卡导入后自动同步书卷大纲
     sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    _safe_rebuild_kb_vectors(db, kb)
     return KnowledgeMarkdownImportResponse(**result)
 
 
@@ -513,6 +525,7 @@ async def upload_markdown_to_work(
     )
     # 知识卡导入后自动同步书卷大纲
     sync_book_volume_outlines_from_cards(db, kb, workspace_id)
+    _safe_rebuild_kb_vectors(db, kb)
     return KnowledgeMarkdownImportResponse(**result)
 
 
@@ -581,15 +594,15 @@ def apply_card_merges(
 ):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     payload = payload or KnowledgeMergeRequest()
-    return KnowledgeMergeApplyResponse.model_validate(
-        apply_knowledge_card_merges(
-            db,
-            kb,
-            merge_mode=payload.merge_mode,
-            auto_merge_threshold=payload.auto_merge_threshold,
-            review_threshold=payload.review_threshold,
-        )
+    result = apply_knowledge_card_merges(
+        db,
+        kb,
+        merge_mode=payload.merge_mode,
+        auto_merge_threshold=payload.auto_merge_threshold,
+        review_threshold=payload.review_threshold,
     )
+    _safe_rebuild_kb_vectors(db, kb)
+    return KnowledgeMergeApplyResponse.model_validate(result)
 
 
 @router.get("/works/{work_id}/knowledge/merge/stats", response_model=KnowledgeMergeStatsResponse)
@@ -624,6 +637,7 @@ def update_card(
     write_card_markdown(kb, card)
     db.commit()
     db.refresh(card)
+    _safe_index_card(db, card)
     return KnowledgeCardRead.model_validate(card_to_read(card))
 
 
@@ -632,6 +646,7 @@ def delete_card(work_id: int, card_id: str, workspace_id: str = Depends(get_work
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
     card = get_card_or_404(db, kb, card_id)
     result = card_to_read(card)
+    _safe_delete_card_vector(card)
     delete_card_physical(db, kb, card)
     db.commit()
     return KnowledgeCardRead.model_validate(result)
@@ -653,7 +668,11 @@ def bulk_delete_cards(
         .filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id.in_(unique_ids))
         .all()
     )
-    deleted_files = sum(1 for card in cards if delete_card_physical(db, kb, card))
+    deleted_files = 0
+    for card in cards:
+        _safe_delete_card_vector(card)
+        if delete_card_physical(db, kb, card):
+            deleted_files += 1
     db.commit()
     return KnowledgeDocumentBulkDeleteResponse(deleted=len(cards), message=f"已删除 {len(cards)} 张知识卡，清理 {deleted_files} 个 Markdown 文件")
 
@@ -661,7 +680,9 @@ def bulk_delete_cards(
 @router.post("/works/{work_id}/knowledge/cards/{card_id}/unmerge", response_model=KnowledgeCardRead)
 def unmerge_card(work_id: int, card_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
-    return KnowledgeCardRead.model_validate(card_to_read(unmerge_knowledge_card(db, kb, card_id)))
+    card = unmerge_knowledge_card(db, kb, card_id)
+    _safe_index_card(db, card)
+    return KnowledgeCardRead.model_validate(card_to_read(card))
 
 
 @router.get("/works/{work_id}/knowledge/docs", response_model=list[KnowledgeMarkdownDocRead])
@@ -691,6 +712,7 @@ def save_doc(
 @router.delete("/works/{work_id}/knowledge/docs/{doc_id}", response_model=KnowledgeMarkdownSyncResponse)
 def delete_doc(work_id: int, doc_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
+    _safe_delete_card_vector(doc_id)
     return KnowledgeMarkdownSyncResponse.model_validate(delete_markdown_doc(db, kb, doc_id))
 
 
@@ -710,7 +732,11 @@ def bulk_delete_docs(
         .filter(KnowledgeCard.knowledge_base_id == kb.id, KnowledgeCard.card_id.in_(unique_ids))
         .all()
     )
-    deleted_files = sum(1 for card in cards if delete_card_physical(db, kb, card))
+    deleted_files = 0
+    for card in cards:
+        _safe_delete_card_vector(card)
+        if delete_card_physical(db, kb, card):
+            deleted_files += 1
     db.commit()
     return KnowledgeDocumentBulkDeleteResponse(deleted=len(cards), message=f"已删除 {len(cards)} 个 Markdown 文档，清理 {deleted_files} 个文件")
 
@@ -718,19 +744,25 @@ def bulk_delete_docs(
 @router.post("/works/{work_id}/knowledge/docs/{doc_id}/sync", response_model=KnowledgeMarkdownSyncResponse)
 def sync_doc_to_card(work_id: int, doc_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
-    return KnowledgeMarkdownSyncResponse.model_validate(sync_card_from_markdown(db, kb, doc_id))
+    result = sync_card_from_markdown(db, kb, doc_id)
+    _safe_index_card(db, get_card_or_404(db, kb, doc_id))
+    return KnowledgeMarkdownSyncResponse.model_validate(result)
 
 
 @router.post("/works/{work_id}/knowledge/cards/{card_id}/export-md", response_model=KnowledgeMarkdownDocContent)
 def export_card_to_doc(work_id: int, card_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
-    return KnowledgeMarkdownDocContent.model_validate(export_card_markdown(db, kb, card_id))
+    result = export_card_markdown(db, kb, card_id)
+    _safe_index_card(db, get_card_or_404(db, kb, card_id))
+    return KnowledgeMarkdownDocContent.model_validate(result)
 
 
 @router.post("/works/{work_id}/knowledge/docs/sync-deleted", response_model=KnowledgeMarkdownSyncResponse)
 def sync_deleted_docs(work_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _ensure_workspace_kb(db, workspace_id, work_id)
-    return KnowledgeMarkdownSyncResponse.model_validate(sync_deleted_markdown(db, kb))
+    result = sync_deleted_markdown(db, kb)
+    _safe_rebuild_kb_vectors(db, kb)
+    return KnowledgeMarkdownSyncResponse.model_validate(result)
 
 
 @router.post("/works/{work_id}/chapters/bulk-delete", response_model=WritingScopeBulkDeleteResponse)
@@ -768,9 +800,11 @@ def bulk_delete_writing_scope(
 
     deleted_files = 0
     for card in scoped_cards.values():
+        _safe_delete_card_vector(card)
         if delete_card_physical(db, kb, card):
             deleted_files += 1
     for memory in scoped_memories:
+        _safe_delete_memory_vector(memory)
         db.delete(memory)
     db.commit()
     for volume_index in sorted({volume for volume, _chapter in chapter_refs if volume not in volume_indices}):
@@ -1114,7 +1148,9 @@ def _create_memory_record(
     db.add(memory)
     db.commit()
     db.refresh(memory)
-    sync_memory_card(db, knowledge_base, memory)
+    card = sync_memory_card(db, knowledge_base, memory)
+    _safe_index_memory(db, memory)
+    _safe_index_card(db, card)
     db.refresh(memory)
     return memory
 
@@ -1274,7 +1310,9 @@ def _refresh_volume_continuity_memory(
                 .first()
             )
             if card:
+                _safe_delete_card_vector(card)
                 delete_card_physical(db, knowledge_base, card)
+            _safe_delete_memory_vector(existing)
             db.delete(existing)
             db.commit()
         return None
@@ -1310,7 +1348,9 @@ def _refresh_volume_continuity_memory(
         existing.priority = max(existing.priority or 0, 95)
         db.commit()
         db.refresh(existing)
-        sync_memory_card(db, knowledge_base, existing)
+        card = sync_memory_card(db, knowledge_base, existing)
+        _safe_index_memory(db, existing)
+        _safe_index_card(db, card)
         db.refresh(existing)
         return existing
 
@@ -1738,6 +1778,7 @@ def _upsert_outline_card(
         existing.updated_at = datetime.utcnow()
         db.flush()
         write_card_markdown(kb, existing)
+        _safe_index_card(db, existing)
         return existing
 
     # 新建卡片
@@ -1784,6 +1825,7 @@ def _upsert_outline_card(
     db.add(card)
     db.flush()
     write_card_markdown(kb, card)
+    _safe_index_card(db, card)
     return card
 
 
@@ -2066,6 +2108,53 @@ async def _run_draft_generation_job(job_id: str, work_id: int, workspace_id: str
         db.close()
 
 
+def _retrieve_for_card_agent(
+    db: Session,
+    knowledge_base: KnowledgeBase,
+    payload: WritingGenerateRequest,
+    *,
+    stage: str,
+    query: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    settings = get_settings()
+    try:
+        retrieval = retrieve_for_writing(
+            db,
+            workspace_id=knowledge_base.workspace_id,
+            knowledge_base_ids=[knowledge_base.id],
+            query=query,
+            phase=stage,
+            target_volume_index=payload.current_volume_index,
+            target_chapter_index=payload.current_chapter_index,
+            top_k=payload.top_k or settings.retrieval_top_k,
+            include_future=payload.include_future_knowledge,
+            include_raw=payload.include_raw_knowledge,
+        )
+        debug = retrieval["retrieval_debug"]
+        card_results = [hit for hit in retrieval["hits"] if hit.get("source_type") == "card"]
+        non_card_count = len(retrieval["hits"]) - len(card_results)
+        if non_card_count:
+            debug.setdefault("warnings", []).append(f"non_card_hits_available:{non_card_count}")
+        return card_results, debug
+    except Exception as exc:  # noqa: BLE001 - keep writing agent available if the new service regresses.
+        results, debug = search_rag_cards(
+            db,
+            [knowledge_base.id],
+            stage=stage,
+            query=query,
+            top_k=payload.top_k or settings.retrieval_top_k,
+            current_volume_index=payload.current_volume_index,
+            current_chapter_index=payload.current_chapter_index,
+            include_future=payload.include_future_knowledge,
+            include_raw=payload.include_raw_knowledge,
+        )
+        debug["mode"] = "keyword"
+        debug["effective_mode"] = "keyword"
+        debug["fallback"] = f"retrieval_service_error:{type(exc).__name__}:{exc}"
+        debug.setdefault("warnings", []).append("new_retrieval_service_failed")
+        return results, debug
+
+
 async def _generate_with_cards(
     db: Session,
     knowledge_base: KnowledgeBase,
@@ -2088,17 +2177,7 @@ async def _generate_with_cards(
         )
 
     query = "\n".join(item for item in [payload.task, confirmed_outline, payload.current_content] if item)
-    results, debug = search_rag_cards(
-        db,
-        [knowledge_base.id],
-        stage=stage,
-        query=query,
-        top_k=payload.top_k or settings.retrieval_top_k,
-        current_volume_index=payload.current_volume_index,
-        current_chapter_index=payload.current_chapter_index,
-        include_future=payload.include_future_knowledge,
-        include_raw=payload.include_raw_knowledge,
-    )
+    results, debug = _retrieve_for_card_agent(db, knowledge_base, payload, stage=stage, query=query)
     results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
     if payload.knowledge_mode == "strict" and not results:
         total = debug.get("total_candidates", 0)
@@ -2275,17 +2354,7 @@ async def _generate_long_draft_with_cards(
             previous_content,
         )
         query = "\n".join(item for item in [payload.task, confirmed_outline, focus, previous_tail] if item)
-        results, debug = search_rag_cards(
-            db,
-            [knowledge_base.id],
-            stage="draft",
-            query=query,
-            top_k=payload.top_k or settings.retrieval_top_k,
-            current_volume_index=payload.current_volume_index,
-            current_chapter_index=payload.current_chapter_index,
-            include_future=payload.include_future_knowledge,
-            include_raw=payload.include_raw_knowledge,
-        )
+        results, debug = _retrieve_for_card_agent(db, knowledge_base, payload, stage="draft", query=query)
         results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
         cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
         _merge_retrieval_debug(aggregate_debug, debug)
@@ -2390,17 +2459,7 @@ async def _generate_long_draft_with_cards(
             progress_callback({"status": "supplementing"})
         padding_target = min(DEFAULT_LONG_SECTION_CHARS, max(500, target_min - actual_chars))
         padding_query = "\n".join([payload.task, confirmed_outline, "补齐整体字数，延展场景动作、对话互动、冲突升级、情绪余波和章尾牵引。", _tail_clip(content, 1800)])
-        results, debug = search_rag_cards(
-            db,
-            [knowledge_base.id],
-            stage="draft",
-            query=padding_query,
-            top_k=payload.top_k or settings.retrieval_top_k,
-            current_volume_index=payload.current_volume_index,
-            current_chapter_index=payload.current_chapter_index,
-            include_future=payload.include_future_knowledge,
-            include_raw=payload.include_raw_knowledge,
-        )
+        results, debug = _retrieve_for_card_agent(db, knowledge_base, payload, stage="draft", query=padding_query)
         results = _augment_results_with_priority_context(db, knowledge_base.id, results, payload, debug)
         cards, prompt_results = _prompt_cards_for_results(db, knowledge_base.id, results, payload=payload, debug=debug)
         _merge_retrieval_debug(aggregate_debug, debug)
@@ -3683,12 +3742,57 @@ def _delete_memories_and_cards(db: Session, workspace_id: str, memories: list[Wr
             .first()
         )
         if card:
+            _safe_delete_card_vector(card)
             if delete_card_physical(db, kb, card):
                 deleted_files += 1
             deleted_cards += 1
+        _safe_delete_memory_vector(memory)
         db.delete(memory)
         deleted_memories += 1
     return {"memories": deleted_memories, "cards": deleted_cards, "files": deleted_files}
+
+
+def _safe_index_card(db: Session, card: KnowledgeCard | None) -> None:
+    if not card:
+        return
+    try:
+        index_knowledge_card(db, card)
+    except Exception:
+        pass
+
+
+def _safe_delete_card_vector(card: KnowledgeCard | str | None) -> None:
+    if not card:
+        return
+    try:
+        delete_card_vector(card)
+    except Exception:
+        pass
+
+
+def _safe_index_memory(db: Session, memory: WritingMemory | None) -> None:
+    if not memory:
+        return
+    try:
+        index_writing_memory(db, memory)
+    except Exception:
+        pass
+
+
+def _safe_delete_memory_vector(memory: WritingMemory | int | None) -> None:
+    if not memory:
+        return
+    try:
+        delete_memory_vector(memory)
+    except Exception:
+        pass
+
+
+def _safe_rebuild_kb_vectors(db: Session, knowledge_base: KnowledgeBase) -> None:
+    try:
+        rebuild_knowledge_base_vectors(db, knowledge_base)
+    except Exception:
+        pass
 
 
 def _ensure_workspace_kb(db: Session, workspace_id: str, knowledge_base_id: int) -> KnowledgeBase:

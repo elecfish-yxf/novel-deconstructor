@@ -32,6 +32,8 @@ from ..services.knowledge_base import (
     reindex_document,
     search_knowledge,
 )
+from ..services.retrieval_service import delete_document_vectors
+from ..services.vector_store import VectorStore
 from .workspace import get_workspace_id
 
 
@@ -141,6 +143,7 @@ def update_knowledge_base(
 def delete_knowledge_base(knowledge_base_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     kb = _get_kb(db, knowledge_base_id, workspace_id)
     base_dir = knowledge_base_storage_dir(kb)
+    _safe_delete_kb_vectors(workspace_id, kb.id)
     db.delete(kb)
     db.commit()
     if base_dir.exists():
@@ -164,6 +167,7 @@ def bulk_delete_knowledge_bases(
     )
     base_dirs = [knowledge_base_storage_dir(kb) for kb in items]
     for kb in items:
+        _safe_delete_kb_vectors(workspace_id, kb.id)
         db.delete(kb)
     db.commit()
     for base_dir in base_dirs:
@@ -268,6 +272,7 @@ def reindex(document_id: int, workspace_id: str = Depends(get_workspace_id), db:
 def delete_document(document_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     document = _get_document(db, document_id, workspace_id)
     stored_dir = Path(document.stored_path).parent if document.stored_path else None
+    _safe_delete_document_vectors(document)
     db.delete(document)
     db.commit()
     if stored_dir and stored_dir.exists():
@@ -295,6 +300,7 @@ def bulk_delete_documents(
     documents = query.all()
     stored_dirs = [Path(document.stored_path).parent for document in documents if document.stored_path]
     for document in documents:
+        _safe_delete_document_vectors(document)
         db.delete(document)
     db.commit()
     for stored_dir in stored_dirs:
@@ -308,3 +314,17 @@ def retrieval_search(payload: RetrievalSearchRequest, workspace_id: str = Depend
     kb_ids = _workspace_kb_ids(db, workspace_id, payload.knowledge_base_ids)
     hits = search_knowledge(db, kb_ids, payload.query, payload.top_k) if kb_ids else []
     return RetrievalSearchResponse(hits=hits)
+
+
+def _safe_delete_document_vectors(document: KnowledgeDocument) -> None:
+    try:
+        delete_document_vectors(document)
+    except Exception:
+        pass
+
+
+def _safe_delete_kb_vectors(workspace_id: str, knowledge_base_id: int) -> None:
+    try:
+        VectorStore().delete_by_payload({"must": [{"key": "workspace_id", "match": workspace_id}, {"key": "knowledge_base_id", "match": knowledge_base_id}]})
+    except Exception:
+        pass

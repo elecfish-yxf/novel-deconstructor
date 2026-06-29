@@ -346,8 +346,11 @@ export type UsedKnowledge = {
   card_type: string;
   title: string;
   score: number;
+  source_type?: string | null;
+  reason?: string | null;
   source_ref: Record<string, unknown>;
   content_preview?: string;
+  concise_content?: string | null;
   tags?: string[];
   status?: string | null;
   retrieval_level?: string | null;
@@ -361,6 +364,60 @@ export type RAGSearchResult = UsedKnowledge & {
   content_preview: string;
   tags: string[];
   status: string;
+  final_score?: number | null;
+  vector_score?: number | null;
+  keyword_score?: number | null;
+  type_bonus?: number | null;
+  priority_bonus?: number | null;
+  source_modes?: string[];
+};
+
+export type RAGHealth = {
+  qdrant_available: boolean;
+  collection: string;
+  collection_exists: boolean;
+  points_count: number;
+  vector_size: number;
+  distance: string;
+  embedding_provider: string;
+  retrieval_mode: string;
+  error?: string | null;
+};
+
+export type RAGRebuildPayload = {
+  knowledge_base_ids?: number[];
+  document_ids?: number[];
+  card_ids?: string[];
+  memory_ids?: number[];
+  dry_run?: boolean;
+  force?: boolean;
+};
+
+export type RAGRebuildResult = {
+  dry_run: boolean;
+  force: boolean;
+  planned: Record<string, number>;
+  indexed: Record<string, number>;
+  skipped: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+};
+
+export type RAGPreviewPayload = {
+  query: string;
+  phase?: string;
+  knowledge_base_ids?: number[];
+  library_types?: string[] | null;
+  target_volume_index?: number | null;
+  target_chapter_index?: number | null;
+  top_k?: number | null;
+  include_future?: boolean;
+  include_raw?: boolean;
+};
+
+export type RAGPreviewResponse = {
+  hits: RAGSearchResult[];
+  used_knowledge: UsedKnowledge[];
+  retrieval_debug: RetrievalDebug;
 };
 
 export type LongGenerationSection = {
@@ -385,6 +442,18 @@ export type RetrievalDebug = {
   raw_query?: string | null;
   expanded_terms?: string[];
   preferred_card_types: string[];
+  mode?: string | null;
+  effective_mode?: string | null;
+  scope_filter?: Record<string, unknown>;
+  vector_candidates?: number;
+  keyword_candidates?: number;
+  merged_candidates?: number;
+  final_hits?: number;
+  fallback?: string | null;
+  filters_applied?: string[];
+  weights?: Record<string, number>;
+  dropped?: Array<Record<string, unknown>>;
+  keyword_debug?: Record<string, unknown>;
   total_candidates: number;
   candidate_count_total?: number;
   current_volume_index?: number | null;
@@ -730,6 +799,17 @@ export const api = {
     }),
   searchKnowledge: (payload: { knowledge_base_ids: number[]; query: string; top_k?: number }) =>
     request<{ hits: RetrievalHit[] }>("/api/retrieval/search", { method: "POST", body: JSON.stringify(payload) }),
+  getRAGHealth: () => request<RAGHealth>("/api/rag/health"),
+  rebuildRAG: (payload: RAGRebuildPayload) =>
+    request<RAGRebuildResult>("/api/rag/rebuild", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  previewRAG: (payload: RAGPreviewPayload) =>
+    request<RAGPreviewResponse>("/api/rag/preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   searchWorkRAG: (
     workId: number,
     payload: {

@@ -1,6 +1,6 @@
 import { Dispatch, ChangeEvent, useEffect, useState, useMemo } from "react";
 import { WritingAction, WritingState } from "./types";
-import { KnowledgeBase, KnowledgeDocument, KnowledgeCard, KnowledgeMarkdownDoc, api } from "../../api";
+import { KnowledgeBase, KnowledgeDocument, KnowledgeCard, KnowledgeMarkdownDoc, RAGHealth, RAGRebuildResult, api } from "../../api";
 import { formatSize, compactSourceRef, documentTitle } from "./utils";
 import { SkeletonCard } from "../common/Skeleton";
 
@@ -31,6 +31,8 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
   const [cardPage, setCardPage] = useState(1);
   const [pendingMdFiles, setPendingMdFiles] = useState<FileList | null>(null);
   const [pendingDocFiles, setPendingDocFiles] = useState<FileList | null>(null);
+  const [ragHealth, setRagHealth] = useState<RAGHealth | null>(null);
+  const [ragRebuild, setRagRebuild] = useState<RAGRebuildResult | null>(null);
 
   const cardFilterGroups = (() => {
     const visible = state.showRawCards ? state.cards : state.cards.filter((c) => c.is_canonical);
@@ -61,13 +63,51 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
     setCardPage(1);
   };
 
+  const refreshRAGHealth = async () => {
+    try {
+      setRagHealth(await api.getRAGHealth());
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "RAG health check failed" });
+    }
+  };
+
+  useEffect(() => {
+    if (state.activeKnowledgeTab === "result") void refreshRAGHealth();
+  }, [state.activeKnowledgeTab, selected?.id]);
+
+  const rebuildRAG = async (force: boolean) => {
+    if (!selected) return;
+    if (force && !window.confirm("Rebuild vectors for the selected knowledge base now?")) return;
+    dispatch({ type: "SET_BUSY", busy: force ? "rag-rebuild" : "rag-dry-run" });
+    try {
+      const result = await api.rebuildRAG({ knowledge_base_ids: [selected.id], dry_run: !force, force });
+      setRagRebuild(result);
+      dispatch({ type: "SET_MESSAGE", message: force ? "RAG rebuild completed" : "RAG dry-run completed" });
+      if (force) await refreshRAGHealth();
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "RAG rebuild failed" });
+    } finally {
+      dispatch({ type: "SET_BUSY", busy: "" });
+    }
+  };
+
   const searchRAG = async () => {
     if (!selected || !state.query.trim()) return;
     if (positionMissing) { dispatch({ type: "SET_ERROR", error: "请先填写当前 Volume 和 Chapter。" }); return; }
     dispatch({ type: "SET_BUSY", busy: "rag-search" });
     try {
-      const r = await api.searchWorkRAG(selected.id, { stage: state.ragStage, query: state.query, top_k: resolvedRagTopK, ...ragRetrievalPayload });
-      dispatch({ type: "SET_RAG_RESULTS", results: r.results });
+      const r = await api.previewRAG({
+        phase: state.ragStage,
+        query: state.query,
+        knowledge_base_ids: [selected.id],
+        top_k: resolvedRagTopK,
+        target_volume_index: typeof ragRetrievalPayload.current_volume_index === "number" ? ragRetrievalPayload.current_volume_index : null,
+        target_chapter_index: typeof ragRetrievalPayload.current_chapter_index === "number" ? ragRetrievalPayload.current_chapter_index : null,
+        include_future: Boolean(ragRetrievalPayload.include_future),
+        include_raw: Boolean(ragRetrievalPayload.include_raw),
+      });
+      dispatch({ type: "SET_RAG_RESULTS", results: r.hits });
+      dispatch({ type: "SET_USED_KNOWLEDGE", knowledge: r.used_knowledge });
       dispatch({ type: "SET_RETRIEVAL_DEBUG", debug: r.retrieval_debug });
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "RAG 召回失败" });
@@ -320,6 +360,30 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
       {/* Search result tab */}
       {state.activeKnowledgeTab === "result" && (
         <>
+          <div className="writing-side-card rag-status-card">
+            <div className="writing-side-card-head">
+              <strong>RAG Status</strong>
+              <button onClick={refreshRAGHealth} disabled={state.busy === "rag-rebuild" || state.busy === "rag-dry-run"}>Refresh</button>
+            </div>
+            <div className="metric-grid">
+              <div><strong>{ragHealth?.qdrant_available ? "OK" : "Offline"}</strong><span>Qdrant</span></div>
+              <div><strong>{ragHealth?.points_count ?? 0}</strong><span>points</span></div>
+              <div><strong>{ragHealth?.embedding_provider || "-"}</strong><span>embedding</span></div>
+              <div><strong>{ragHealth?.retrieval_mode || "-"}</strong><span>mode</span></div>
+            </div>
+            <small>{ragHealth?.collection || "collection unset"} / {ragHealth?.vector_size || 0}d / {ragHealth?.distance || "-"}</small>
+            {ragHealth?.error && <p className="muted">{ragHealth.error}</p>}
+            <div className="writing-card-actions">
+              <button onClick={() => rebuildRAG(false)} disabled={!selected || state.busy === "rag-dry-run"}>Dry Run</button>
+              <button className="primary" onClick={() => rebuildRAG(true)} disabled={!selected || state.busy === "rag-rebuild"}>Rebuild</button>
+            </div>
+            {ragRebuild && (
+              <details className="writing-debug-details">
+                <summary>Rebuild Result</summary>
+                <pre>{JSON.stringify(ragRebuild, null, 2)}</pre>
+              </details>
+            )}
+          </div>
           <div className="writing-side-card">
             <div className="writing-side-card-head"><strong>RAG 搜索</strong></div>
             <input value={state.query} onChange={(e) => dispatch({ type: "SET_QUERY", query: e.target.value })} placeholder="搜索知识库" />
@@ -335,7 +399,11 @@ export function KnowledgePanel({ state, dispatch, selected, documentsByType, sel
               {state.ragResults.map((r, i) => (
                 <div key={i} className="writing-card-item">
                   <strong>[{r.card_type}] {r.title}</strong>
-                  <small>score: {r.score.toFixed(3)}</small>
+                  <small>
+                    {r.source_type || "card"} / score: {(r.final_score ?? r.score).toFixed(3)}
+                    {typeof r.vector_score === "number" ? ` / vector ${r.vector_score.toFixed(3)}` : ""}
+                    {typeof r.keyword_score === "number" ? ` / keyword ${r.keyword_score.toFixed(3)}` : ""}
+                  </small>
                   <p>{r.content_preview}</p>
                 </div>
               ))}

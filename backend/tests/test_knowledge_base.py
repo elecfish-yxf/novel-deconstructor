@@ -75,7 +75,7 @@ def test_search_knowledge_returns_source_metadata():
     assert "期待缺口" in hits[0]["text"]
 
 
-def test_bulk_delete_documents_scopes_to_work_and_type(tmp_path):
+def test_bulk_delete_documents_scopes_to_work_and_type(tmp_path, monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -143,6 +143,15 @@ def test_bulk_delete_documents_scopes_to_work_and_type(tmp_path):
         ]
     )
     db.commit()
+    deleted_vectors = []
+
+    from novel_deconstructor.api import knowledge as knowledge_api
+
+    monkeypatch.setattr(
+        knowledge_api,
+        "delete_document_vectors",
+        lambda document: deleted_vectors.append(document.id) or {"deleted": True},
+    )
 
     result = bulk_delete_documents(
         1,
@@ -153,6 +162,7 @@ def test_bulk_delete_documents_scopes_to_work_and_type(tmp_path):
 
     assert result.deleted == 1
     assert {document.id for document in db.query(KnowledgeDocument).order_by(KnowledgeDocument.id).all()} == {2, 3}
+    assert deleted_vectors == [1]
     assert not guide_dir.exists()
     assert world_dir.exists()
     assert other_dir.exists()

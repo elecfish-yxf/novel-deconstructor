@@ -617,8 +617,11 @@ class UsedKnowledge(BaseModel):
     card_type: str
     title: str
     score: float
+    source_type: str | None = None
+    reason: str | None = None
     source_ref: dict[str, Any] = Field(default_factory=dict)
     content_preview: str = ""
+    concise_content: str | None = None
     tags: list[str] = Field(default_factory=list)
     status: str | None = None
     retrieval_level: str | None = None
@@ -639,6 +642,18 @@ class RetrievalDebug(BaseModel):
     raw_query: str | None = None
     expanded_terms: list[str] = Field(default_factory=list)
     preferred_card_types: list[str] = Field(default_factory=list)
+    mode: str | None = None
+    effective_mode: str | None = None
+    scope_filter: dict[str, Any] = Field(default_factory=dict)
+    vector_candidates: int = 0
+    keyword_candidates: int = 0
+    merged_candidates: int = 0
+    final_hits: int = 0
+    fallback: str | None = None
+    filters_applied: list[str] = Field(default_factory=list)
+    weights: dict[str, float] = Field(default_factory=dict)
+    dropped: list[dict[str, Any]] = Field(default_factory=list)
+    keyword_debug: dict[str, Any] = Field(default_factory=dict)
     total_candidates: int = 0
     candidate_count_total: int = 0
     current_volume_index: int | None = None
@@ -669,6 +684,54 @@ class RetrievalDebug(BaseModel):
     stage: str | None = None
     top_k: int | None = None
     warnings: list[str] = Field(default_factory=list)
+
+
+class RAGHealthResponse(BaseModel):
+    qdrant_available: bool
+    collection: str
+    collection_exists: bool = False
+    points_count: int = 0
+    vector_size: int
+    distance: str
+    embedding_provider: str
+    retrieval_mode: str
+    error: str | None = None
+
+
+class RAGRebuildRequest(BaseModel):
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+    document_ids: list[int] = Field(default_factory=list)
+    card_ids: list[str] = Field(default_factory=list)
+    memory_ids: list[int] = Field(default_factory=list)
+    dry_run: bool = True
+    force: bool = False
+
+
+class RAGRebuildResponse(BaseModel):
+    dry_run: bool
+    force: bool = False
+    planned: dict[str, int] = Field(default_factory=dict)
+    indexed: dict[str, int] = Field(default_factory=dict)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RAGPreviewRequest(BaseModel):
+    query: str = Field(min_length=1)
+    phase: str = "draft"
+    knowledge_base_ids: list[int] = Field(default_factory=list)
+    library_types: list[str] | None = None
+    target_volume_index: int | None = None
+    target_chapter_index: int | None = None
+    top_k: int | None = None
+    include_future: bool = False
+    include_raw: bool = False
+
+
+class RAGPreviewResponse(BaseModel):
+    hits: list[dict[str, Any]] = Field(default_factory=list)
+    used_knowledge: list[UsedKnowledge] = Field(default_factory=list)
+    retrieval_debug: RetrievalDebug
 
 
 class RAGSearchResponse(BaseModel):

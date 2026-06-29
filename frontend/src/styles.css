@@ -2396,6 +2396,19 @@ th {
   line-height: 1.45;
 }
 
+.rag-status-card {
+  display: grid;
+  gap: 8px;
+}
+
+.rag-status-card .metric-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rag-status-card .writing-card-actions {
+  justify-content: flex-start;
+}
+
 .writing-debug-details {
   margin-top: 10px;
   border: 1px solid #e5e7eb;

@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, files, imports, jobs, knowledge, projects, prompts, results, skills, system, writing
+from .api import auth, files, imports, jobs, knowledge, projects, prompts, rag, results, skills, system, writing
 from .config import get_settings
 from .database import init_db
 
@@ -32,6 +32,7 @@ app.include_router(skills.router)
 app.include_router(imports.router)
 app.include_router(knowledge.router)
 app.include_router(writing.router)
+app.include_router(rag.router)
 app.include_router(system.router)
 
 

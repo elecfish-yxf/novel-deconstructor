@@ -228,6 +228,13 @@ def reindex_document(db: Session, document: KnowledgeDocument) -> KnowledgeDocum
         if meta.get("parser") == "pdf" and not chunks:
             raise ValueError("该文件可能是扫描版 PDF，当前版本暂未启用 OCR，未进行索引。")
         db.commit()
+        try:
+            from ..services.retrieval_service import index_document_chunks
+
+            index_document_chunks(db, document)
+        except Exception:
+            # Qdrant is only a retrieval index; document reindex must keep SQLite/MySQL as source of truth.
+            pass
     except Exception as exc:  # noqa: BLE001 - shown as a readable status in UI.
         db.rollback()
         document.status = "failed"
