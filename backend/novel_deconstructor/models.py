@@ -297,6 +297,7 @@ class KnowledgeBase(Base):
     cards = relationship("KnowledgeCard", back_populates="knowledge_base", cascade="all, delete-orphan")
     memories = relationship("WritingMemory", back_populates="knowledge_base", cascade="all, delete-orphan")
     outlines = relationship("Outline", back_populates="knowledge_base", cascade="all, delete-orphan")
+    draft_jobs = relationship("WritingDraftJob", back_populates="knowledge_base", cascade="all, delete-orphan")
     workspace = relationship("Workspace", back_populates="knowledge_bases")
 
 
@@ -460,6 +461,36 @@ class WritingMemory(Base):
         except json.JSONDecodeError:
             return {}
         return value if isinstance(value, dict) else {}
+
+
+class WritingDraftJob(Base):
+    __tablename__ = "writing_draft_jobs"
+
+    job_id = Column(String(64), primary_key=True, index=True)
+    work_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(80), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(32), default="queued", nullable=False, index=True)
+    stage = Column(String(32), default="draft", nullable=False)
+    target_chars = Column(Integer, nullable=True)
+    actual_chars = Column(Integer, nullable=True)
+    cjk_chars = Column(Integer, nullable=True)
+    non_space_chars = Column(Integer, nullable=True)
+    estimated_tokens = Column(Integer, nullable=True)
+    completion_ratio = Column(Float, nullable=True)
+    section_count = Column(Integer, nullable=True)
+    current_section = Column(Integer, nullable=True)
+    content = Column(Text, default="", nullable=False)
+    sections_json = Column(Text, default="[]", nullable=False)
+    used_knowledge_json = Column(Text, default="[]", nullable=False)
+    retrieval_debug_json = Column(Text, nullable=True)
+    warnings_json = Column(Text, default="[]", nullable=False)
+    request_payload_json = Column(Text, default="{}", nullable=False)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="draft_jobs")
+    workspace = relationship("Workspace")
 
 
 class Outline(Base):

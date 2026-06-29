@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
@@ -8,7 +9,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import get_settings
-from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, KnowledgeDocument, PromptTemplate, Workspace
+from .models import AnalysisJob, Base, DeconstructionSkill, JobLog, KnowledgeDocument, PromptTemplate, Workspace, WritingDraftJob
 
 
 settings = get_settings()
@@ -41,6 +42,15 @@ _MYSQL_LONGTEXT_COLUMNS = {
         "merged_from_ids_json",
     ),
     "writing_memories": ("tags_json", "source_ref_json"),
+    "writing_draft_jobs": (
+        "content",
+        "sections_json",
+        "used_knowledge_json",
+        "retrieval_debug_json",
+        "warnings_json",
+        "request_payload_json",
+        "error_message",
+    ),
 }
 
 
@@ -437,6 +447,31 @@ def mark_interrupted_knowledge_documents(db: Session) -> None:
     if indexing_docs:
         db.commit()
 
+
+def mark_interrupted_draft_jobs(db: Session) -> None:
+    active_statuses = ["queued", "planning", "generating", "supplementing", "merging"]
+    jobs = db.query(WritingDraftJob).filter(WritingDraftJob.status.in_(active_statuses)).all()
+    for job in jobs:
+        warnings = _json_list(job.warnings_json)
+        message = "服务重启导致正文生成任务中断；已恢复已生成的部分内容，请重新发起生成或润色。"
+        if message not in warnings:
+            warnings.append(message)
+        job.status = "failed"
+        job.error_message = message
+        job.warnings_json = json.dumps(warnings, ensure_ascii=False)
+        job.updated_at = datetime.utcnow()
+    if jobs:
+        db.commit()
+
+
+def _json_list(value: str | None) -> list:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def _init_db_once() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_schema_upgrades()
@@ -447,6 +482,7 @@ def _init_db_once() -> None:
         seed_deconstruction_skills(db)
         mark_interrupted_jobs(db)
         mark_interrupted_knowledge_documents(db)
+        mark_interrupted_draft_jobs(db)
     finally:
         db.close()
 

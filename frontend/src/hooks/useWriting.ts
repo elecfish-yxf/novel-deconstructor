@@ -2,6 +2,19 @@ import { useCallback } from "react";
 import { api, WritingDraftJob, WritingMemory } from "../api";
 import { WritingAction } from "../components/writing/types";
 
+type DraftJobPosition = { volumeIndex: number | null; chapterIndex: number | null };
+
+function draftJobPositionFromPayload(payload: Record<string, unknown>): DraftJobPosition {
+  return {
+    volumeIndex: typeof payload.current_volume_index === "number" ? payload.current_volume_index : null,
+    chapterIndex: typeof payload.current_chapter_index === "number" ? payload.current_chapter_index : null,
+  };
+}
+
+function sameDraftJobPosition(a: DraftJobPosition, b: DraftJobPosition) {
+  return a.volumeIndex === b.volumeIndex && a.chapterIndex === b.chapterIndex;
+}
+
 /**
  * Hook: 作品数据加载（列表、详情、刷新）。
  * 提取自 WritingAgent.tsx 的 load / chooseKnowledgeBase / refreshKnowledgeCards 等函数。
@@ -169,9 +182,11 @@ export function useWritingOutline(
 export function useWritingDraft(
   dispatch: React.Dispatch<WritingAction>,
   selectedIdRef: React.MutableRefObject<number | null>,
+  currentPositionRef: React.MutableRefObject<DraftJobPosition>,
 ) {
-  const applyDraftJob = useCallback((job: WritingDraftJob, expectedWorkId = job.work_id) => {
+  const applyDraftJob = useCallback((job: WritingDraftJob, expectedWorkId = job.work_id, expectedPosition?: DraftJobPosition) => {
     if (job.work_id !== expectedWorkId || selectedIdRef.current !== expectedWorkId) return;
+    if (expectedPosition && !sameDraftJobPosition(currentPositionRef.current, expectedPosition)) return;
     dispatch({ type: "SET_DRAFT_JOB", job });
     dispatch({ type: "SET_DRAFT", draft: job.content || "" });
     dispatch({ type: "SET_USED_KNOWLEDGE", knowledge: job.used_knowledge || [] });
@@ -180,7 +195,7 @@ export function useWritingDraft(
     dispatch({ type: "SET_LONG_SECTIONS", sections: job.sections || [] });
     dispatch({ type: "SET_GENERATION_WARNINGS", warnings: job.warnings || [] });
     if (job.status === "failed" && job.error_message) dispatch({ type: "SET_ERROR", error: job.error_message });
-  }, [dispatch, selectedIdRef]);
+  }, [dispatch, selectedIdRef, currentPositionRef]);
 
   const startDraftJob = useCallback(async (
     workId: number, task: string, confirmedOutline: string, mode: string,
@@ -192,14 +207,15 @@ export function useWritingDraft(
     dispatch({ type: "SET_DRAFT_JOB", job: null });
     dispatch({ type: "SET_DRAFT", draft: "" });
     try {
+      const jobPosition = draftJobPositionFromPayload(retrievalPayload);
       const job = await api.createWorkDraftJob(workId, {
         task, confirmed_outline: confirmedOutline, mode, knowledge_mode: knowledgeMode,
         ...modelPayload, dry_run: dryRun, top_k: topK,
         target_chars: targetChars, ...retrievalPayload,
       });
       const { storeDraftJobRef } = await import("../components/writing/utils");
-      storeDraftJobRef(workId, job.job_id);
-      applyDraftJob(job);
+      storeDraftJobRef(workId, job.job_id, jobPosition.volumeIndex, jobPosition.chapterIndex);
+      applyDraftJob(job, workId, jobPosition);
       dispatch({ type: "SET_ACTIVE_KNOWLEDGE_TAB", tab: "result" });
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "创建正文任务失败" });
@@ -254,12 +270,13 @@ export function useWritingDraft(
   ) => {
     dispatch({ type: "SET_BUSY", busy: "draft-job-cancel" });
     try {
+      const jobPosition = currentPositionRef.current;
       const job = await api.cancelWorkDraftJob(workId, draftJob.job_id);
-      applyDraftJob(job, workId);
+      applyDraftJob(job, workId, jobPosition);
     } catch (err) {
       dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "取消失败" });
     } finally { dispatch({ type: "SET_BUSY", busy: "" }); }
-  }, [dispatch, selectedIdRef, applyDraftJob]);
+  }, [dispatch, selectedIdRef, currentPositionRef, applyDraftJob]);
 
   return { applyDraftJob, startDraftJob, generateRevision, saveDraftToMemory, cancelDraftJob };
 }

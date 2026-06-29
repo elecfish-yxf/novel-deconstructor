@@ -61,6 +61,15 @@ def test_mysql_longtext_upgrade_statements_only_targets_short_json_columns():
                 "tags_json": "LONGTEXT",
                 "source_ref_json": "TEXT",
             },
+            "writing_draft_jobs": {
+                "content": "TEXT",
+                "sections_json": "LONGTEXT",
+                "used_knowledge_json": "MEDIUMTEXT",
+                "retrieval_debug_json": "TEXT",
+                "warnings_json": "LONGTEXT",
+                "request_payload_json": "TEXT",
+                "error_message": "TEXT",
+            },
         }
     )
 
@@ -70,4 +79,9 @@ def test_mysql_longtext_upgrade_statements_only_targets_short_json_columns():
         "ALTER TABLE knowledge_cards MODIFY COLUMN use_when_json LONGTEXT NULL",
         "ALTER TABLE knowledge_cards MODIFY COLUMN merged_from_ids_json LONGTEXT NULL",
         "ALTER TABLE writing_memories MODIFY COLUMN source_ref_json LONGTEXT NULL",
+        "ALTER TABLE writing_draft_jobs MODIFY COLUMN content LONGTEXT NULL",
+        "ALTER TABLE writing_draft_jobs MODIFY COLUMN used_knowledge_json LONGTEXT NULL",
+        "ALTER TABLE writing_draft_jobs MODIFY COLUMN retrieval_debug_json LONGTEXT NULL",
+        "ALTER TABLE writing_draft_jobs MODIFY COLUMN request_payload_json LONGTEXT NULL",
+        "ALTER TABLE writing_draft_jobs MODIFY COLUMN error_message LONGTEXT NULL",
     ]

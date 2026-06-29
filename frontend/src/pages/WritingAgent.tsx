@@ -32,6 +32,7 @@ export default function WritingAgent() {
   const workspaceId = useMemo(() => getWorkspaceId(), []);
   const [state, dispatch] = useReducer(writingReducer, null, () => ({ ...getInitialState(), chapterTitles: readChapterTitles() }));
   const selectedIdRef = useRef<number | null>(null);
+  const currentPositionRef = useRef<{ volumeIndex: number | null; chapterIndex: number | null }>({ volumeIndex: null, chapterIndex: null });
   const dataLoadSeqRef = useRef(0);
   const initialLoadDone = useRef(false);
 
@@ -47,7 +48,9 @@ export default function WritingAgent() {
   const documentsByType = useMemo(() => state.documents.reduce<Record<string, typeof state.documents>>((g, d) => { const k = d.knowledge_type || "worldbuilding"; g[k] = [...(g[k] || []), d]; return g; }, { writing_guide: [], worldbuilding: [] }), [state.documents]);
   const writingModels = useMemo(() => state.config?.writing_models?.length ? state.config.writing_models : [{ id: state.config?.deepseek_model || "", label: state.config?.deepseek_model || "DeepSeek", provider: "deepseek", model: state.config?.deepseek_model || "", available: Boolean(state.config?.has_deepseek_api_key) }], [state.config]);
   const selectedWritingModel = useMemo(() => writingModels.find((m) => m.id === state.writingModelId) || writingModels[0] || null, [state.writingModelId, writingModels]);
-  const currentPositionPayload = { current_volume_index: typeof state.currentVolumeIndex === "number" ? state.currentVolumeIndex : null, current_chapter_index: typeof state.currentChapterIndex === "number" ? state.currentChapterIndex : null };
+  const currentVolumeIndex = typeof state.currentVolumeIndex === "number" ? state.currentVolumeIndex : null;
+  const currentChapterIndex = typeof state.currentChapterIndex === "number" ? state.currentChapterIndex : null;
+  const currentPositionPayload = { current_volume_index: currentVolumeIndex, current_chapter_index: currentChapterIndex };
   const positionMissing = !currentPositionPayload.current_volume_index || !currentPositionPayload.current_chapter_index;
   const outlineScopePositionMissing = isOutlinePositionMissing(state.outlineScope, currentPositionPayload.current_volume_index, currentPositionPayload.current_chapter_index);
   const parsedOutline = useMemo(() => parseOutlineContent(state.outline), [state.outline]);
@@ -77,14 +80,38 @@ export default function WritingAgent() {
   // Hooks
   const { load, chooseKnowledgeBase, refreshKnowledgeCards, reloadWorkIfStillActive } = useWritingData(dispatch, selectedIdRef, dataLoadSeqRef, state.expandedWorkIds, state.selectedDocumentIds);
   const { generateOutline, confirmOutline } = useWritingOutline(dispatch, selectedIdRef);
-  const { applyDraftJob, startDraftJob, generateRevision, saveDraftToMemory, cancelDraftJob } = useWritingDraft(dispatch, selectedIdRef);
+  const { applyDraftJob, startDraftJob, generateRevision, saveDraftToMemory, cancelDraftJob } = useWritingDraft(dispatch, selectedIdRef, currentPositionRef);
   const { createKnowledgeBase, deleteSelectedWorks, deleteCurrentChapter } = useWritingWorkspace(dispatch, selectedIdRef);
 
   useEffect(() => { load().then(() => { initialLoadDone.current = true; }).catch((err: unknown) => { initialLoadDone.current = true; dispatch({ type: "SET_ERROR", error: err instanceof Error ? err.message : "加载失败" }); }); }, []);
   useEffect(() => { selectedIdRef.current = state.selectedId; }, [state.selectedId]);
+  useEffect(() => { currentPositionRef.current = { volumeIndex: currentVolumeIndex, chapterIndex: currentChapterIndex }; }, [currentVolumeIndex, currentChapterIndex]);
   useEffect(() => { writeChapterTitles(state.chapterTitles); }, [state.chapterTitles]);
-  useEffect(() => { if (!selected || state.draftJob) return; const ref = readDraftJobRef(); if (!ref || ref.workId !== selected.id) return; api.getWorkDraftJob(selected.id, ref.jobId).then((j) => applyDraftJob(j, selected.id)).catch(() => undefined); }, [selected, state.draftJob, applyDraftJob]);
-  useEffect(() => { if (!selected || !state.draftJob || ["completed","failed","cancelled"].includes(state.draftJob.status)) return; const wid = selected.id; let retries = 0; const poll = () => { const t = window.setTimeout(() => { api.getWorkDraftJob(wid, state.draftJob!.job_id).then((j) => applyDraftJob(j, wid)).catch(() => { retries++; if (retries < 3) poll(); else if (selectedIdRef.current === wid) dispatch({ type: "SET_ERROR", error: "正文任务查询失败，请刷新页面" }); }); }, 1200); return () => window.clearTimeout(t); }; return poll(); }, [selected, state.draftJob, applyDraftJob]);
+  useEffect(() => {
+    if (!selected || state.draftJob) return;
+    const ref = readDraftJobRef();
+    const position = { volumeIndex: currentVolumeIndex, chapterIndex: currentChapterIndex };
+    if (!ref || ref.workId !== selected.id || ref.volumeIndex !== position.volumeIndex || ref.chapterIndex !== position.chapterIndex) return;
+    api.getWorkDraftJob(selected.id, ref.jobId).then((j) => applyDraftJob(j, selected.id, position)).catch(() => undefined);
+  }, [selected, state.draftJob, applyDraftJob, currentVolumeIndex, currentChapterIndex]);
+  useEffect(() => {
+    if (!selected || !state.draftJob || ["completed","failed","cancelled"].includes(state.draftJob.status)) return;
+    const wid = selected.id;
+    const jobId = state.draftJob.job_id;
+    const position = { volumeIndex: currentVolumeIndex, chapterIndex: currentChapterIndex };
+    let retries = 0;
+    const poll = () => {
+      const t = window.setTimeout(() => {
+        api.getWorkDraftJob(wid, jobId).then((j) => applyDraftJob(j, wid, position)).catch(() => {
+          retries++;
+          if (retries < 3) poll();
+          else if (selectedIdRef.current === wid) dispatch({ type: "SET_ERROR", error: "正文任务查询失败，请刷新页面" });
+        });
+      }, 1200);
+      return () => window.clearTimeout(t);
+    };
+    return poll();
+  }, [selected, state.draftJob, applyDraftJob, currentVolumeIndex, currentChapterIndex]);
 
   function selectWritingPosition(volume: number, chapter: number) {
     const changed = currentPositionPayload.current_volume_index !== volume || currentPositionPayload.current_chapter_index !== chapter;

@@ -64,6 +64,13 @@ export function defaultChapterTitle(chapter: number) {
 const CHAPTER_TITLE_KEY = "novel-deconstructor.chapter-titles";
 const DRAFT_JOB_KEY = "novel-deconstructor.last-draft-job";
 
+export type DraftJobRef = {
+  workId: number;
+  jobId: string;
+  volumeIndex: number | null;
+  chapterIndex: number | null;
+};
+
 export function readChapterTitles(): ChapterTitleMap {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(CHAPTER_TITLE_KEY) || "{}");
@@ -75,14 +82,20 @@ export function writeChapterTitles(titles: ChapterTitleMap) {
   window.localStorage.setItem(CHAPTER_TITLE_KEY, JSON.stringify(titles));
 }
 
-export function storeDraftJobRef(workId: number, jobId: string) {
-  window.localStorage.setItem(DRAFT_JOB_KEY, JSON.stringify({ workId, jobId }));
+export function storeDraftJobRef(workId: number, jobId: string, volumeIndex: number | null, chapterIndex: number | null) {
+  window.localStorage.setItem(DRAFT_JOB_KEY, JSON.stringify({ workId, jobId, volumeIndex, chapterIndex }));
 }
 
-export function readDraftJobRef(): { workId: number; jobId: string } | null {
+export function readDraftJobRef(): DraftJobRef | null {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(DRAFT_JOB_KEY) || "null");
-    return typeof parsed?.workId === "number" && typeof parsed?.jobId === "string" ? parsed : null;
+    if (typeof parsed?.workId !== "number" || typeof parsed?.jobId !== "string") return null;
+    return {
+      workId: parsed.workId,
+      jobId: parsed.jobId,
+      volumeIndex: typeof parsed.volumeIndex === "number" ? parsed.volumeIndex : null,
+      chapterIndex: typeof parsed.chapterIndex === "number" ? parsed.chapterIndex : null,
+    };
   } catch { return null; }
 }
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from novel_deconstructor.api.writing import (
     MAX_SECTION_SUPPLEMENTS,
     _char_stats,
+    _draft_job_read,
     _generate_with_cards,
     _generate_long_draft_with_cards,
     _last_sentence,
@@ -17,6 +18,8 @@ from novel_deconstructor.api.writing import (
     _parse_target_chars_from_text,
     _plan_section_targets,
     _prompt_card_filter_reason,
+    _draft_request_payload_json,
+    _update_draft_job,
     _tail_clip,
     bulk_delete_writing_scope,
     confirm_draft_memory,
@@ -25,7 +28,8 @@ from novel_deconstructor.api.writing import (
     count_non_space_chars,
 )
 from novel_deconstructor.config import get_settings
-from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, UserAPIKey, WritingMemory
+from novel_deconstructor.database import mark_interrupted_draft_jobs
+from novel_deconstructor.models import Base, KnowledgeBase, KnowledgeCard, UserAPIKey, WritingDraftJob, WritingMemory
 from novel_deconstructor.schemas import WritingChapterRef, WritingDraftRequest, WritingMemoryConfirmRequest, WritingRevisionRequest, WritingScopeBulkDeleteRequest
 from novel_deconstructor.services.knowledge_cards import import_knowledge_package
 
@@ -99,6 +103,119 @@ def _add_card(
     db.add(card)
     db.commit()
     return card
+
+
+def _draft_job_section(content: str = "第一段正文") -> dict:
+    return {
+        "index": 1,
+        "target_chars": 1000,
+        "actual_chars": len(content),
+        "status": "completed",
+        "focus": "开场推进",
+        "content": content,
+        "used_knowledge": [
+            {
+                "id": "CARD-001",
+                "library_type": "memory",
+                "card_type": "ChapterHandoff",
+                "title": "上一章交接",
+                "score": 0.91,
+                "content_preview": "上一章结尾线索",
+            }
+        ],
+        "retrieval_debug": {"query": "第一章正文", "final_hits": 1},
+    }
+
+
+def test_draft_job_progress_persists_and_reads_back():
+    db, kb = _session()
+    job = WritingDraftJob(job_id="job-progress", work_id=kb.id, workspace_id=kb.workspace_id, status="queued")
+    db.add(job)
+    db.commit()
+
+    _update_draft_job(
+        db,
+        "job-progress",
+        status="generating",
+        current_section=1,
+        section_count=2,
+        content="第一段正文",
+        actual_chars=5,
+        sections=[_draft_job_section()],
+        used_knowledge=[
+            {
+                "id": "CARD-001",
+                "library_type": "memory",
+                "card_type": "ChapterHandoff",
+                "title": "上一章交接",
+                "score": 0.91,
+                "content_preview": "上一章结尾线索",
+            }
+        ],
+        retrieval_debug={"query": "第一章正文", "final_hits": 1},
+        warnings=["分段生成中"],
+    )
+
+    db.expire_all()
+    saved = db.get(WritingDraftJob, "job-progress")
+    assert saved is not None
+    assert json.loads(saved.sections_json)[0]["content"] == "第一段正文"
+    assert json.loads(saved.used_knowledge_json)[0]["id"] == "CARD-001"
+    assert json.loads(saved.retrieval_debug_json)["query"] == "第一章正文"
+
+    read = _draft_job_read(saved)
+    assert read.status == "generating"
+    assert read.current_section == 1
+    assert read.sections[0].content == "第一段正文"
+    assert read.sections[0].used_knowledge[0].id == "CARD-001"
+    assert read.used_knowledge[0].title == "上一章交接"
+    assert read.retrieval_debug is not None
+    assert read.retrieval_debug.query == "第一章正文"
+    assert read.warnings == ["分段生成中"]
+
+
+def test_interrupted_draft_jobs_are_restored_as_failed_with_partial_output():
+    db, kb = _session()
+    job = WritingDraftJob(
+        job_id="job-interrupted",
+        work_id=kb.id,
+        workspace_id=kb.workspace_id,
+        status="generating",
+        content="已经生成的部分正文",
+        sections_json=json.dumps([_draft_job_section("已经生成的部分正文")], ensure_ascii=False),
+        warnings_json=json.dumps(["原始提醒"], ensure_ascii=False),
+    )
+    db.add(job)
+    db.commit()
+
+    mark_interrupted_draft_jobs(db)
+
+    db.refresh(job)
+    assert job.status == "failed"
+    assert job.content == "已经生成的部分正文"
+    warnings = json.loads(job.warnings_json)
+    assert "原始提醒" in warnings
+    assert any("服务重启导致正文生成任务中断" in item for item in warnings)
+    read = _draft_job_read(job)
+    assert read.sections[0].content == "已经生成的部分正文"
+    assert read.error_message and "服务重启导致正文生成任务中断" in read.error_message
+
+
+def test_draft_job_persisted_request_payload_redacts_api_key():
+    payload = WritingDraftRequest(
+        task="写一段正文",
+        confirmed_outline="开场",
+        api_key="temporary-secret-key",
+        current_volume_index=1,
+        current_chapter_index=1,
+    )
+
+    data = json.loads(_draft_request_payload_json(payload))
+
+    assert "api_key" not in data
+    assert "temporary-secret-key" not in json.dumps(data, ensure_ascii=False)
+    assert data["current_volume_index"] == 1
+    assert data["current_chapter_index"] == 1
 
 
 def test_plan_section_targets_balances_long_text():
