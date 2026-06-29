@@ -468,7 +468,7 @@ class WritingDraftJob(Base):
 
     job_id = Column(String(64), primary_key=True, index=True)
     work_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
-    workspace_id = Column(String(80), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(80), nullable=False, index=True)
     status = Column(String(32), default="queued", nullable=False, index=True)
     stage = Column(String(32), default="draft", nullable=False)
     target_chars = Column(Integer, nullable=True)
@@ -490,7 +490,6 @@ class WritingDraftJob(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     knowledge_base = relationship("KnowledgeBase", back_populates="draft_jobs")
-    workspace = relationship("Workspace")
 
 
 class Outline(Base):

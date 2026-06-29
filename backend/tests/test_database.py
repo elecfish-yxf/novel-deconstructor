@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from novel_deconstructor import database
+from novel_deconstructor.models import WritingDraftJob
 
 
 def _operational_error() -> OperationalError:
@@ -85,3 +86,9 @@ def test_mysql_longtext_upgrade_statements_only_targets_short_json_columns():
         "ALTER TABLE writing_draft_jobs MODIFY COLUMN request_payload_json LONGTEXT NULL",
         "ALTER TABLE writing_draft_jobs MODIFY COLUMN error_message LONGTEXT NULL",
     ]
+
+
+def test_writing_draft_jobs_workspace_id_is_not_a_workspace_foreign_key():
+    foreign_tables = {foreign_key.column.table.name for foreign_key in WritingDraftJob.__table__.c.workspace_id.foreign_keys}
+
+    assert "workspaces" not in foreign_tables
